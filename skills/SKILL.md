@@ -46,8 +46,9 @@ Available skills for working with the Cangjie compiler project and Anthropics of
 | [cangjie_type_system](./cangjie_type_system/SKILL.md) | 仓颉语言类型系统：子类型关系、型变规则、类型转换（is/as）、Nothing/Any/Object |
 | [power-gitcode](./power-gitcode/SKILL.md) | GitCode 平台全能操作：PR/Issue 管理、评论、标签、合并、模板读取、仓库 Fork/Release |
 | [aceharness-spec-coding](./aceharness-spec-coding/SKILL.md) | ACEHarness Spec Coding：维护 specs/changes 正式规范制品，区分规范源与运行时结构化投影 |
-| [aceflow-chat-card](./aceflow-chat-card/SKILL.md) | 通用富文本卡片渲染：12 种 Block 类型，AI 通过 JSON 动态生成可视化卡片 |
-| [aceflow-workflow-creator](./aceflow-workflow-creator/SKILL.md) | 引导用户创建 AceFlow 工作流配置，提供格式规范和校验脚本 |
+| [aceharness-chat-card](./aceharness-chat-card/SKILL.md) | 通用富文本卡片渲染：12 种 Block 类型，AI 通过 JSON 动态生成可视化卡片 |
+| [aceharness-workflow-creator](./aceharness-workflow-creator/SKILL.md) | 引导用户创建 ACEHarness 工作流配置，提供格式规范和校验脚本 |
+| [flutter-ohos-issue-analysis](./flutter-ohos-issue-analysis/SKILL.md) | 鸿蒙跨平台框架问题 AI 诊断：问题分类、根因模式库、日志解读、上游追踪、修复建议、报告模板 |
 
 ## HarmonyOS Skills
 

@@ -1,0 +1,507 @@
+workflow:
+  name: 鸿蒙跨平台框架问题AI自动诊断
+  description: |
+    面向 OHOS 跨平台框架（Flutter-OHOS / React Native-OHOS / KMP-CMP 等）鸿蒙化场景的问题诊断与解决。
+    基于 flutter-ohos-issue-analysis Skill 的专家经验，通过多 Agent 协作实现：
+    分类定界 → 信息采集+问题复现+上游追踪（并行）→ 根因分析 → 修复建议 → 人工审查 → 代码修改 → 修复验证 → 报告沉淀。
+    包含兜底诊断 Agent，确保即使无法确定根因也输出排查思路。
+  mode: state-machine
+  maxTransitions: 40
+  supervisor:
+    enabled: true
+    agent: default-supervisor
+    stageReviewEnabled: true
+    checkpointAdviceEnabled: true
+    scoringEnabled: true
+    experienceEnabled: true
+
+  states:
+    # ========== 状态1：分类定界 ==========
+    - name: 分类定界
+      description: |
+        问题分类与定界，确定问题类型（稳定性/内存泄漏/功能/性能/渲染）、
+        所在层面（应用层/插件层/框架层/引擎层/系统层）、优先级（P0-P3）。
+      requireHumanApproval: false
+      isInitial: true
+      isFinal: false
+      position: { x: 100, y: 200 }
+      steps:
+        - id: classify-problem
+          name: 问题分类定界
+          agent: diagnosis-classifier
+          role: defender
+          task: |
+            globalContext 中包含一个 GitCode/GitHub Issue 链接。请按以下步骤执行：
+            1. 从 globalContext 中提取 Issue 链接
+            2. 使用 webfetch 工具获取 Issue 页面内容（包括标题、描述、复现步骤、环境信息、评论、关联 PR 等）
+            3. 从 Issue 内容中提取问题现象、触发条件、复现概率、影响范围
+            4. 匹配问题类型（稳定性/内存泄漏/功能/性能/渲染）
+            5. 判断问题层面（应用层/插件层/框架层/引擎层/系统层）
+            6. 评估优先级（P0-P3）
+            7. 给出初步排查方向
+            参考 flutter-ohos-issue-analysis Skill 的问题类型识别表。
+            输出 JSON 格式的分类结果，包含 problem_type、layer、priority、confidence、initial_direction。
+            注意：如果 Issue 中提到了修复 PR，也记录下来供下游上游追踪 Agent 使用。
+        - id: classify-challenge
+          name: 质疑分类
+          agent: diagnosis-challenger
+          role: attacker
+          task: |
+            质疑分类定界结果：
+            1. 检查是否遗漏关键问题特征
+            2. 验证问题类型判断是否有误
+            3. 检查层面定界是否准确
+            4. 评估优先级是否合理
+            5. 验证置信度评分是否客观
+            注意：不要读取 ACEHarness 内部状态文件，只关注问题分析本身。输出不超过 3000 字。
+        - id: classify-judge
+          name: 分类裁决
+          agent: diagnosis-judge
+          role: judge
+          task: |
+            评估分类定界结果，输出裁决 JSON：
+            {"verdict":"pass|conditional_pass|fail","summary":"...","problem_type":"...","layer":"...","priority":"..."}
+            pass=分类明确可进入信息采集；conditional_pass=分类需补充信息；fail=问题描述不足无法分类。
+      transitions:
+        - to: 信息采集
+          condition: { verdict: pass }
+          priority: 1
+          label: 分类明确，进入信息采集
+        - to: 分类定界
+          condition: { verdict: conditional_pass }
+          priority: 2
+          label: 分类需补充，重新分类
+        - to: 终止
+          condition: { verdict: fail }
+          priority: 3
+          label: 问题描述不足，终止诊断
+
+    # ========== 状态2：信息采集（先拉取代码仓，再并行：采集+复现+上游追踪）==========
+    - name: 信息采集
+      description: |
+        先拉取代码仓到本地，再并行执行三项工作：
+        0. 代码仓拉取 Agent：从 Issue 信息识别仓库 URL 和分支，shallow clone 到本地
+        1. 信息采集 Agent：采集环境信息、日志、复现步骤
+        2. 问题复现 Agent：建立稳定复现路径，构造最小复现 Demo
+        3. 上游追踪 Agent：检测上游社区共性问题，追溯引入 PR
+      requireHumanApproval: false
+      isInitial: false
+      isFinal: false
+      position: { x: 350, y: 200 }
+      steps:
+        - id: clone-repo
+          name: 代码仓拉取
+          agent: diagnosis-repo-cloner
+          role: defender
+          task: |
+            从 Issue 内容或分类结果中识别代码仓库 URL 和分支，执行 shallow clone 到本地。
+            1. 从上游分类结果或 Issue 内容中识别仓库 URL（如 https://gitcode.com/CPF-Flutter/flutter_flutter.git）
+            2. 推断目标分支：
+               - 优先从 Issue 标题/内容推断版本号（如 [3.41] → oh-3.41.9-dev）
+               - 如果 Issue 中明确提到分支名，直接使用
+               - 如果无法推断，使用仓库默认分支（不指定 -b 参数）
+            3. 执行 shallow clone：git clone --depth=1 -b <branch> <url> repo/
+               如果指定分支不存在，回退到默认分支：git clone --depth=1 <url> repo/
+            4. 验证 clone 成功（确认目录非空、git log 正常）
+            5. 列出关键文件路径（如 engine/src/flutter/shell/platform/ohos/ 下的文件）
+            输出本地代码路径（repo/）供下游 Agent 使用。
+        - id: collect-info
+          name: 信息采集
+          agent: diagnosis-collector
+          role: defender
+          parallelGroup: collect
+          task: |
+            根据分类结果采集诊断素材：
+            1. 生成采集计划（按问题类型选择采集策略）
+            2. 执行环境信息采集（设备型号、系统版本、API版本、框架版本）
+            3. 执行日志采集（hilog、faultlog、内存、截图等）
+            4. 执行复现信息采集（复现步骤、前置条件）
+            5. 如果本地代码仓已拉取（repo/ 目录存在），采集相关源码文件
+            6. 校验素材完整性，缺失时请求补充
+            7. 打包素材包供下游 Agent 使用
+            参考 flutter-ohos-issue-analysis Skill 的环境信息和日志采集清单。
+        - id: reproduce-problem
+          name: 问题复现
+          agent: diagnosis-reproducer
+          role: defender
+          parallelGroup: collect
+          task: |
+            建立稳定复现路径：
+            1. 接收用户复现步骤，验证完整性
+            2. 执行复现尝试，记录复现稳定性（stable/intermittent/unstable/not_reproducible）
+            3. 对偶现问题，多次执行寻找触发规律
+            4. 需要时构造最小复现 Demo（剥离业务代码，保留最小必要代码）
+            5. 输出复现基线（stable_steps + expected_behavior + actual_behavior + verification_method）
+            复现基线将供后续 FixVerifier 复用。
+        - id: track-upstream
+          name: 上游追踪
+          agent: diagnosis-upstream-tracker
+          role: defender
+          parallelGroup: collect
+          task: |
+            检测上游社区共性问题，追溯引入 PR：
+            1. 提取问题特征（堆栈函数名、错误信息、现象描述、代码位置）
+            2. 多策略并行搜索 GitHub/GitCode Issue/PR（堆栈匹配、错误信息匹配、语义匹配、代码位置匹配）
+            3. PR 追溯：如果本地代码仓已拉取（repo/ 目录存在），使用 git blame 定位 Commit → 追溯引入 PR → 关联原始 Issue → 查找修复 PR
+            4. 结果融合排序，计算置信度
+            5. 输出上游关联报告（已修复/已知未修复/PR引入/潜在新问题）
+        - id: collect-judge
+          name: 采集裁决
+          agent: diagnosis-judge
+          role: judge
+          task: |
+            评估信息采集、问题复现、上游追踪三项结果的完整性，输出裁决 JSON：
+            {"verdict":"pass|conditional_pass|fail","summary":"..."}
+            pass=三项均完成可进入根因分析；conditional_pass=部分不完整需补充；fail=采集失败无法继续。
+      transitions:
+        - to: 根因分析
+          condition: { verdict: pass }
+          priority: 1
+          label: 信息采集完成，进入根因分析
+        - to: 信息采集
+          condition: { verdict: conditional_pass }
+          priority: 2
+          label: 信息不完整，补充采集
+        - to: 终止
+          condition: { verdict: fail }
+          priority: 3
+          label: 采集失败，终止诊断
+
+    # ========== 状态3：根因分析 ==========
+    - name: 根因分析
+      description: |
+        综合素材包和上游追踪结果，定位根本原因。
+        根据上游追踪结果选择不同深度的分析策略（A/B/C/D）。
+        置信度足够→进入修复建议；置信度不足→进入兜底诊断。
+      requireHumanApproval: false
+      isInitial: false
+      isFinal: false
+      position: { x: 600, y: 200 }
+      maxSelfTransitions: 3
+      steps:
+        - id: analyze-root-cause
+          name: 根因定位
+          agent: diagnosis-root-cause-analyzer
+          role: defender
+          task: |
+            综合素材包和上游追踪结果，定位根本原因：
+            1. 根据上游追踪结果选择分析策略（A:直接复用/B:参考补充/C:评估回退/D:完整分析）
+            2. 执行日志分析（提取 FATAL/ERROR/Exception/SIGABRT/SIGSEGV，解析堆栈）
+            3. 执行代码审查（根据堆栈定位代码，对比 Android/iOS 实现）
+            4. 执行差异对比（鸿蒙与 Android/iOS 的平台通道、原生API、线程模型、生命周期）
+            5. 匹配已知根因模式（从 issue-types/*.md 根因模式库）
+            6. 输出根因假设 + 证据链 + 置信度
+            参考 flutter-ohos-issue-analysis Skill 的 issue-types/*.md 和 references/log-interpretation.md。
+        - id: root-cause-challenge
+          name: 质疑根因
+          agent: diagnosis-challenger
+          role: attacker
+          task: |
+            质疑根因分析结果：
+            1. 检查证据链是否充分
+            2. 验证是否遗漏其他可能原因
+            3. 检查是否只看到表象而非根因
+            4. 验证置信度评分是否客观
+            5. 检查根因模式匹配是否准确
+            注意：不要读取 ACEHarness 内部状态文件，只关注问题分析本身。输出不超过 3000 字。
+        - id: root-cause-judge
+          name: 根因裁决
+          agent: diagnosis-judge
+          role: judge
+          task: |
+            评估根因分析结果，输出裁决 JSON：
+            {"verdict":"pass|conditional_pass|fail","summary":"...","confidence":0.0-1.0,"needs_fallback":true|false}
+            pass=置信度≥0.5可进入修复建议；conditional_pass=需继续迭代分析；fail=置信度<0.3进入兜底诊断。
+            needs_fallback=true 时进入兜底诊断状态。
+      transitions:
+        - to: 修复建议
+          condition: { verdict: pass }
+          priority: 1
+          label: 根因确定，进入修复建议
+        - to: 根因分析
+          condition: { verdict: conditional_pass }
+          priority: 2
+          label: 根因需继续深挖
+        - to: 兜底诊断
+          condition: { verdict: fail }
+          priority: 3
+          label: 置信度不足，进入兜底诊断
+
+    # ========== 状态4：兜底诊断 ==========
+    - name: 兜底诊断
+      description: |
+        当根因无法确定时（置信度<30%），输出"基本分析+排查思路"，而非"不知道"。
+        列出可疑方向、验证步骤、缺失信息清单和升级建议。
+      requireHumanApproval: false
+      isInitial: false
+      isFinal: false
+      position: { x: 600, y: 450 }
+      steps:
+        - id: fallback-diagnosis
+          name: 兜底分析
+          agent: diagnosis-fallback
+          role: defender
+          task: |
+            接收已有分析结果，生成兜底诊断报告：
+            1. 评估信息是否充足
+            2. 列出已排除方向和剩余可疑方向
+            3. 为每个可疑方向生成验证步骤
+            4. 列出缺失信息清单和采集命令
+            5. 提供升级建议（深度诊断/最小复现Demo/联系上游社区）
+            参考 flutter-ohos-issue-analysis Skill 的通用经验和 NEVER 列表。
+            输出 Markdown 格式的兜底诊断报告。
+        - id: fallback-challenge
+          name: 质疑兜底
+          agent: diagnosis-challenger
+          role: attacker
+          task: |
+            质疑兜底诊断报告：
+            1. 检查可疑方向是否基于已有证据
+            2. 验证验证步骤是否可执行
+            3. 检查缺失信息清单是否完整
+            4. 评估升级建议是否合理
+            注意：不要读取 ACEHarness 内部状态文件，只关注问题分析本身。输出不超过 3000 字。
+        - id: fallback-judge
+          name: 兜底裁决
+          agent: diagnosis-judge
+          role: judge
+          task: |
+            评估兜底诊断报告质量，输出裁决 JSON：
+            {"verdict":"pass|conditional_pass|fail","summary":"..."}
+            pass=兜底报告可执行可进入报告沉淀；conditional_pass=需补充完善；fail=兜底报告不可用。
+      transitions:
+        - to: 报告沉淀
+          condition: { verdict: pass }
+          priority: 1
+          label: 兜底报告完成，进入报告沉淀
+        - to: 兜底诊断
+          condition: { verdict: conditional_pass }
+          priority: 2
+          label: 兜底报告需完善
+        - to: 报告沉淀
+          condition: { verdict: fail }
+          priority: 3
+          label: 兜底失败，仍输出已有分析
+
+    # ========== 状态5：修复建议与人工审查 ==========
+    - name: 修复建议
+      description: |
+        基于确认的根因，提出修复方案（短期修复+根因修复+长期改进+上游协同）。
+        修复方案执行前必须人工审查确认，避免错误修复引入新问题。
+      requireHumanApproval: true
+      isInitial: false
+      isFinal: false
+      position: { x: 850, y: 200 }
+      maxSelfTransitions: 3
+      steps:
+        - id: design-fix
+          name: 修复方案设计
+          agent: diagnosis-fix-advisor
+          role: defender
+          task: |
+            基于确认的根因，设计系统性修复方案：
+            1. 根据根因层面选择修复策略（应用层/插件层/框架层/引擎层/系统层）
+            2. 评估上游修复 PR 可用性（cherry-pick/升级/自研+提交上游）
+            3. 生成短期修复（快速止血）+ 根因修复（具体文件行号变更）+ 长期改进 + 上游协同
+            4. 评估修复风险和影响范围
+            5. 提供回滚计划
+            参考 flutter-ohos-issue-analysis Skill 的 issue-types/*.md 修复建议。
+        - id: fix-review-challenge
+          name: 修复方案质疑
+          agent: diagnosis-fix-challenger
+          role: attacker
+          task: |
+            质疑修复方案：
+            1. 检查修复方案是否真正解决根因
+            2. 验证是否引入新的风险
+            3. 检查回滚计划是否可行
+            4. 评估上游协同方案是否合理
+            5. 检查短期修复与根因修复的一致性
+        - id: fix-review-judge
+          name: 修复方案审查裁决
+          agent: diagnosis-fix-judge
+          role: judge
+          task: |
+            审查修复方案，输出裁决 JSON：
+            {"verdict":"pass|conditional_pass|fail","summary":"...","approved_fix":"..."}
+            pass=方案通过可进入代码修改；conditional_pass=需调整后重新审查；fail=方案驳回终止修复。
+            此步骤需要人工审查确认（requireHumanApproval: true）。
+      transitions:
+        - to: 代码修改
+          condition: { verdict: pass }
+          priority: 1
+          label: 修复方案通过审查
+        - to: 修复建议
+          condition: { verdict: conditional_pass }
+          priority: 2
+          label: 修复方案需调整
+        - to: 报告沉淀
+          condition: { verdict: fail }
+          priority: 3
+          label: 修复方案驳回，输出建议供人工执行
+
+    # ========== 状态6：代码修改与修复验证（红蓝对抗）==========
+    - name: 代码修改
+      description: |
+        红蓝对抗式修复：FixModifier（红军）执行代码修改，FixVerifier（蓝军）以攻击者视角验证修复。
+        验证失败时精确反馈给 FixModifier 调整，最多迭代2轮。
+      requireHumanApproval: false
+      isInitial: false
+      isFinal: false
+      position: { x: 1100, y: 200 }
+      maxSelfTransitions: 2
+      steps:
+        - id: implement-fix
+          name: 执行代码修改
+          agent: diagnosis-fix-modifier
+          role: defender
+          task: |
+            根据审查通过的修复建议执行代码修改：
+            1. 读取目标源码，理解代码上下文
+            2. 生成修改方案，执行代码修改
+            3. 自检修改正确性（语法、完整性、上下文一致性、导入完整性）
+            4. 记录修改信息和回滚点（git stash 或原始代码快照）
+            只在人工审查通过后执行修改。
+            输出 modification_result（success/skipped/failed）+ code_changes + rollback_info。
+        - id: verify-fix
+          name: 修复验证攻击
+          agent: diagnosis-fix-verifier
+          role: attacker
+          task: |
+            以攻击者视角验证修复（红蓝对抗）：
+            1. 编译验证：执行 flutter build hap 或等效命令
+            2. 运行验证：部署到设备，按复现基线操作，检查问题是否消失
+            3. 回归检查：运行相关测试用例，确认无新增问题
+            4. 修复攻击：构造绕过修复的输入场景，验证修复完整性
+            5. 日志验证：检查修复后的日志，原错误信息是否消失
+            验证失败时精确反馈给 FixModifier 调整（feedback_to_fixmodifier）。
+            输出 verification_result（verified/problem_remains/regression/skipped）。
+        - id: fix-judge
+          name: 修复对抗裁决
+          agent: diagnosis-fix-umpire
+          role: judge
+          task: |
+            裁决修复对抗结果，输出 JSON：
+            {"verdict":"pass|conditional_pass|fail","summary":"...","fix_confidence":0.0-1.0}
+            pass=修复通过验证可进入报告沉淀；conditional_pass=需 FixModifier 调整后重新验证；fail=修复失败。
+      transitions:
+        - to: 报告沉淀
+          condition: { verdict: pass }
+          priority: 1
+          label: 修复验证通过
+        - to: 代码修改
+          condition: { verdict: conditional_pass }
+          priority: 2
+          label: 修复需调整，重新修改验证
+        - to: 报告沉淀
+          condition: { verdict: fail }
+          priority: 3
+          label: 修复失败，输出人工修改指南
+
+    # ========== 状态7：报告沉淀 ==========
+    - name: 报告沉淀
+      description: |
+        生成结构化诊断报告，并将新经验沉淀到知识库。
+        报告包含：问题概述、环境信息、复现步骤、上游追踪结果、分析过程、根因结论、修复建议、验证建议、知识沉淀。
+      requireHumanApproval: false
+      isInitial: false
+      isFinal: false
+      position: { x: 1350, y: 200 }
+      steps:
+        - id: generate-report
+          name: 生成诊断报告
+          agent: diagnosis-reporter
+          role: defender
+          task: |
+            收集全流程上下文，生成结构化诊断报告：
+            1. 按标准模板生成报告（问题概述、环境信息、复现步骤、上游追踪结果、分析过程、根因结论、修复建议、验证建议、知识沉淀）
+            2. 提取知识更新（新根因模式、新上游问题、新专家经验、案例记录）
+            3. 评估诊断质量（根因置信度、修复验证状态、上游追踪状态、兜底触发状态）
+            4. 写入报告文件
+            参考 flutter-ohos-issue-analysis Skill 的 references/report-template.md 报告模板。
+        - id: report-challenge
+          name: 质疑报告
+          agent: diagnosis-challenger
+          role: attacker
+          task: |
+            质疑诊断报告：
+            1. 检查报告是否完整覆盖所有章节
+            2. 验证根因结论与证据链是否一致
+            3. 检查知识沉淀是否准确
+            4. 验证修复建议是否可执行
+            注意：不要读取 ACEHarness 内部状态文件，只关注问题分析本身。输出不超过 3000 字。
+        - id: report-judge
+          name: 报告裁决
+          agent: diagnosis-judge
+          role: judge
+          task: |
+            评估诊断报告质量，输出裁决 JSON：
+            {"verdict":"pass|conditional_pass|fail","summary":"...","report_path":"..."}
+            pass=报告完成诊断流程结束；conditional_pass=报告需完善；fail=报告不可用需重新生成。
+      transitions:
+        - to: 完成
+          condition: { verdict: pass }
+          priority: 1
+          label: 诊断报告完成
+        - to: 报告沉淀
+          condition: { verdict: conditional_pass }
+          priority: 2
+          label: 报告需完善
+        - to: 完成
+          condition: { verdict: fail }
+          priority: 3
+          label: 报告仍有价值，输出已有内容
+
+    # ========== 终止状态：完成 ==========
+    - name: 完成
+      description: 诊断流程完成，输出诊断报告和知识沉淀
+      isInitial: false
+      isFinal: true
+      position: { x: 1600, y: 200 }
+      steps:
+        - id: diagnosis-complete
+          name: 诊断完成
+          agent: diagnosis-completer
+          role: defender
+          task: |
+            诊断流程完成，输出最终总结：
+            1. 诊断报告路径
+            2. 根因结论摘要
+            3. 修复建议摘要
+            4. 知识沉淀摘要
+            5. 后续行动建议
+      transitions: []
+
+    # ========== 终止状态：终止 ==========
+    - name: 终止
+      description: 诊断流程异常终止
+      isInitial: false
+      isFinal: true
+      position: { x: 100, y: 450 }
+      steps:
+        - id: diagnosis-abort
+          name: 终止记录
+          agent: diagnosis-completer
+          role: defender
+          task: |
+            记录诊断终止原因：
+            1. 终止原因（问题描述不足/采集失败/其他）
+            2. 已有分析记录
+            3. 建议的后续操作
+      transitions: []
+
+context:
+  projectRoot: ""
+  workspaceMode: in-place
+  requirements: |
+    OHOS 跨平台框架（Flutter-OHOS / React Native-OHOS / KMP-CMP 等）鸿蒙化问题诊断与解决。
+    输入：一个 GitCode/GitHub Issue 链接（通过 globalContext 传入）。
+    工作流自动从 Issue 链接获取问题描述、复现步骤、环境信息等全部内容。
+    输出：结构化诊断报告 + 修复建议 + 知识沉淀。
+    支持问题类型：稳定性、内存泄漏、功能、性能、渲染。
+    支持问题层面：应用层、插件层、框架层、引擎层、系统层。
+    核心特色：上游社区追踪（PR追溯）、兜底诊断、红蓝对抗修复验证。
+  timeoutMinutes: 120
+  gitBaselineEnabled: true
+  skills:
+    - flutter-ohos-issue-analysis

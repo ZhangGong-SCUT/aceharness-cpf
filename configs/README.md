@@ -4,6 +4,30 @@
 
 ## 示例列表
 
+### 0. 鸿蒙跨平台框架问题 AI 自动诊断工作流 ★
+
+**文件**: `flutter-ohos-diagnosis.yaml`
+
+**描述**: 面向 OHOS 跨平台框架（Flutter-OHOS / React Native-OHOS / KMP-CMP 等）鸿蒙化场景的问题诊断与解决
+
+**特点**:
+- 状态机模式 (state-machine)
+- 多 Agent 协作（7 个诊断 Agent + 编排 + 兜底）
+- 并行编排（信息采集 + 问题复现 + 上游追踪）
+- 上游社区追踪（PR 追溯）
+- 红蓝对抗式修复验证（FixModifier vs FixVerifier）
+- 兜底诊断机制（置信度不足时输出排查思路）
+- 人工审查环节（修复方案审批）
+- 知识沉淀（根因模式库 + 案例记录）
+
+**适用场景**: 鸿蒙跨平台框架问题诊断、Crash 分析、内存泄漏排查、渲染问题定位
+
+**关联 Skill**: `flutter-ohos-issue-analysis`
+
+**详细文档**: [docs/flutter-ohos-diagnosis-workflow.md](../docs/flutter-ohos-diagnosis-workflow.md)
+
+---
+
 ### 1. Supervisor 状态机工作流
 
 **文件**: `example-supervisor-ohos-migration.yaml`

@@ -4605,7 +4605,12 @@ try {
   }
 
   private getParallelBranchJoinSuccess(result: ParallelBranchResult): boolean {
-    return result.status === 'fulfilled' && result.verdict !== 'fail';
+    // For parallel branches, success is determined by fulfillment status, not verdict.
+    // Defender/attacker branches typically don't output a verdict JSON — only judge
+    // steps do. Treating missing verdict as failure causes parallel groups to fail
+    // even when all branches completed successfully, skipping the subsequent judge
+    // step and aborting the workflow prematurely.
+    return result.status === 'fulfilled';
   }
 
   private evaluateParallelJoin(
@@ -4953,11 +4958,16 @@ try {
 
     let verdict: 'pass' | 'conditional_pass' | 'fail' = joinResult.passed ? 'pass' : 'fail';
     if (joinResult.passed && useVerdict) {
-      const successfulVerdicts = results
-        .filter((item) => this.getParallelBranchJoinSuccess(item))
+      // Only aggregate verdicts from branches that explicitly output one.
+      // Defender/attacker branches typically don't output a verdict — their
+      // "verdict" from parseVerdict is a fallback guess and should not override
+      // the join result. Only honor explicit pass/conditional_pass from branches
+      // that actually produced a structured verdict.
+      const explicitVerdicts = results
+        .filter((item) => this.getParallelBranchJoinSuccess(item) && this.hasExplicitVerdict(item.output || ''))
         .map((item) => item.verdict)
         .filter(Boolean);
-      if (successfulVerdicts.includes('conditional_pass')) {
+      if (explicitVerdicts.includes('conditional_pass')) {
         verdict = 'conditional_pass';
       }
     }
@@ -5078,7 +5088,11 @@ try {
         previousParallelSummary = parallelResult.summary;
         if (parallelResult.verdict === 'fail') verdict = 'fail';
         else if (parallelResult.verdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
-        if (parallelResult.failed) break;
+        // Only break if there are no more segments after this parallel group.
+        // If a judge step follows, it should still execute to produce the real
+        // verdict — the parallel group's "failed" status may just mean defender
+        // branches didn't output a verdict, not that the work actually failed.
+        if (parallelResult.failed && i === segments.length - 1) break;
         continue;
       }
 
@@ -5104,8 +5118,13 @@ try {
         // Update verdict based on step role
         if (useSegmentVerdict) {
           const stepVerdict = this.parseVerdict(output);
-          if (stepVerdict === 'fail') verdict = 'fail';
-          else if (stepVerdict === 'conditional_pass' && verdict === 'pass') {
+          // Judge steps produce the authoritative verdict — their verdict
+          // overrides any preliminary verdict from parallel defender branches.
+          if (step.role === 'judge') {
+            verdict = stepVerdict;
+          } else if (stepVerdict === 'fail') {
+            verdict = 'fail';
+          } else if (stepVerdict === 'conditional_pass' && verdict === 'pass') {
             verdict = 'conditional_pass';
           }
         }
@@ -7742,6 +7761,24 @@ try {
     }
 
     return issues;
+  }
+
+  /**
+   * Check whether the output contains an explicit, structured verdict
+   * (JSON with verdict field, or a step-conclusion block with verdict).
+   * Used to distinguish real verdicts from parseVerdict's fallback guesses.
+   */
+  private hasExplicitVerdict(output: string): boolean {
+    if (!output || !output.trim()) return false;
+    const parsed = this.extractJsonObject(output);
+    if (parsed && ['pass', 'conditional_pass', 'fail'].includes(parsed.verdict)) {
+      return true;
+    }
+    const conclusion = extractTaggedBlock(output, 'step-conclusion');
+    if (conclusion && this.parseVerdictFromConclusion(conclusion)) {
+      return true;
+    }
+    return false;
   }
 
   private parseVerdict(output: string): 'pass' | 'conditional_pass' | 'fail' {
