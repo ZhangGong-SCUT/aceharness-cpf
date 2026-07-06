@@ -82,6 +82,17 @@ models:
       - opencode
       - nga
       - codegenie
+  - value: minimax-cn/MiniMax-M3
+    label: MiniMax M3
+    costMultiplier: 0.02
+    endpoints:
+      - anthropic
+      - openai
+    engines:
+      - claude-code
+      - opencode
+      - nga
+      - codegenie
   - value: gpt-5.3-codex
     label: GPT-5.3 Codex
     costMultiplier: 0.05

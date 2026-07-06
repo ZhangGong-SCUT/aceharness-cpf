@@ -297,6 +297,42 @@ describe('parseVerdict', () => {
     expect(parseVerdict('```json\n{"verdict": "conditional_pass"}\n```')).toBe('conditional_pass');
   });
 
+  test('uses final verdict JSON despite earlier tool noise containing fail keywords', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const parseVerdict = (manager as any).parseVerdict.bind(manager);
+    const hasRequiredVerdictJson = (manager as any).hasRequiredVerdictJson.bind(manager);
+    const output = [
+      '<ace-process>{"toolName":"read","output":"test failures indicate that we can fail to call evict"}</ace-process>',
+      '索引源码完成，下面给出最终裁决。',
+      '```json',
+      '{"verdict":"pass","remaining_issues":0,"summary":"代码仓复用成功，可进入根因分析。"}',
+      '```',
+      '<step-conclusion>',
+      '## 结果 / 裁决',
+      '- **verdict: pass**。代码仓拉取步骤核心目标完成。',
+      '</step-conclusion>',
+    ].join('\n');
+
+    expect(hasRequiredVerdictJson(output)).toBe(true);
+    expect(parseVerdict(output)).toBe('pass');
+  });
+
+  test('uses the last structured verdict when multiple verdict JSON blocks exist', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const parseVerdict = (manager as any).parseVerdict.bind(manager);
+    const output = [
+      '```json',
+      '{"verdict":"fail","summary":"stale intermediate decision"}',
+      '```',
+      '补交最终裁决：',
+      '```json',
+      '{"verdict":"pass","remaining_issues":0,"summary":"final decision"}',
+      '```',
+    ].join('\n');
+
+    expect(parseVerdict(output)).toBe('pass');
+  });
+
   test('falls back to keyword matching for pass', async () => {
     const manager = await createManagerForTest(new MockEngine());
     const parseVerdict = (manager as any).parseVerdict.bind(manager);

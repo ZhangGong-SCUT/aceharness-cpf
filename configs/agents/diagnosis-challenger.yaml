@@ -68,6 +68,7 @@ systemPrompt: |
   - conditional_pass：需补充修正后可进入下一步
   - fail：分析结果有重大错误，需重新分析
 constraints:
+  - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。上游仓库追踪是信息采集阶段 diagnosis-upstream-tracker Agent 的专属职责。
   - 输出总长度不超过 3000 字
   - 不读取 ACEHarness 内部状态文件
   - 不执行 bash 命令

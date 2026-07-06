@@ -2607,6 +2607,26 @@ try {
       const proc = processManager.getProcess(activeProcessId);
       if (!proc || proc.status !== 'running') return;
       watchdogTriggeredForProcess = activeProcessId;
+      // If the agent already produced substantial output, treat the step as
+      // complete instead of injecting feedback (which can cause infinite loops
+      // when the resumed session also hangs). Only inject feedback when there
+      // is little or no output to recover from.
+      const existingStreamLength = (proc.streamContent || '').length;
+      // Also check accumulated stream from previous rounds (feedback resumes
+      // create new processes, so the current process may have little content
+      // even though the step has produced substantial output overall)
+      const totalAccumulatedLength = existingStreamLength + (accumulatedStreamPreview?.length || 0);
+      if (totalAccumulatedLength >= 2000) {
+        // Enough output to proceed — force-complete the step
+        this.emit('log', {
+          agent: step.agent,
+          level: 'warning',
+          message: `步骤 "${step.name}" 已有 ${totalAccumulatedLength} 字节输出但连续 ${Math.round(STREAM_IDLE_INTERRUPT_MS / 60000)} 分钟无新输出，自动完成步骤`,
+        });
+        processManager.killProcess(activeProcessId);
+        // Do NOT set interruptFlag — let the engine result path handle completion
+        return;
+      }
       this.liveFeedback.push(AUTO_CONTINUE_FEEDBACK);
       this.interruptFlag = true;
       this.feedbackInterrupt = true;
@@ -2678,6 +2698,32 @@ try {
               role: step.role,
             });
             continue;
+          }
+          // If the watchdog auto-completed the step (no interruptFlag) and we
+          // have substantial stream output, treat it as a successful result.
+          const procForAutoComplete = processManager.getProcess(currentProcessId);
+          const autoCompleteStream = procForAutoComplete?.streamContent || '';
+          const totalAutoCompleteStream = autoCompleteStream + (accumulatedStreamPreview || '');
+          if (!this.interruptFlag && totalAutoCompleteStream.length >= 2000) {
+            flushProcessStream(autoCompleteStream);
+            const sessionId = procForAutoComplete?.sessionId;
+            this.emit('log', {
+              agent: step.agent,
+              level: 'warning',
+              message: `步骤 "${step.name}" 因长时间无输出被自动完成，使用已收集的 ${totalAutoCompleteStream.length} 字节输出`,
+            });
+            lastResult = {
+              result: totalAutoCompleteStream,
+              session_id: sessionId || '',
+              is_error: false,
+              cost_usd: 0,
+              duration_ms: 0,
+              duration_api_ms: 0,
+              num_turns: 0,
+              usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+            };
+            accumulatedOutput += (accumulatedOutput ? '\n\n---\n\n' : '') + totalAutoCompleteStream;
+            break;
           }
           throw err; // Non-interrupt error, propagate normally
         }

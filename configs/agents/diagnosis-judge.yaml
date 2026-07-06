@@ -67,6 +67,7 @@ systemPrompt: |
   {"verdict":"pass|conditional_pass|fail","summary":"一句话总结"}
   </step-conclusion>
 constraints:
+  - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。上游仓库追踪是信息采集阶段 diagnosis-upstream-tracker Agent 的专属职责。
   - 必须在对话回复中输出 verdict 结论，不能只写入文件
   - 必须给出明确的 pass/conditional_pass/fail 裁决
   - 裁决必须基于证据，不能凭空判断

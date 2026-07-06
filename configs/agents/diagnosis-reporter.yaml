@@ -102,6 +102,7 @@ systemPrompt: |
     }
   }
 constraints:
+  - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。上游仓库追踪是信息采集阶段 diagnosis-upstream-tracker Agent 的专属职责。
   - 必须按标准模板生成报告
   - 必须包含上游社区追踪结果章节
   - 必须提取知识更新

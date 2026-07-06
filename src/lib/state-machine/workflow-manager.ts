@@ -523,6 +523,12 @@ function isStepToolFailure(message: string): boolean {
 export function isEngineLevelFailure(message: string): boolean {
   const normalized = String(message || '');
   if (!normalized.trim()) return false;
+  // If the message contains ACEHarness internal artifacts (ace-process tags,
+  // stateReason, statusReason), it means the agent read internal state files
+  // and the error text is quoted content — not a real engine failure.
+  if (/<ace-process>/.test(normalized) || /statusReason|stateReason/.test(normalized)) {
+    return false;
+  }
   if (/引擎连续失败|自动恢复\s*\d+\s*次后仍失败/.test(normalized)) return true;
   if (isStepToolFailure(normalized)) return false;
 
@@ -2994,6 +3000,89 @@ export class StateMachineWorkflowManager extends EventEmitter {
     return extractStructuredJsonObject(raw);
   }
 
+  private extractJsonObjectCandidates(raw: string): string[] {
+    const text = String(raw || '');
+    const candidates: string[] = [];
+    const aceProcessRanges: Array<[number, number]> = [];
+    const aceProcessRegex = /<ace-process\b[\s\S]*?<\/ace-process>/gi;
+    let aceProcessMatch: RegExpExecArray | null;
+    while ((aceProcessMatch = aceProcessRegex.exec(text)) !== null) {
+      aceProcessRanges.push([aceProcessMatch.index, aceProcessMatch.index + aceProcessMatch[0].length]);
+    }
+    const isInRange = (index: number, ranges: Array<[number, number]>): boolean =>
+      ranges.some(([start, end]) => index >= start && index < end);
+
+    const fenceRegex = /(?:^|\n)[ \t]{0,3}(```|~~~)([^\r\n]*)\r?\n([\s\S]*?)(?:\r?\n[ \t]{0,3}\1[ \t]*(?=\r?\n|$))/g;
+    const fenceRanges: Array<[number, number]> = [];
+    let fenceMatch: RegExpExecArray | null;
+    while ((fenceMatch = fenceRegex.exec(text)) !== null) {
+      fenceRanges.push([fenceMatch.index, fenceMatch.index + fenceMatch[0].length]);
+      if (isInRange(fenceMatch.index, aceProcessRanges)) continue;
+      const info = (fenceMatch[2] || '').trim().toLowerCase();
+      if (!info || info === 'json' || info.startsWith('json ')) {
+        candidates.push(fenceMatch[3]);
+      }
+    }
+
+    for (let start = 0; start < text.length; start += 1) {
+      if (text[start] !== '{') continue;
+      if (isInRange(start, aceProcessRanges) || isInRange(start, fenceRanges)) continue;
+
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let index = start; index < text.length; index += 1) {
+        const char = text[index];
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (char === '\\' && inString) {
+          escaped = true;
+          continue;
+        }
+        if (char === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (inString) continue;
+
+        if (char === '{') {
+          depth += 1;
+          continue;
+        }
+        if (char === '}') {
+          depth -= 1;
+          if (depth === 0) {
+            candidates.push(text.slice(start, index + 1));
+            start = index;
+            break;
+          }
+        }
+      }
+    }
+
+    return candidates;
+  }
+
+  private normalizeVerdict(value: unknown): 'pass' | 'conditional_pass' | 'fail' | null {
+    if (typeof value !== 'string') return null;
+    const raw = value.trim().toLowerCase();
+    if (raw === 'pass' || raw === '通过' || raw === '成功') return 'pass';
+    if (raw === 'conditional_pass' || raw === '有条件通过') return 'conditional_pass';
+    if (raw === 'fail' || raw === '失败' || raw === '不通过') return 'fail';
+    return null;
+  }
+
+  private parseStructuredVerdict(output: string): 'pass' | 'conditional_pass' | 'fail' | null {
+    for (const candidate of this.extractJsonObjectCandidates(output).reverse()) {
+      const parsed = this.extractJsonObject(candidate);
+      const verdict = this.normalizeVerdict(parsed?.verdict);
+      if (verdict) return verdict;
+    }
+    return null;
+  }
+
   private buildSpecRevisionVoteContext(input: SpecRevisionVoteTriggerInput): string {
     const result = input.result;
     const issueSummary = result?.issues?.length
@@ -4605,12 +4694,10 @@ try {
   }
 
   private getParallelBranchJoinSuccess(result: ParallelBranchResult): boolean {
-    // For parallel branches, success is determined by fulfillment status, not verdict.
-    // Defender/attacker branches typically don't output a verdict JSON — only judge
-    // steps do. Treating missing verdict as failure causes parallel groups to fail
-    // even when all branches completed successfully, skipping the subsequent judge
-    // step and aborting the workflow prematurely.
-    return result.status === 'fulfilled';
+    if (result.status !== 'fulfilled') return false;
+    // Defender/attacker branches often do not output verdict JSON. Treat missing
+    // verdicts as successful completion, but honor an explicit structured fail.
+    return !(result.verdict === 'fail' && this.hasExplicitVerdict(result.output || ''));
   }
 
   private evaluateParallelJoin(
@@ -6490,8 +6577,7 @@ try {
   }
 
   private hasRequiredVerdictJson(output: string): boolean {
-    const parsed = this.extractJsonObject(output);
-    return Boolean(parsed && ['pass', 'conditional_pass', 'fail'].includes(parsed.verdict));
+    return Boolean(this.parseStructuredVerdict(output));
   }
 
   private buildMissingFinalVerdictPrompt(
@@ -7770,8 +7856,7 @@ try {
    */
   private hasExplicitVerdict(output: string): boolean {
     if (!output || !output.trim()) return false;
-    const parsed = this.extractJsonObject(output);
-    if (parsed && ['pass', 'conditional_pass', 'fail'].includes(parsed.verdict)) {
+    if (this.parseStructuredVerdict(output)) {
       return true;
     }
     const conclusion = extractTaggedBlock(output, 'step-conclusion');
@@ -7788,9 +7873,9 @@ try {
       return 'fail';
     }
 
-    const parsed = this.extractJsonObject(output);
-    if (parsed && ['pass', 'conditional_pass', 'fail'].includes(parsed.verdict)) {
-      return parsed.verdict;
+    const structuredVerdict = this.parseStructuredVerdict(output);
+    if (structuredVerdict) {
+      return structuredVerdict;
     }
 
     const conclusion = extractTaggedBlock(output, 'step-conclusion');
@@ -7811,10 +7896,7 @@ try {
     const match = text.match(verdictPattern);
     if (!match) return null;
     const raw = match[1].toLowerCase();
-    if (raw === 'fail' || raw === '失败' || raw === '不通过') return 'fail';
-    if (raw === 'conditional_pass' || raw === '有条件通过') return 'conditional_pass';
-    if (raw === 'pass' || raw === '通过' || raw === '成功') return 'pass';
-    return null;
+    return this.normalizeVerdict(raw);
   }
 
   private getTransitionReason(result: StateExecutionResult): string {

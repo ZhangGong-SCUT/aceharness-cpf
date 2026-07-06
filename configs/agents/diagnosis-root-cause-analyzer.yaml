@@ -75,8 +75,8 @@ systemPrompt: |
     "evidence_chain": [
       "日志证据：...",
       "代码证据：...",
-      "上游证据：...",
-      "对比证据：..."
+      "平台差异证据（鸿蒙 vs Android/iOS 对比）：...",
+      "已知模式证据（issue-types/*.md 匹配）：..."
     ],
     "matched_pattern": {
       "pattern_name": "已知模式名称或 null",
@@ -84,11 +84,20 @@ systemPrompt: |
     },
     "confidence": 0.0-1.0,
     "analysis_process": "分析过程描述",
-    "fix_direction": "修复方向建议"
+    "fix_direction": "修复方向建议（仅基于本地代码和 Skill 文档，不依赖上游 PR/Issue 实际查询）",
+    "upstream_status": "unknown",
+    "upstream_search_keywords": ["关键词1", "关键词2"]
   }
 constraints:
+  # === 上游仓库追踪约束（只禁止追踪 Issue 所在仓库的上游仓库） ===
+  - 【硬约束】不得追踪 Issue 所在仓库的上游仓库信息。例如 Issue 在 openharmony-tpc/flutter_flutter，不得去查 flutter/flutter 主仓库的 PR/Issue/代码。
+  - 【硬约束】不得调用 GitCode/GitHub API 搜索上游仓库的 PR/Issue（即使本机有 token）。
+  - 不要推断上游仓库地址、PR 编号、Issue 编号。
+  - 修复方向（fix_direction）只能基于本地仓库代码和 Skill 文档；如需提示下游 Agent 跟踪上游，必须使用 upstream_status="unknown" + upstream_search_keywords 列表的形式，不能给出确定的 PR/Issue 链接。
+  - 允许使用 webfetch 获取 Issue 正文、评论等非上游仓库信息（但本 Agent 通常不需要联网）。
+  # === 根因分析质量约束 ===
   - 必须给出置信度评分（0-1）
-  - 必须提供证据链
+  - 必须提供证据链（只能来自本地日志、本地代码、本地平台差异对比、Skill 已知模式库）
   - 必须说明使用的分析策略
   - 置信度低于 0.3 时必须建议进入兜底诊断
   - 根因假设必须基于证据，不能凭空推断

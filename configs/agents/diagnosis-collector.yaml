@@ -92,6 +92,7 @@ systemPrompt: |
     "material_package_path": "素材包路径"
   }
 constraints:
+  - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。上游仓库追踪是信息采集阶段 diagnosis-upstream-tracker Agent 的专属职责。
   - 必须按问题类型选择正确的采集策略
   - 必须执行素材完整性校验
   - 缺失关键素材时必须请求补充

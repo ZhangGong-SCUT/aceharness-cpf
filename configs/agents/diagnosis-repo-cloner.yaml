@@ -38,21 +38,23 @@ systemPrompt: |
 
   clone 执行规范：
   - 使用 shallow clone：git clone --depth=1（减少下载量和时间）
-  - 如果指定了分支：git clone --depth=1 -b <branch> <url> <target-dir>
-  - 如果未指定分支：git clone --depth=1 <url> <target-dir>
   - clone 到当前工作目录下的 repo/ 子目录
-  - 如果 clone 失败（如分支不存在），回退到默认分支重试
+  - 如果 repo/ 目录已存在且非空，跳过 clone，直接使用已有代码
+  - clone 命令格式：git clone --depth=1 <url> repo/
+  - 如果需要指定分支：git clone --depth=1 -b <branch> <url> repo/
+  - 如果指定分支的 clone 失败（如分支不存在），立即回退到默认分支：git clone --depth=1 <url> repo/
+  - clone 超时设置：如果 clone 命令执行超过 3 分钟，标记为 skipped 并继续
+  - 如果 clone 因网络问题失败，不要重试超过 1 次，直接标记为 skipped 并输出已有信息
 
   clone 后验证：
-  - 确认目录存在且非空
-  - 执行 git -C <target-dir> log --oneline -1 确认 clone 成功
-  - 执行 git -C <target-dir> branch --show-current 确认分支
+  - 确认目录存在且非空：ls repo/ | head -5
+  - 执行 git -C repo/ log --oneline -1 确认 clone 成功
   - 列出关键文件（如 engine/src/flutter/shell/platform/ohos/、packages/flutter/）
 
   重要约束：
-  - 不要读取 ACEHarness 的内部状态文件
-  - 输出不超过 3000 字
-  - 如果仓库 URL 无法识别或 clone 失败，明确说明原因并标记为 skipped
+  - 输出不超过 2000 字
+  - 如果仓库 URL 无法识别或 clone 失败，明确说明原因并标记为 skipped，不要阻塞工作流
+  - clone 失败时输出 skipped 并附上 <step-conclusion> 标签，让工作流继续到下一步
 
   输出 JSON 格式：
   {
@@ -69,6 +71,7 @@ systemPrompt: |
   {"verdict":"pass","summary":"代码仓拉取完成，本地路径: repo/"}
   </step-conclusion>
 constraints:
+  - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。上游仓库追踪是信息采集阶段 diagnosis-upstream-tracker Agent 的专属职责。
   - 不要读取 ACEHarness 内部状态文件
   - 输出不超过 3000 字
   - 必须在对话回复中输出结论

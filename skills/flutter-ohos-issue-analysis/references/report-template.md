@@ -77,6 +77,14 @@
 ### 信息采集
 - **采集的素材**: [素材列表]
 - **素材完整性**: [完整/部分缺失]
+- **Issue 获取方式**: [GitCode API v5 / GitHub API / webfetch / 用户提供]
+- **Issue 获取完整性**:
+  - 正文: complete | missing | partial
+  - 评论: complete | missing | not_applicable
+  - 截图/附件: complete | missing | unparsed | not_applicable
+  - 日志: complete | missing | not_applicable
+- **缺失证据及影响**:
+  - [缺失项]: [影响分类/根因置信度/修复验证/上游追踪的方式]
 
 ### 根因分析
 - **分析策略**: A(直接复用) | B(参考补充) | C(评估回退) | D(完整分析)
@@ -84,12 +92,17 @@
 - **代码审查**: [代码审查发现]
 - **差异对比**: [鸿蒙与 Android/iOS 差异]
 - **根因模式匹配**: [匹配到的模式名称]
+- **证据分级**:
+  - confirmed: [由 Issue/API/日志/源码/命令结果直接证明的事实]
+  - inferred: [基于事实推导但未运行验证的判断]
+  - unverified: [仍需设备、样本、日志或编译验证的事项]
 
 ## 根因结论
 - **根本原因**: [根因描述]
 - **触发条件**: [触发条件]
 - **影响机制**: [问题如何产生影响]
 - **置信度**: [0.0-1.0]
+- **置信度限制**: [哪些缺失证据限制了置信度；无则写“不适用”]
 - **证据链**:
   1. [日志证据]
   2. [代码证据]
@@ -142,6 +155,7 @@
 - **运行验证**: [问题消失/问题仍在]
 - **回归检查**: [无回归/有回归]
 - **修复置信度**: [0.0-1.0]
+- **未验证声明**: [未执行编译/运行/样本验证时必须说明，不得声称已解决]
 
 ## 知识沉淀
 
@@ -203,3 +217,6 @@
 3. **可读性**：使用 Markdown 格式，表格和代码块清晰
 4. **可执行性**：修复建议必须具体可操作
 5. **可追溯性**：所有结论附证据来源
+6. **证据分级**：明确区分 confirmed / inferred / unverified；未验证的症状解释和修复效果必须保守表述
+7. **缺失证据影响**：必须列出 Issue 正文、评论、截图/附件、日志、样本和运行环境的缺失情况，并说明影响
+8. **可解析结尾**：报告步骤最终回复末尾必须附 JSON：`{"verdict":"pass|conditional_pass|fail","summary":"...","artifact_path":"outputs/...md","key_findings":[...],"report_path":"outputs/...md","verification_status":"verified|skipped|needs_runtime_validation","missing_evidence":[...]}`
