@@ -2,8 +2,8 @@ workflow:
   name: 鸿蒙跨平台框架问题AI自动诊断
   description: |
     面向 OHOS 跨平台框架（Flutter-OHOS / React Native-OHOS / KMP-CMP 等）鸿蒙化场景的问题诊断与解决。
-    精简版：分类定界(1步) → 信息采集(2步) → 根因分析(1步) → 修复建议(2步红蓝) → 报告沉淀(1步) → 完成。
-    优化：去掉问题复现、裁决步骤、代码修改阶段，聚焦诊断和修复建议。
+    精简版：信息采集(代码仓拉取+分支回退) → 分类定界(1步) → 根因分析(1步) → 修复建议(2步红蓝) → 报告沉淀(1步) → 完成。
+    优化：先拉取代码仓并回退到 Issue 提出前的状态，再分类定界，聚焦诊断和修复建议。
   mode: state-machine
   maxTransitions: 20
   supervisor:
@@ -15,15 +15,64 @@ workflow:
     experienceEnabled: true
 
   states:
-    # ========== 状态1：分类定界（1步，无裁决）==========
+    # ========== 状态1：信息采集（代码仓拉取+分支回退）==========
+    - name: 信息采集
+      description: |
+        拉取代码仓到本地，识别 Issue 所在分支，切换到对应分支，并回退到 Issue 提出前的一个 merge commit。
+      requireHumanApproval: false
+      isInitial: true
+      isFinal: false
+      position: { x: 100, y: 200 }
+      steps:
+        - id: clone-repo
+          name: 代码仓拉取
+          agent: diagnosis-repo-cloner
+          role: defender
+          task: |
+            从 globalContext 中的 Issue 链接获取 Issue 内容，识别代码仓库 URL 和分支，执行 clone 到本地，并回退到 Issue 提出前的一个 merge commit。
+            1. 从 globalContext 中提取 Issue 链接
+            2. 获取 Issue 内容（标题、body、创建时间）：
+               - GitCode 链接使用 Gitea API v5 `https://gitcode.com/api/v5/repos/{owner}/{repo}/issues/{number}`
+               - GitHub 链接使用 GitHub API
+            3. 从 Issue 内容中识别代码仓库 URL（Issue 所在仓库本身即为诊断目标仓库）
+            4. 识别 Issue 对应的分支：
+               - 优先从 Issue 标题/内容推断版本号（如 [3.41] → oh-3.41.9-dev）
+               - 无法推断则使用仓库默认分支
+            5. 执行 clone（不要用 --depth=1，需要完整历史以回退）：
+               - git clone <url> repo/
+               - 如果指定分支存在：git -C repo/ checkout <branch>
+               - 如果指定分支不存在：使用默认分支
+            6. 获取 Issue 创建时间，回退到 Issue 提出前的一个 merge commit：
+               - git -C repo/ log --merges --before="<issue_created_at>" --format="%H %ci %s" -1
+               - 如果找到 merge commit：git -C repo/ reset --hard <merge_commit_hash>
+               - 如果没有找到 merge commit（Issue 时间太早或仓库历史不足）：保持当前 HEAD，记录 warning
+            7. 验证当前 HEAD 状态：git -C repo/ log --oneline -1
+            8. 列出关键文件路径
+            输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、repo_path、branch、commit、issue_created_at、reset_target_merge_commit、missing_evidence。
+            输出不超过 2000 字。
+      transitions:
+        - to: 分类定界
+          condition: { verdict: pass }
+          priority: 1
+          label: 代码仓拉取完成，进入分类定界
+        - to: 分类定界
+          condition: { verdict: conditional_pass }
+          priority: 2
+          label: 代码仓拉取有瑕疵（如无法回退），但仍可继续分类
+        - to: 终止
+          condition: { verdict: fail }
+          priority: 3
+          label: 代码仓拉取失败，终止诊断
+
+    # ========== 状态2：分类定界（1步，无裁决）==========
     - name: 分类定界
       description: |
         问题分类与定界，确定问题类型、层面、优先级。
         单步完成，无需裁决——分类结果对不对到根因分析阶段自然验证。
       requireHumanApproval: false
-      isInitial: true
+      isInitial: false
       isFinal: false
-      position: { x: 100, y: 200 }
+      position: { x: 350, y: 200 }
       steps:
         - id: classify-problem
           name: 问题分类定界
@@ -47,55 +96,18 @@ workflow:
             注意：如果 Issue 中提到了修复 PR 或上游仓库地址，也记录下来供下游 Agent 使用。
             输出不超过 2000 字。
       transitions:
-        - to: 信息采集
+        - to: 根因分析
           condition: { verdict: pass }
           priority: 1
-          label: 分类完成，进入信息采集
-        - to: 信息采集
+          label: 分类完成，进入根因分析
+        - to: 根因分析
           condition: { verdict: conditional_pass }
           priority: 2
-          label: 分类有不确定项，但仍进入信息采集
+          label: 分类有不确定项，但仍进入根因分析
         - to: 终止
           condition: { verdict: fail }
           priority: 3
           label: 问题描述不足，终止诊断
-
-    # ========== 状态2：信息采集（仅拉取代码仓）==========
-    - name: 信息采集
-      description: |
-        拉取代码仓到本地，供下游根因分析使用。
-      requireHumanApproval: false
-      isInitial: false
-      isFinal: false
-      position: { x: 350, y: 200 }
-      steps:
-        - id: clone-repo
-          name: 代码仓拉取
-          agent: diagnosis-repo-cloner
-          role: defender
-          task: |
-            从 Issue 内容或分类结果中识别代码仓库 URL 和分支，执行 shallow clone 到本地。
-            1. 从上游分类结果或 Issue 内容中识别仓库 URL
-            2. 推断目标分支（优先从 Issue 标题/内容推断版本号，无法推断则用默认分支）
-            3. 执行 shallow clone：git clone --depth=1 -b <branch> <url> repo/
-               如果指定分支不存在，回退到默认分支
-            4. 验证 clone 成功，列出关键文件路径
-            输出本地代码路径（repo/）供下游 Agent 使用。
-            输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、repo_path、branch、commit、missing_evidence。
-            输出不超过 2000 字。
-      transitions:
-        - to: 根因分析
-          condition: { verdict: pass }
-          priority: 1
-          label: 信息采集完成，进入根因分析
-        - to: 根因分析
-          condition: { verdict: conditional_pass }
-          priority: 2
-          label: 信息不完整但仍可继续分析
-        - to: 终止
-          condition: { verdict: fail }
-          priority: 3
-          label: 采集失败，终止诊断
 
     # ========== 状态3：根因分析（1步，无裁决，含兜底逻辑）==========
     - name: 根因分析
