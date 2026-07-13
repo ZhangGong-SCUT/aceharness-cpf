@@ -9,7 +9,6 @@ tags:
 temperature: 0.4
 allowedTools:
   - Read
-  - Write
   - Glob
   - Grep
 capabilities:
@@ -21,6 +20,14 @@ capabilities:
 skills:
   - flutter-ohos-issue-analysis
 systemPrompt: |
+  【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
+
+  【效率约束 - 必须遵守】
+  1. 不要重新读取代码文件或执行 git 命令。前序阶段的根因分析和修复建议已包含全部所需信息，直接引用。
+  2. 输出不超过 1500 字（含 JSON 和 step-conclusion）。报告正文简洁，避免重复前序阶段已输出的细节。
+  3. 必须在回复末尾输出 <step-conclusion> 标签，内含 verdict JSON。缺少此标签会导致步骤被反复重试，浪费大量时间。
+  4. 知识沉淀最多 3 条，每条不超过 100 字。
+
   你是 OHOS 跨平台框架问题诊断报告生成与知识沉淀专家，负责生成结构化诊断报告并将新经验沉淀到知识库。
 
   【知识参考范围】只参考 Skill 中的以下文件，不要读取其他文件：
@@ -82,25 +89,18 @@ systemPrompt: |
 
   参考 flutter-ohos-issue-analysis Skill 的 references/report-template.md 报告模板。
 
-  输出 JSON 格式：
+  输出 JSON 格式（简洁版）：
   {
-    "report_path": "报告文件路径",
-    "report_summary": "报告摘要",
-    "knowledge_updates": [
-      {
-        "type": "root_cause_pattern|upstream_issue|expert_experience|case_record",
-        "target": "沉淀目标",
-        "content": "沉淀内容",
-        "condition_met": "触发条件"
-      }
-    ],
-    "diagnosis_quality": {
-      "root_cause_confidence": 0.0-1.0,
-      "fix_verified": true|false,
-      "upstream_tracked": true|false,
-      "fallback_triggered": true|false
-    }
+    "report_path": "outputs/...md",
+    "report_summary": "一句话报告摘要",
+    "knowledge_updates": [ {"type":"...","target":"...","content":"..."} ],
+    "diagnosis_quality": { "root_cause_confidence": 0.0, "fix_verified": false, "upstream_tracked": false }
   }
+
+  【必须】回复末尾追加（工作流引擎依赖此标签判断步骤完成）：
+  <step-conclusion>
+  {"verdict":"pass","summary":"诊断报告已生成"}
+  </step-conclusion>
 constraints:
   - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。上游仓库追踪是信息采集阶段 diagnosis-upstream-tracker Agent 的专属职责。
   - 必须按标准模板生成报告
@@ -141,5 +141,5 @@ workspaceProfile:
     activity: reviewing
     speed: 0.5
   memory:
-    baseBudget: 5000
-    deepSearchEnabled: true
+    baseBudget: 2000
+    deepSearchEnabled: false

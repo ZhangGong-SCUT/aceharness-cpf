@@ -22,6 +22,8 @@ capabilities:
 skills:
   - flutter-ohos-issue-analysis
 systemPrompt: |
+  【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
+
   你是上游社区问题追踪专家，精通 GitHub/GitCode Issue/PR 搜索、PR 追溯和社区问题关联分析。这是诊断系统的核心特色 Agent。
 
   【知识参考范围】只参考 Skill 中的以下文件，不要读取其他文件：

@@ -2,7 +2,7 @@ workflow:
   name: 鸿蒙跨平台框架问题AI自动诊断
   description: |
     面向 OHOS 跨平台框架（Flutter-OHOS / React Native-OHOS / KMP-CMP 等）鸿蒙化场景的问题诊断与解决。
-    精简版：信息采集(代码仓拉取+分支回退) → 分类定界(1步) → 根因分析(1步) → 修复建议(2步红蓝) → 报告沉淀(1步) → 完成。
+    精简版：信息采集(代码仓拉取+分支回退) → [问题复现(已注释)] → 分类定界(1步) → 根因分析(1步) → 修复建议(2步红蓝) → 报告沉淀(1步) → 完成。
     优化：先拉取代码仓并回退到 Issue 提出前的状态，再分类定界，聚焦诊断和修复建议。
   mode: state-machine
   maxTransitions: 20
@@ -29,28 +29,43 @@ workflow:
           agent: diagnosis-repo-cloner
           role: defender
           task: |
-            从 globalContext 中的 Issue 链接获取 Issue 内容，识别代码仓库 URL 和分支，执行 clone 到本地，并回退到 Issue 提出前的一个 merge commit。
+            从 globalContext 中的 Issue 链接获取 Issue 完整内容（标题、body、创建时间、评论、截图、环境信息），识别代码仓库 URL 和分支，执行 clone 到本地，并回退到 Issue 提出前的一个 merge commit。
             1. 从 globalContext 中提取 Issue 链接
             2. 获取 Issue 内容（标题、body、创建时间）：
                - GitCode 链接使用 Gitea API v5 `https://gitcode.com/api/v5/repos/{owner}/{repo}/issues/{number}`
                - GitHub 链接使用 GitHub API
-            3. 从 Issue 内容中识别代码仓库 URL（Issue 所在仓库本身即为诊断目标仓库）
-            4. 识别 Issue 对应的分支：
+            3. 获取 Issue 评论：
+               - GitCode: `https://gitcode.com/api/v5/repos/{owner}/{repo}/issues/{number}/comments`
+               - GitHub: `https://api.github.com/repos/{owner}/{repo}/issues/{number}/comments`
+               - 从评论中提取：补充复现步骤、环境补充、日志/堆栈、维护者回复、关联 PR/Issue
+            4. 下载并解析截图：
+               - 从 Issue body 中提取所有图片 URL
+               - 下载到 outputs/screenshots/ 目录
+               - 描述截图内容（错误界面、黑屏/白屏、花屏/错位、日志截图、代码截图等）
+            5. 提取结构化环境信息：
+               - 从 Issue body 和评论中提取：设备型号、系统版本、API 版本、框架版本、引擎版本、应用版本、分支信息、复现概率
+               - 未提取到的字段标记为 missing
+               - 评估环境信息完整性：complete / partial / minimal
+            6. 从 Issue 内容中识别代码仓库 URL（Issue 所在仓库本身即为诊断目标仓库）
+            7. 识别 Issue 对应的分支：
                - 优先从 Issue 标题/内容推断版本号（如 [3.41] → oh-3.41.9-dev）
                - 无法推断则使用仓库默认分支
-            5. 执行 clone（不要用 --depth=1，需要完整历史以回退）：
+            8. 执行 clone（不要用 --depth=1，需要完整历史以回退）：
                - git clone <url> repo/
                - 如果指定分支存在：git -C repo/ checkout <branch>
                - 如果指定分支不存在：使用默认分支
-            6. 获取 Issue 创建时间，回退到 Issue 提出前的一个 merge commit：
+            9. 获取 Issue 创建时间，回退到 Issue 提出前的一个 merge commit：
                - git -C repo/ log --merges --before="<issue_created_at>" --format="%H %ci %s" -1
                - 如果找到 merge commit：git -C repo/ reset --hard <merge_commit_hash>
                - 如果没有找到 merge commit（Issue 时间太早或仓库历史不足）：保持当前 HEAD，记录 warning
-            7. 验证当前 HEAD 状态：git -C repo/ log --oneline -1
-            8. 列出关键文件路径
-            输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、repo_path、branch、commit、issue_created_at、reset_target_merge_commit、missing_evidence。
-            输出不超过 2000 字。
+            10. 验证当前 HEAD 状态：git -C repo/ log --oneline -1
+            11. 列出关键文件路径
+            参考 flutter-ohos-issue-analysis Skill 的 references/issue-content-collection.md 获取 Issue 内容采集的详细指导。
+            输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、repo_path、branch、commit、issue_created_at、reset_target_merge_commit、issue_content_complete、issue_comments_count、screenshots、environment_info、environment_completeness、missing_evidence。
+            输出不超过 3000 字。
       transitions:
+        # 问题复现环节已注释，信息采集直接指向分类定界
+        # 如需恢复问题复现，取消下方注释并将分类定界的 transitions 改回问题复现
         - to: 分类定界
           condition: { verdict: pass }
           priority: 1
@@ -64,7 +79,56 @@ workflow:
           priority: 3
           label: 代码仓拉取失败，终止诊断
 
-    # ========== 状态2：分类定界（1步，无裁决）==========
+    # ========== 状态2：问题复现（构造Demo复现Issue问题）[已注释] ==========
+    # 如需恢复问题复现环节，取消下方注释，并将信息采集的 transitions 改回指向问题复现
+    # - name: 问题复现
+    #   description: |
+    #     根据信息采集中收集到的信息，构造 Demo 来复现 Issue 中描述的问题。
+    #     如果 Issue 中直接提供了 Demo，验证并补全为完整可运行。
+    #   requireHumanApproval: false
+    #   isInitial: false
+    #   isFinal: false
+    #   position: { x: 225, y: 200 }
+    #   steps:
+    #     - id: reproduce-issue
+    #       name: 问题复现
+    #       agent: diagnosis-reproducer
+    #       role: defender
+    #       task: |
+    #         根据信息采集阶段的输出（Issue 内容、复现步骤、环境信息、截图描述、代码仓路径），构造 Demo 来复现 Issue 中描述的问题。
+    #         1. 从上游信息采集结果中获取：Issue 正文、复现步骤、环境信息、截图描述、代码仓本地路径（repo/）
+    #         2. 判断 Issue 中是否直接提供了 Demo 代码：
+    #            - 检查 Issue body 和评论中是否有代码块（```dart、```typescript、```arkts 等）
+    #            - 检查是否有完整的可运行示例
+    #         3. 根据情况选择 Demo 构造策略：
+    #            - 【策略 A】Issue 提供了完整 Demo：直接使用，补充运行说明
+    #            - 【策略 B】Issue 提供了部分代码片段：基于片段 + 代码仓相关代码补全
+    #            - 【策略 C】Issue 只有文字描述：根据描述 + 代码仓相关代码从零构造
+    #            - 【策略 D】无法构造 Demo：说明原因，输出理论复现路径
+    #         4. 如果需要参考代码仓中的代码：
+    #            - 在 repo/ 目录中搜索与 Issue 相关的代码文件
+    #            - 使用 grep/glob 找到相关代码
+    #            - 基于找到的代码构造最小复现 Demo
+    #         5. 输出完整可运行的 Demo 代码（含使用说明）
+    #         6. 记录复现稳定性（stable/intermittent/unstable/not_reproducible/theoretical）
+    #         7. 输出复现基线（stable_steps + expected_behavior + actual_behavior + verification_method）
+    #         输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、reproduction_status、demo_source、demo_code、demo_usage、expected_behavior、actual_behavior、verification_method、missing_evidence。
+    #         输出不超过 5000 字。
+    #   transitions:
+    #     - to: 分类定界
+    #       condition: { verdict: pass }
+    #       priority: 1
+    #       label: 问题复现完成，进入分类定界
+    #     - to: 分类定界
+    #       condition: { verdict: conditional_pass }
+    #       priority: 2
+    #       label: 问题复现有瑕疵（如无法实际运行），但仍可继续分类
+    #     - to: 分类定界
+    #       condition: { verdict: fail }
+    #       priority: 3
+    #       label: 问题无法复现，但仍进入分类定界（基于 Issue 描述分析）
+
+    # ========== 状态3：分类定界（1步，无裁决）==========
     - name: 分类定界
       description: |
         问题分类与定界，确定问题类型、层面、优先级。
@@ -131,7 +195,7 @@ workflow:
             3. 输出根因假设 + 证据链 + 置信度
             4. 如果置信度<0.3，直接在输出中包含兜底排查思路（可疑方向、验证步骤、缺失信息清单）
             5. 必须区分 confirmed（已由 Issue/API/日志/代码直接证明）、inferred（基于代码和平台差异推断）、unverified（待运行时验证）；不得把未验证的症状解释写成事实。
-            6. 【硬约束】不得追踪 Issue 所在仓库的上游仓库信息。例如 Issue 在 openharmony-tpc/flutter_flutter，不得去查 flutter/flutter 主仓库的 PR/Issue/代码。允许使用 webfetch 获取 Issue 正文、评论等非上游仓库信息。
+            6. 【硬约束】不要搜索 Issue 所在仓库的其他 PR 和 Issue（如列出仓库所有 PR、搜索相关 PR/Issue 等）。但允许获取当前 Issue 本身的信息（标题、body、评论、创建时间等），可通过 GitCode/GitHub API 的 issues/{number} 端点获取。所有代码分析只在本地代码仓（repo/ 目录）中进行。
             7. 如果根因分析需要参考上游信息，必须以 upstream_status="unknown" + upstream_search_keywords（供用户手动搜索的关键词）形式输出，不得给出确定的 PR/Issue 链接，不得自行推断上游仓库地址。
             参考 flutter-ohos-issue-analysis Skill 的 issue-types/*.md 和 references/log-interpretation.md。
             输出 JSON 或 Markdown+JSON 均可，但结尾必须包含 verdict、summary、artifact_path、key_findings、confidence、confirmed_evidence、inferred_evidence、missing_evidence、upstream_status（只能为 "unknown"）、upstream_search_keywords。

@@ -8,150 +8,87 @@
 > - Issue 质量评分 ≥ 5（body长度 + 复现步骤 + 代码 + 错误信息 + 环境信息 + 截图 + 评论）
 >
 > **收集日期**: 2026-07-06
-> **数据规模**: 扫描 1447 个已关闭 Issue，质量评分达标 314 个，最终匹配已合入 PR（近 6 个月内）136 个
+> **数据规模**: 扫描 1474 个已关闭 Issue，质量评分达标 244 个，最终匹配已合入 PR（近 6 个月内）73 个
 
 ---
 
-## 测试 Issue 总览（136 个，全部来自 openharmony-tpc/flutter_packages，PR 近 6 个月内合并）
+## 测试 Issue 总览（73 个，全部来自 openharmony-tpc/flutter_packages，PR 近 6 个月内合并）
 
 | # | Issue | 标题 | PR | PR创建人 | PR合并日期 | 类型 | 评分 | Body | 评论 |
 |---|--------|------|-----|---------|-----------|------|------|------|------|
-| 1 | [#1014](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1014) | [shared_preferences_ohos] SharedPreferencesAsync 的 getStringList 和 setStringList方法失效，始终返回 null | [#860](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/860) | huangyouhua | 2026-05-14 | functional | 12 | 2006 | 1 |
+| 1 | [#1014](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1014) | [shared_preferences_ohos] SharedPreferencesAsync 的 getStringList 和 setStringList方法失效，始终返回 null | [#860](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/860) | huangyouhua | 2026-05-14 | functional | 12 | 2043 | 1 |
 | 2 | [#1196](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1196) | [Bug]: 【pigeon】生成的ArkTs 数据类中toList 会因为undefined导致Dart读取数组异常，导致属性无法对应 | [#1203](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1203) | zhong_ning | 2026-06-12 | functional | 11 | 1126 | 1 |
 | 3 | [#1103](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1103) | [Bug]:  shared_preferences 插件在写入值时触发： Valid value range is empty: 0 | [#1332](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1332) | zhong_ning | 2026-06-25 | functional | 11 | 1456 | 4 |
 | 4 | [#1422](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1422) | pigeon-v21.2.0_dev分支AI质量加固优化 | [#1301](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1301) | zhaichenyang | 2026-06-29 | performance | 10 | 1992 | 1 |
 | 5 | [#1328](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1328) | shared_preferences 插件在写入值时触发：Valid value range is empty: 0 | [#1214](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1214) | zhong_ning | 2026-06-15 | functional | 10 | 838 | 0 |
 | 6 | [#1144](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1144) | [Bug]: shared_preferences setEncodedStringList 通道未注册及回复空数组问题 | [#1241](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1241) | zhong_ning | 2026-06-17 | functional | 8 | 1020 | 2 |
 | 7 | [#1118](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1118) | [Bug]: pigeon生成的模板内部类型错误 | [#1207](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1207) | zhong_ning | 2026-06-11 | functional | 8 | 977 | 1 |
-| 8 | [#1266](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1266) | 新增br_image_picker-v1.2.1_ohos_dev的OAT.xml文件 | [#1149](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1149) | qq_77777 | 2026-06-09 | functional | 7 | 82 | 0 |
-| 9 | [#1265](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1265) | 新增br_image_picker-v1.2.1_ohos的OAT.xml文件 | [#1148](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1148) | qq_77777 | 2026-06-09 | functional | 7 | 78 | 0 |
-| 10 | [#1264](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1264) | 新增br_image_picker-v1.1.2_ohos_dev的OAT.xml文件 | [#1147](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1147) | qq_77777 | 2026-06-09 | functional | 7 | 82 | 0 |
-| 11 | [#1263](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1263) | 新增br_image_picker-v1.1.2_ohos的OAT.xml文件 | [#1146](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1146) | qq_77777 | 2026-06-09 | functional | 7 | 78 | 0 |
-| 12 | [#1220](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1220) | camera_ohos修改README文件 | [#1096](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1096) | zhangcongcong_zzzcc | 2026-05-27 | functional | 7 | 86 | 0 |
-| 13 | [#1218](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1218) | camera_ohos中捕获fps设置失败时发生的异常，防止程序奔溃 | [#1094](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1094) | zhangcongcong_zzzcc | 2026-05-27 | performance | 7 | 233 | 0 |
-| 14 | [#1132](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1132) | br_image_picker-v1.2.1_ohos分支新增单元测试 | [#1003](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1003) | qq_77777 | 2026-05-20 | functional | 7 | 69 | 0 |
-| 15 | [#1128](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1128) | br_image_picker-v1.1.2_ohos_dev分支新增单元测试 | [#998](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/998) | qq_77777 | 2026-05-21 | functional | 7 | 73 | 0 |
-| 16 | [#1127](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1127) | br_image_picker-v1.1.2_ohos分支新增单元测试 | [#996](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/996) | qq_77777 | 2026-05-20 | functional | 7 | 69 | 0 |
-| 17 | [#919](https://gitcode.com/openharmony-tpc/flutter_packages/issues/919) | 【br_image_picker-v1.2.1_ohos_dev】修复image_picker选取同一照片，后续设置宽高未生效问题 | [#748](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/748) | lx123546879 | 2026-03-10 | functional | 7 | 32 | 0 |
-| 18 | [#1424](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1424) | br_pigeon-v26.1.5_ohos_dev分支AI质量加固优化 | [#1299](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1299) | zhaichenyang | 2026-06-29 | performance | 6 | 1692 | 1 |
-| 19 | [#1423](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1423) | br_pigeon-v25.3.2_ohos_dev分支AI质量加固优化 | [#1300](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1300) | zhaichenyang | 2026-06-29 | performance | 6 | 1422 | 1 |
-| 20 | [#1369](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1369) | br_file_selector-v1.1.0_ohos 分支中 packages/file_selector/file_selector/pubspec.yaml 存在 Tab 缩进，导致 flutter pub get 失败 | [#983](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/983) | zhong_ning | 2026-06-15 | functional | 6 | 248 | 1 |
-| 21 | [#1317](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1317) | 新增br_pigeon-v26.3.4_ohos_dev流水线门禁 | [#1199](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1199) | qq_77777 | 2026-06-04 | functional | 6 | 63 | 0 |
-| 22 | [#1316](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1316) | 修改yaml文件的分支为br_webview_flutter-v4.13.1_ohos_dev | [#1198](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1198) | qq_77777 | 2026-06-05 | functional | 6 | 86 | 0 |
-| 23 | [#1315](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1315) | 新增br_local_auth-v3.0.1_ohos_dev流水线门禁 | [#1197](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1197) | qq_77777 | 2026-06-05 | functional | 6 | 66 | 0 |
-| 24 | [#1314](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1314) | br_camera-v0.12.0+1_ohos_dev修改分支信息 | [#1196](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1196) | qq_77777 | 2026-06-05 | functional | 6 | 80 | 0 |
-| 25 | [#1313](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1313) | br_in_app_purchase-v3.2.3_ohos_dev新增流水线门禁 | [#1195](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1195) | qq_77777 | 2026-06-04 | functional | 6 | 74 | 0 |
-| 26 | [#1312](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1312) | br_video_player-v2.11.1_ohos_dev新增流水线门禁 | [#1194](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1194) | qq_77777 | 2026-06-05 | functional | 6 | 72 | 0 |
-| 27 | [#1307](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1307) | br_file_selector-v1.0.3_ohos增加流水线门禁 | [#1192](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1192) | qq_77777 | 2026-06-05 | functional | 6 | 37 | 0 |
-| 28 | [#1306](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1306) | br_file_selector-v1.0.3_ohos_dev增加流水线门禁 | [#1193](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1193) | qq_77777 | 2026-06-05 | functional | 6 | 37 | 0 |
-| 29 | [#1301](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1301) | 修改br_webview_flutter-v4.8.0_ohos_dev的OAT.xml文件 | [#1185](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1185) | qq_77777 | 2026-06-09 | functional | 6 | 85 | 0 |
-| 30 | [#1300](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1300) | 修改br_webview_flutter-v4.13.0_ohos_dev的OAT.xml文件 | [#1184](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1184) | qq_77777 | 2026-06-09 | functional | 6 | 85 | 0 |
-| 31 | [#1299](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1299) | 修改br_webview_flutter-v4.13.0_ohos的OAT.xml文件 | [#1183](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1183) | qq_77777 | 2026-06-09 | functional | 6 | 82 | 0 |
-| 32 | [#1298](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1298) | 修改br_video_player-v2.9.2_ohos_dev的OAT.xml文件 | [#1182](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1182) | qq_77777 | 2026-06-09 | functional | 6 | 82 | 0 |
-| 33 | [#1295](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1295) | 修改br_video_player-v2.10.1_ohos_dev的OAT.xml文件 | [#1180](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1180) | qq_77777 | 2026-06-09 | functional | 6 | 83 | 0 |
-| 34 | [#1294](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1294) | 修改br_video_player-v2.10.1_ohos的OAT.xml文件 | [#1178](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1178) | qq_77777 | 2026-06-09 | functional | 6 | 81 | 0 |
-| 35 | [#1293](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1293) | 修改br_video_player-v2.10.0_ohos_dev的OAT.xml文件 | [#1177](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1177) | qq_77777 | 2026-06-09 | functional | 6 | 83 | 0 |
-| 36 | [#1292](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1292) | 修改br_video_player-v2.10.0_ohos的OAT.xml文件 | [#1176](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1176) | qq_77777 | 2026-06-09 | functional | 6 | 81 | 0 |
-| 37 | [#1291](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1291) | 修改br_url_launcher_v6.3.1_ohos_dev的OAT.xml | [#1175](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1175) | qq_77777 | 2026-06-09 | functional | 6 | 82 | 0 |
-| 38 | [#1290](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1290) | 修改br_url_launcher_v6.3.1_ohos的OAT.xml | [#1174](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1174) | qq_77777 | 2026-06-09 | functional | 6 | 78 | 0 |
-| 39 | [#1289](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1289) | 新增br_url_launcher-v6.3.2_ohos_dev的OAT.xml文件 | [#1173](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1173) | qq_77777 | 2026-06-09 | functional | 6 | 83 | 0 |
-| 40 | [#1288](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1288) | 新增br_url_launcher-v6.3.2_ohos的OAT.xml文件 | [#1172](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1172) | qq_77777 | 2026-06-09 | functional | 6 | 78 | 0 |
-| 41 | [#1287](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1287) | 新增br_url_launcher-v6.3.0_ohos_dev的OAT.xml文件 | [#1171](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1171) | qq_77777 | 2026-06-09 | functional | 6 | 82 | 0 |
-| 42 | [#1286](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1286) | 新增br_url_launcher-v6.3.0_ohos的OAT.xml文件 | [#1170](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1170) | qq_77777 | 2026-06-09 | functional | 6 | 78 | 0 |
-| 43 | [#1281](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1281) | 修改br_shared_preferences-v2.5.4_ohos_dev的OAT.xml | [#1164](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1164) | qq_77777 | 2026-06-09 | functional | 6 | 90 | 0 |
-| 44 | [#1280](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1280) | 修改br_shared_preferences-v2.5.4_ohos的OAT.xml文件 | [#1163](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1163) | qq_77777 | 2026-06-09 | functional | 6 | 86 | 0 |
-| 45 | [#1278](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1278) | 修改br_shared_preferences-v2.5.3_ohos_dev的OAT.xml | [#1162](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1162) | qq_77777 | 2026-06-09 | functional | 6 | 88 | 0 |
-| 46 | [#1277](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1277) | 修改br_shared_preferences-v2.5.3_ohos的OAT.xml文件 | [#1160](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1160) | qq_77777 | 2026-06-10 | functional | 6 | 86 | 0 |
-| 47 | [#1276](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1276) | 新增br_shared_preferences-v2.3.2_ohos_dev的OAT.xml文件 | [#1159](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1159) | qq_77777 | 2026-06-09 | functional | 6 | 88 | 0 |
-| 48 | [#1274](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1274) | 修改br_pigeon-v26.1.5_ohos_dev的OAT.xml文件 | [#1157](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1157) | qq_77777 | 2026-06-09 | functional | 6 | 79 | 0 |
-| 49 | [#1273](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1273) | 修改br_path_provider-v2.1.5_ohos_dev的OAT.xml文件 | [#1156](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1156) | qq_77777 | 2026-06-09 | functional | 6 | 85 | 0 |
-| 50 | [#1272](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1272) | 修改br_path_provider-v2.1.5_ohos的OAT.xml文件 | [#1155](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1155) | qq_77777 | 2026-06-09 | functional | 6 | 81 | 0 |
-| 51 | [#1271](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1271) | 修改br_local_auth-v3.0.0_ohos_dev的OAT.xml文件 | [#1154](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1154) | qq_77777 | 2026-06-10 | functional | 6 | 80 | 0 |
-| 52 | [#1270](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1270) | 修改br_local_auth-v3.0.0_ohos的OAT.xml文件 | [#1153](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1153) | qq_77777 | 2026-06-09 | functional | 6 | 76 | 0 |
-| 53 | [#1268](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1268) | 修改br_local_auth-v2.3.0_ohos的OAT.xml文件 | [#1151](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1151) | qq_77777 | 2026-06-10 | functional | 6 | 76 | 0 |
-| 54 | [#1261](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1261) | 新增br_file_selector-v1.1.0_ohos的OAT.xml文件 | [#1144](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1144) | qq_77777 | 2026-06-09 | functional | 6 | 79 | 0 |
-| 55 | [#1260](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1260) | 修改br_camera-v0.11.3_ohos_dev的OAT.xml文件 | [#1143](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1143) | qq_77777 | 2026-06-09 | functional | 6 | 77 | 0 |
-| 56 | [#1259](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1259) | 修改br_camera-v0.11.3_ohos的OAT.xml文件 | [#1142](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1142) | qq_77777 | 2026-06-09 | functional | 6 | 75 | 0 |
-| 57 | [#1258](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1258) | 修改br_camera-v0.11.1_ohos_dev的OAT.xml文件 | [#1141](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1141) | qq_77777 | 2026-06-09 | functional | 6 | 77 | 0 |
-| 58 | [#1257](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1257) | 修改br_camera-v0.11.1_ohos的OAT.xml文件 | [#1140](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1140) | qq_77777 | 2026-06-09 | functional | 6 | 76 | 0 |
-| 59 | [#1256](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1256) | br_camera-v0.11.0_2_ohos_dev新增OAT.xml文件 | [#1139](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1139) | qq_77777 | 2026-06-09 | functional | 6 | 79 | 0 |
-| 60 | [#1255](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1255) | br_camera-v0.11.0_2_ohos新增OAT.xml文件 | [#1138](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1138) | qq_77777 | 2026-06-09 | functional | 6 | 51 | 0 |
-| 61 | [#1254](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1254) | br_camera-v0.11.0+2_ohos新增OAT.xml文件 | [#1137](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1137) | qq_77777 | 2026-06-09 | functional | 6 | 53 | 0 |
-| 62 | [#1243](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1243) | br_url_launcher-v6.3.2_ohos分支去除电话号码多余空格 | [#1123](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1123) | qq_77777 | 2026-05-29 | functional | 6 | 63 | 0 |
-| 63 | [#1242](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1242) | br_url_launcher-v6.3.0_ohos分支去除电话号码多余空格 | [#1122](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1122) | qq_77777 | 2026-05-29 | functional | 6 | 68 | 0 |
-| 64 | [#1235](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1235) | yaml文件指定依赖分支为br_url_launcher-v6.3.2_ohos_dev | [#1113](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1113) | qq_77777 | 2026-05-29 | functional | 6 | 73 | 0 |
-| 65 | [#1234](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1234) | yaml文件修改依赖指定分支为br_url_launcher-v6.3.0_ohos_dev | [#1112](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1112) | qq_77777 | 2026-05-29 | functional | 6 | 73 | 0 |
-| 66 | [#1233](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1233) | yaml文件指定依赖分支为br_url_launcher_v6.3.1_ohos_dev | [#1111](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1111) | qq_77777 | 2026-05-29 | functional | 6 | 72 | 0 |
-| 67 | [#1232](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1232) | yaml文件指定依赖分支为br_url_launcher_v6.3.1_ohos | [#1110](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1110) | qq_77777 | 2026-05-29 | functional | 6 | 74 | 0 |
-| 68 | [#1209](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1209) | 默认分支修复鸿蒙端webview通知用户加载资源时发生SSL错误回调现象 | [#1084](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1084) | zhong_ning | 2026-05-27 | functional | 6 | 32 | 0 |
-| 69 | [#1195](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1195) | bugfix:br_local_auth_v3.0.0_ohos readme描述与实际不符修改 | [#1031](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1031) | com1250405878 | 2026-05-28 | functional | 6 | 32 | 0 |
-| 70 | [#1172](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1172) | 新增br_file_selector-v1.1.0_ohos流水线门禁 | [#1046](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1046) | qq_77777 | 2026-05-21 | functional | 6 | 65 | 0 |
-| 71 | [#1171](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1171) | 新增br_local_auth-v3.0.0_ohos_dev流水线门禁 | [#1045](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1045) | qq_77777 | 2026-05-21 | functional | 6 | 66 | 0 |
-| 72 | [#1170](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1170) | 新建br_local_auth-v3.0.0_ohos流水线门禁 | [#1044](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1044) | qq_77777 | 2026-05-21 | functional | 6 | 70 | 0 |
-| 73 | [#1154](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1154) | br_webview_flutter-v4.8.0_ohos_dev分支新增单元测试 | [#1023](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1023) | qq_77777 | 2026-05-21 | functional | 6 | 76 | 0 |
-| 74 | [#1153](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1153) | br_webview_flutter-v4.13.0_ohos分支新增单元测试 | [#1022](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1022) | qq_77777 | 2026-05-20 | functional | 6 | 73 | 0 |
-| 75 | [#1152](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1152) | br_video_player-v2.9.2_ohos_dev分支新增单元测试 | [#1021](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1021) | qq_77777 | 2026-05-20 | functional | 6 | 73 | 0 |
-| 76 | [#1151](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1151) | br_video_player-v2.10.1_ohos_dev分支新增单元测试 | [#1020](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1020) | qq_77777 | 2026-05-19 | functional | 6 | 74 | 0 |
-| 77 | [#1150](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1150) | br_video_player-v2.10.1_ohos分支新增单元测试 | [#1019](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1019) | qq_77777 | 2026-05-20 | functional | 6 | 70 | 0 |
-| 78 | [#1149](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1149) | br_video_player-v2.10.0_ohos_dev分支新增单元测试 | [#1017](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1017) | qq_77777 | 2026-05-19 | functional | 6 | 74 | 0 |
-| 79 | [#1148](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1148) | br_url_launcher_v6.3.1_ohos_dev分支新增单元测试 | [#1016](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1016) | qq_77777 | 2026-05-20 | functional | 6 | 73 | 0 |
-| 80 | [#1147](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1147) | br_url_launcher_v6.3.1_ohos分支新增单元测试 | [#1015](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1015) | qq_77777 | 2026-05-20 | functional | 6 | 69 | 0 |
-| 81 | [#1146](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1146) | br_url_launcher-v6.3.2_ohos_dev分支新增单元测试 | [#1014](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1014) | qq_77777 | 2026-05-20 | functional | 6 | 73 | 0 |
-| 82 | [#1145](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1145) | br_url_launcher-v6.3.2_ohos分支新增单元测试 | [#1013](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1013) | qq_77777 | 2026-05-20 | functional | 6 | 69 | 0 |
-| 83 | [#1142](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1142) | br_url_launcher-v6.3.0_ohos分支新增单元测试 | [#1011](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1011) | qq_77777 | 2026-05-22 | functional | 6 | 70 | 0 |
-| 84 | [#1141](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1141) | br_shared_preferences-v2.5.4_ohos_dev分支新增单元测试 | [#1010](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1010) | qq_77777 | 2026-05-20 | functional | 6 | 80 | 0 |
-| 85 | [#1140](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1140) | br_shared_preferences-v2.5.4_ohos分支新增单元测试 | [#1009](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1009) | qq_77777 | 2026-05-20 | functional | 6 | 76 | 0 |
-| 86 | [#1139](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1139) | br_shared_preferences-v2.5.3_ohos分支新增单元测试 | [#1008](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1008) | qq_77777 | 2026-05-20 | functional | 6 | 76 | 0 |
-| 87 | [#1138](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1138) | br_shared_preferences-v2.3.2_ohos_dev分支新增单元测试 | [#1007](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1007) | qq_77777 | 2026-05-20 | functional | 6 | 80 | 0 |
-| 88 | [#1136](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1136) | br_shared_preferences-v2.3.2_ohos分支新增单元测试 | [#1006](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1006) | qq_77777 | 2026-05-20 | functional | 6 | 76 | 0 |
-| 89 | [#1135](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1135) | br_pigeon-v26.1.5_ohos_dev分支新增单元测试 | [#1005](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1005) | qq_77777 | 2026-05-20 | functional | 6 | 69 | 0 |
-| 90 | [#1134](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1134) | br_path_provider-v2.1.5_ohos_dev分支新增单元测试 | [#1004](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1004) | qq_77777 | 2026-05-19 | functional | 6 | 73 | 0 |
-| 91 | [#1126](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1126) | br_file_selector-v1.1.0_ohos_dev分支新增单元测试 | [#995](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/995) | qq_77777 | 2026-05-20 | functional | 6 | 74 | 0 |
-| 92 | [#1125](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1125) | br_camera-v0.11.3_ohos分支新增单元测试 | [#994](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/994) | qq_77777 | 2026-05-19 | functional | 6 | 64 | 0 |
-| 93 | [#1124](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1124) | br_camera-v0.11.1_ohos_dev分支新增单元测试 | [#993](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/993) | qq_77777 | 2026-05-19 | functional | 6 | 68 | 0 |
-| 94 | [#1122](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1122) | br_camera-v0.11.0_2_ohos_dev分支新增单元测试 | [#991](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/991) | qq_77777 | 2026-05-20 | functional | 6 | 70 | 0 |
-| 95 | [#1121](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1121) | br_camera-v0.11.0_2_ohos分支增加单元测试 | [#990](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/990) | qq_77777 | 2026-05-20 | functional | 6 | 68 | 0 |
-| 96 | [#1120](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1120) | br_camera-v0.11.0+2_ohos分支增加单元测试 | [#988](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/988) | qq_77777 | 2026-05-20 | functional | 6 | 47 | 0 |
-| 97 | [#1109](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1109) | 【3.22】shared_preferences添加集成测试OHOS工程 | [#978](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/978) | huangyouhua | 2026-05-18 | functional | 6 | 32 | 0 |
-| 98 | [#1094](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1094) | 新增br_file_selector-v1.1.0_ohos_dev流水线门禁 | [#953](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/953) | qq_77777 | 2026-05-11 | functional | 6 | 78 | 0 |
-| 99 | [#1088](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1088) | 新增br_shared_preferences-v2.5.3_ohos流水线门禁 | [#943](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/943) | qq_77777 | 2026-05-09 | functional | 6 | 70 | 0 |
-| 100 | [#1066](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1066) | 新增br_shared_preferences-v2.3.2_ohos流水线门禁 | [#919](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/919) | qq_77777 | 2026-04-29 | functional | 6 | 70 | 0 |
-| 101 | [#1056](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1056) | 新增br_camera-v0.11.0_2_ohos门禁 | [#905](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/905) | qq_77777 | 2026-04-27 | functional | 6 | 61 | 0 |
-| 102 | [#1055](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1055) | 新增br_video_player-v2.10.1_ohos门禁 | [#904](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/904) | qq_77777 | 2026-04-27 | functional | 6 | 65 | 0 |
-| 103 | [#1042](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1042) | br_url_launcher_v6.3.2_ohos_dev：去除电话号码的空格 | [#887](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/887) | qq_77777 | 2026-04-23 | functional | 6 | 32 | 0 |
-| 104 | [#1041](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1041) | br_url_launcher_v6.3.1_ohos_dev：去除电话号码的空格 | [#886](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/886) | qq_77777 | 2026-04-23 | functional | 6 | 32 | 0 |
-| 105 | [#1040](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1040) | br_url_launcher-v6.3.0_ohos_dev分支去除电话号码中的空格 | [#885](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/885) | qq_77777 | 2026-04-23 | functional | 6 | 32 | 0 |
-| 106 | [#1036](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1036) | 新建br_url_launcher-v6.3.2_ohos流水线门禁 | [#882](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/882) | qq_77777 | 2026-04-22 | functional | 6 | 32 | 0 |
-| 107 | [#1035](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1035) | 新建br_shared_preferences-v2.3.2_ohos_dev流水线门禁 | [#877](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/877) | qq_77777 | 2026-04-22 | functional | 6 | 32 | 0 |
-| 108 | [#1034](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1034) | 新建br_shared_preferences-v2.5.3_ohos_dev流水线门禁 | [#881](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/881) | qq_77777 | 2026-04-22 | functional | 6 | 32 | 0 |
-| 109 | [#1033](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1033) | 新建br_shared_preferences-v2.5.4_ohos_dev流水线门禁 | [#879](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/879) | qq_77777 | 2026-04-22 | functional | 6 | 32 | 0 |
-| 110 | [#1009](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1009) | 【video_player_ohos】视频结束后会自动关闭屏幕常亮 | [#851](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/851) | gtbluesky | 2026-04-17 | functional | 6 | 32 | 0 |
-| 111 | [#1005](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1005) | 新增br_webview_flutter-v4.13.0_ohos流水线门禁 | [#848](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/848) | qq_77777 | 2026-04-14 | functional | 6 | 32 | 0 |
-| 112 | [#994](https://gitcode.com/openharmony-tpc/flutter_packages/issues/994) | 指定依赖分支br_url_launcher-v6.3.0_ohos | [#833](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/833) | qq_77777 | 2026-04-10 | functional | 6 | 32 | 0 |
-| 113 | [#988](https://gitcode.com/openharmony-tpc/flutter_packages/issues/988) | 配置br_video_player-v2.10.0_ohos_dev门禁 | [#832](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/832) | qq_77777 | 2026-04-10 | functional | 6 | 32 | 0 |
-| 114 | [#987](https://gitcode.com/openharmony-tpc/flutter_packages/issues/987) | 配置br_video_player-v2.9.2_ohos_dev门禁 | [#831](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/831) | qq_77777 | 2026-04-10 | functional | 6 | 32 | 0 |
-| 115 | [#986](https://gitcode.com/openharmony-tpc/flutter_packages/issues/986) | 配置br_video_player-v2.10.1_ohos_dev门禁 | [#830](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/830) | qq_77777 | 2026-04-10 | functional | 6 | 32 | 0 |
-| 116 | [#985](https://gitcode.com/openharmony-tpc/flutter_packages/issues/985) | 配置br_url_launcher-v6.3.2_ohos_dev门禁 | [#828](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/828) | qq_77777 | 2026-04-09 | functional | 6 | 32 | 0 |
-| 117 | [#984](https://gitcode.com/openharmony-tpc/flutter_packages/issues/984) | 配置br_pigeon-v26.1.5_ohos_dev门禁 | [#829](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/829) | qq_77777 | 2026-04-10 | functional | 6 | 32 | 0 |
-| 118 | [#983](https://gitcode.com/openharmony-tpc/flutter_packages/issues/983) | 配置br_path_provider-v2.1.5_ohos_dev门禁 | [#847](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/847) | qq_77777 | 2026-04-13 | functional | 6 | 32 | 0 |
-| 119 | [#982](https://gitcode.com/openharmony-tpc/flutter_packages/issues/982) | 配置br_url_launcher-v6.3.0_ohos_dev门禁 | [#824](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/824) | qq_77777 | 2026-04-09 | functional | 6 | 32 | 0 |
-| 120 | [#976](https://gitcode.com/openharmony-tpc/flutter_packages/issues/976) | 稳定性遍历8小时出现9次jscrash | [#793](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/793) | guanxia | 2026-04-02 | stability | 6 | 1204 | 0 |
-| 121 | [#969](https://gitcode.com/openharmony-tpc/flutter_packages/issues/969) | 添加url_laucher插件库的ohos依赖 | [#800](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/800) | qq_77777 | 2026-04-02 | functional | 6 | 78 | 0 |
-| 122 | [#903](https://gitcode.com/openharmony-tpc/flutter_packages/issues/903) | br_path_provider-v2.1.5_ohos, The root directory configuration of path_provider does not include the OHOS platform. | [#731](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/731) | getmoon | 2026-03-04 | functional | 6 | 297 | 0 |
-| 123 | [#901](https://gitcode.com/openharmony-tpc/flutter_packages/issues/901) | [Bug]: br_camera-v0.11.3_ohos ，when calling stopRecordingVideo, there may be no return result. | [#730](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/730) | getmoon | 2026-03-17 | functional | 6 | 325 | 0 |
-| 124 | [#900](https://gitcode.com/openharmony-tpc/flutter_packages/issues/900) | [Bug]:br_camera-v0.11.0+2_ohos ，when calling stopRecordingVideo, there may be no return result. | [#729](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/729) | getmoon | 2026-03-17 | functional | 6 | 325 | 0 |
-| 125 | [#899](https://gitcode.com/openharmony-tpc/flutter_packages/issues/899) | [Bug]: br_camera-v0.11.1_ohos ，when calling stopRecordingVideo, there may be no return result. | [#728](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/728) | getmoon | 2026-03-17 | functional | 6 | 325 | 0 |
-| 126 | [#844](https://gitcode.com/openharmony-tpc/flutter_packages/issues/844) | br_camera-v0.11.0+2_ohos分支，camera仓库点击请求焦点无法正确对焦 | [#687](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/687) | getmoon | 2026-01-26 | functional | 6 | 101 | 0 |
-| 127 | [#838](https://gitcode.com/openharmony-tpc/flutter_packages/issues/838) | In packages/camera/camera_ohos/exampl, if you turn on the constant flash and then click record, the constant icon will still be displayed even if the flash is turned off. | [#676](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/676) | getmoon | 2026-01-26 | functional | 6 | 434 | 0 |
-| 128 | [#835](https://gitcode.com/openharmony-tpc/flutter_packages/issues/835) | br_camera-v0.11.1_ohos分支，camera仓库点击请求焦点无法正确对焦 | [#673](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/673) | getmoon | 2026-01-26 | functional | 6 | 303 | 0 |
-| 129 | [#1444](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1444) | fix：dev分支 image_picker_ohos运行test报错 | [#1340](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1340) | wtocctvqwe | 2026-07-02 | functional | 5 | 54 | 0 |
-| 130 | [#1183](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1183) | 【dev】image_picker库fix:ImagePickerCache.getCacheMap IMAGE_QUALITY 设置错误 | [#1058](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1058) | lx123546879 | 2026-05-22 | functional | 5 | 32 | 0 |
-| 131 | [#1180](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1180) | 【dev】ImagePickerApiCodec 序列化 type tag 错误 | [#1055](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1055) | lx123546879 | 2026-05-22 | functional | 5 | 32 | 0 |
-| 132 | [#1178](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1178) | 【dev】image_picker库fix:FileUtils.getPathFromUri 空 context 返回值置为null | [#1053](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1053) | lx123546879 | 2026-05-22 | functional | 5 | 32 | 0 |
-| 133 | [#1097](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1097) | image_picker库yaml文件格式错误修复 | [#957](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/957) | lx123546879 | 2026-05-20 | functional | 5 | 32 | 0 |
-| 134 | [#874](https://gitcode.com/openharmony-tpc/flutter_packages/issues/874) | 【3.22/3.27】修复image_picker选取同一照片，后续设置宽高未生效问题 | [#716](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/716) | lx123546879 | 2026-03-16 | functional | 5 | 32 | 0 |
-| 135 | [#827](https://gitcode.com/openharmony-tpc/flutter_packages/issues/827) | fix：image_picker修改chooseMedia调用参数 | [#666](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/666) | lx123546879 | 2026-01-20 | functional | 5 | 32 | 0 |
-| 136 | [#820](https://gitcode.com/openharmony-tpc/flutter_packages/issues/820) | image_picker-v1.2.1升级适配Flutter3.35 | [#661](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/661) | lx123546879 | 2026-01-16 | functional | 5 | 32 | 0 |
+| 8 | [#1220](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1220) | camera_ohos修改README文件 | [#1096](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1096) | zhangcongcong_zzzcc | 2026-05-27 | functional | 7 | 86 | 0 |
+| 9 | [#1218](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1218) | camera_ohos中捕获fps设置失败时发生的异常，防止程序奔溃 | [#1094](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1094) | zhangcongcong_zzzcc | 2026-05-27 | performance | 7 | 233 | 0 |
+| 10 | [#1132](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1132) | br_image_picker-v1.2.1_ohos分支新增单元测试 | [#1003](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1003) | qq_77777 | 2026-05-20 | functional | 7 | 69 | 0 |
+| 11 | [#1128](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1128) | br_image_picker-v1.1.2_ohos_dev分支新增单元测试 | [#998](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/998) | qq_77777 | 2026-05-21 | functional | 7 | 73 | 0 |
+| 12 | [#1127](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1127) | br_image_picker-v1.1.2_ohos分支新增单元测试 | [#996](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/996) | qq_77777 | 2026-05-20 | functional | 7 | 69 | 0 |
+| 13 | [#919](https://gitcode.com/openharmony-tpc/flutter_packages/issues/919) | 【br_image_picker-v1.2.1_ohos_dev】修复image_picker选取同一照片，后续设置宽高未生效问题 | [#748](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/748) | lx123546879 | 2026-03-10 | functional | 7 | 32 | 0 |
+| 14 | [#1424](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1424) | br_pigeon-v26.1.5_ohos_dev分支AI质量加固优化 | [#1299](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1299) | zhaichenyang | 2026-06-29 | performance | 6 | 1692 | 1 |
+| 15 | [#1423](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1423) | br_pigeon-v25.3.2_ohos_dev分支AI质量加固优化 | [#1300](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1300) | zhaichenyang | 2026-06-29 | performance | 6 | 1422 | 1 |
+| 16 | [#1369](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1369) | br_file_selector-v1.1.0_ohos 分支中 packages/file_selector/file_selector/pubspec.yaml 存在 Tab 缩进，导致 flutter pub get 失败 | [#983](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/983) | zhong_ning | 2026-06-15 | functional | 6 | 248 | 1 |
+| 17 | [#1316](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1316) | 修改yaml文件的分支为br_webview_flutter-v4.13.1_ohos_dev | [#1198](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1198) | qq_77777 | 2026-06-05 | functional | 6 | 86 | 0 |
+| 18 | [#1314](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1314) | br_camera-v0.12.0+1_ohos_dev修改分支信息 | [#1196](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1196) | qq_77777 | 2026-06-05 | functional | 6 | 80 | 0 |
+| 19 | [#1243](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1243) | br_url_launcher-v6.3.2_ohos分支去除电话号码多余空格 | [#1123](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1123) | qq_77777 | 2026-05-29 | functional | 6 | 63 | 0 |
+| 20 | [#1242](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1242) | br_url_launcher-v6.3.0_ohos分支去除电话号码多余空格 | [#1122](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1122) | qq_77777 | 2026-05-29 | functional | 6 | 68 | 0 |
+| 21 | [#1235](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1235) | yaml文件指定依赖分支为br_url_launcher-v6.3.2_ohos_dev | [#1113](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1113) | qq_77777 | 2026-05-29 | functional | 6 | 73 | 0 |
+| 22 | [#1234](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1234) | yaml文件修改依赖指定分支为br_url_launcher-v6.3.0_ohos_dev | [#1112](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1112) | qq_77777 | 2026-05-29 | functional | 6 | 73 | 0 |
+| 23 | [#1233](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1233) | yaml文件指定依赖分支为br_url_launcher_v6.3.1_ohos_dev | [#1111](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1111) | qq_77777 | 2026-05-29 | functional | 6 | 72 | 0 |
+| 24 | [#1232](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1232) | yaml文件指定依赖分支为br_url_launcher_v6.3.1_ohos | [#1110](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1110) | qq_77777 | 2026-05-29 | functional | 6 | 74 | 0 |
+| 25 | [#1209](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1209) | 默认分支修复鸿蒙端webview通知用户加载资源时发生SSL错误回调现象 | [#1084](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1084) | zhong_ning | 2026-05-27 | functional | 6 | 32 | 0 |
+| 26 | [#1195](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1195) | bugfix:br_local_auth_v3.0.0_ohos readme描述与实际不符修改 | [#1031](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1031) | com1250405878 | 2026-05-28 | functional | 6 | 32 | 0 |
+| 27 | [#1154](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1154) | br_webview_flutter-v4.8.0_ohos_dev分支新增单元测试 | [#1023](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1023) | qq_77777 | 2026-05-21 | functional | 6 | 76 | 0 |
+| 28 | [#1153](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1153) | br_webview_flutter-v4.13.0_ohos分支新增单元测试 | [#1022](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1022) | qq_77777 | 2026-05-20 | functional | 6 | 73 | 0 |
+| 29 | [#1152](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1152) | br_video_player-v2.9.2_ohos_dev分支新增单元测试 | [#1021](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1021) | qq_77777 | 2026-05-20 | functional | 6 | 73 | 0 |
+| 30 | [#1151](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1151) | br_video_player-v2.10.1_ohos_dev分支新增单元测试 | [#1020](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1020) | qq_77777 | 2026-05-19 | functional | 6 | 74 | 0 |
+| 31 | [#1150](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1150) | br_video_player-v2.10.1_ohos分支新增单元测试 | [#1019](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1019) | qq_77777 | 2026-05-20 | functional | 6 | 70 | 0 |
+| 32 | [#1149](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1149) | br_video_player-v2.10.0_ohos_dev分支新增单元测试 | [#1017](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1017) | qq_77777 | 2026-05-19 | functional | 6 | 74 | 0 |
+| 33 | [#1148](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1148) | br_url_launcher_v6.3.1_ohos_dev分支新增单元测试 | [#1016](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1016) | qq_77777 | 2026-05-20 | functional | 6 | 73 | 0 |
+| 34 | [#1147](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1147) | br_url_launcher_v6.3.1_ohos分支新增单元测试 | [#1015](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1015) | qq_77777 | 2026-05-20 | functional | 6 | 69 | 0 |
+| 35 | [#1146](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1146) | br_url_launcher-v6.3.2_ohos_dev分支新增单元测试 | [#1014](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1014) | qq_77777 | 2026-05-20 | functional | 6 | 73 | 0 |
+| 36 | [#1145](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1145) | br_url_launcher-v6.3.2_ohos分支新增单元测试 | [#1013](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1013) | qq_77777 | 2026-05-20 | functional | 6 | 69 | 0 |
+| 37 | [#1142](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1142) | br_url_launcher-v6.3.0_ohos分支新增单元测试 | [#1011](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1011) | qq_77777 | 2026-05-22 | functional | 6 | 70 | 0 |
+| 38 | [#1141](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1141) | br_shared_preferences-v2.5.4_ohos_dev分支新增单元测试 | [#1010](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1010) | qq_77777 | 2026-05-20 | functional | 6 | 80 | 0 |
+| 39 | [#1140](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1140) | br_shared_preferences-v2.5.4_ohos分支新增单元测试 | [#1009](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1009) | qq_77777 | 2026-05-20 | functional | 6 | 76 | 0 |
+| 40 | [#1139](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1139) | br_shared_preferences-v2.5.3_ohos分支新增单元测试 | [#1008](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1008) | qq_77777 | 2026-05-20 | functional | 6 | 76 | 0 |
+| 41 | [#1138](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1138) | br_shared_preferences-v2.3.2_ohos_dev分支新增单元测试 | [#1007](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1007) | qq_77777 | 2026-05-20 | functional | 6 | 80 | 0 |
+| 42 | [#1136](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1136) | br_shared_preferences-v2.3.2_ohos分支新增单元测试 | [#1006](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1006) | qq_77777 | 2026-05-20 | functional | 6 | 76 | 0 |
+| 43 | [#1135](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1135) | br_pigeon-v26.1.5_ohos_dev分支新增单元测试 | [#1005](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1005) | qq_77777 | 2026-05-20 | functional | 6 | 69 | 0 |
+| 44 | [#1134](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1134) | br_path_provider-v2.1.5_ohos_dev分支新增单元测试 | [#1004](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1004) | qq_77777 | 2026-05-19 | functional | 6 | 73 | 0 |
+| 45 | [#1126](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1126) | br_file_selector-v1.1.0_ohos_dev分支新增单元测试 | [#995](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/995) | qq_77777 | 2026-05-20 | functional | 6 | 74 | 0 |
+| 46 | [#1125](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1125) | br_camera-v0.11.3_ohos分支新增单元测试 | [#994](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/994) | qq_77777 | 2026-05-19 | functional | 6 | 64 | 0 |
+| 47 | [#1124](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1124) | br_camera-v0.11.1_ohos_dev分支新增单元测试 | [#993](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/993) | qq_77777 | 2026-05-19 | functional | 6 | 68 | 0 |
+| 48 | [#1122](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1122) | br_camera-v0.11.0_2_ohos_dev分支新增单元测试 | [#991](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/991) | qq_77777 | 2026-05-20 | functional | 6 | 70 | 0 |
+| 49 | [#1121](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1121) | br_camera-v0.11.0_2_ohos分支增加单元测试 | [#990](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/990) | qq_77777 | 2026-05-20 | functional | 6 | 68 | 0 |
+| 50 | [#1120](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1120) | br_camera-v0.11.0+2_ohos分支增加单元测试 | [#988](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/988) | qq_77777 | 2026-05-20 | functional | 6 | 47 | 0 |
+| 51 | [#1109](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1109) | 【3.22】shared_preferences添加集成测试OHOS工程 | [#978](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/978) | huangyouhua | 2026-05-18 | functional | 6 | 32 | 0 |
+| 52 | [#1042](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1042) | br_url_launcher_v6.3.2_ohos_dev：去除电话号码的空格 | [#887](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/887) | qq_77777 | 2026-04-23 | functional | 6 | 32 | 0 |
+| 53 | [#1041](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1041) | br_url_launcher_v6.3.1_ohos_dev：去除电话号码的空格 | [#886](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/886) | qq_77777 | 2026-04-23 | functional | 6 | 32 | 0 |
+| 54 | [#1040](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1040) | br_url_launcher-v6.3.0_ohos_dev分支去除电话号码中的空格 | [#885](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/885) | qq_77777 | 2026-04-23 | functional | 6 | 32 | 0 |
+| 55 | [#1009](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1009) | 【video_player_ohos】视频结束后会自动关闭屏幕常亮 | [#851](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/851) | gtbluesky | 2026-04-17 | functional | 6 | 32 | 0 |
+| 56 | [#994](https://gitcode.com/openharmony-tpc/flutter_packages/issues/994) | 指定依赖分支br_url_launcher-v6.3.0_ohos | [#833](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/833) | qq_77777 | 2026-04-10 | functional | 6 | 32 | 0 |
+| 57 | [#976](https://gitcode.com/openharmony-tpc/flutter_packages/issues/976) | 稳定性遍历8小时出现9次jscrash | [#793](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/793) | guanxia | 2026-04-02 | stability | 6 | 1204 | 0 |
+| 58 | [#969](https://gitcode.com/openharmony-tpc/flutter_packages/issues/969) | 添加url_laucher插件库的ohos依赖 | [#800](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/800) | qq_77777 | 2026-04-02 | functional | 6 | 78 | 0 |
+| 59 | [#903](https://gitcode.com/openharmony-tpc/flutter_packages/issues/903) | br_path_provider-v2.1.5_ohos, The root directory configuration of path_provider does not include the OHOS platform. | [#731](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/731) | getmoon | 2026-03-04 | functional | 6 | 297 | 0 |
+| 60 | [#901](https://gitcode.com/openharmony-tpc/flutter_packages/issues/901) | [Bug]: br_camera-v0.11.3_ohos ，when calling stopRecordingVideo, there may be no return result. | [#730](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/730) | getmoon | 2026-03-17 | functional | 6 | 325 | 0 |
+| 61 | [#900](https://gitcode.com/openharmony-tpc/flutter_packages/issues/900) | [Bug]:br_camera-v0.11.0+2_ohos ，when calling stopRecordingVideo, there may be no return result. | [#729](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/729) | getmoon | 2026-03-17 | functional | 6 | 325 | 0 |
+| 62 | [#899](https://gitcode.com/openharmony-tpc/flutter_packages/issues/899) | [Bug]: br_camera-v0.11.1_ohos ，when calling stopRecordingVideo, there may be no return result. | [#728](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/728) | getmoon | 2026-03-17 | functional | 6 | 325 | 0 |
+| 63 | [#844](https://gitcode.com/openharmony-tpc/flutter_packages/issues/844) | br_camera-v0.11.0+2_ohos分支，camera仓库点击请求焦点无法正确对焦 | [#687](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/687) | getmoon | 2026-01-26 | functional | 6 | 101 | 0 |
+| 64 | [#838](https://gitcode.com/openharmony-tpc/flutter_packages/issues/838) | In packages/camera/camera_ohos/exampl, if you turn on the constant flash and then click record, the constant icon will still be displayed even if the flash is turned off. | [#676](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/676) | getmoon | 2026-01-26 | functional | 6 | 434 | 0 |
+| 65 | [#835](https://gitcode.com/openharmony-tpc/flutter_packages/issues/835) | br_camera-v0.11.1_ohos分支，camera仓库点击请求焦点无法正确对焦 | [#673](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/673) | getmoon | 2026-01-26 | functional | 6 | 303 | 0 |
+| 66 | [#1444](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1444) | fix：dev分支 image_picker_ohos运行test报错 | [#1340](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1340) | wtocctvqwe | 2026-07-02 | functional | 5 | 54 | 0 |
+| 67 | [#1183](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1183) | 【dev】image_picker库fix:ImagePickerCache.getCacheMap IMAGE_QUALITY 设置错误 | [#1058](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1058) | lx123546879 | 2026-05-22 | functional | 5 | 32 | 0 |
+| 68 | [#1180](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1180) | 【dev】ImagePickerApiCodec 序列化 type tag 错误 | [#1055](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1055) | lx123546879 | 2026-05-22 | functional | 5 | 32 | 0 |
+| 69 | [#1178](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1178) | 【dev】image_picker库fix:FileUtils.getPathFromUri 空 context 返回值置为null | [#1053](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1053) | lx123546879 | 2026-05-22 | functional | 5 | 32 | 0 |
+| 70 | [#1097](https://gitcode.com/openharmony-tpc/flutter_packages/issues/1097) | image_picker库yaml文件格式错误修复 | [#957](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/957) | lx123546879 | 2026-05-20 | functional | 5 | 32 | 0 |
+| 71 | [#874](https://gitcode.com/openharmony-tpc/flutter_packages/issues/874) | 【3.22/3.27】修复image_picker选取同一照片，后续设置宽高未生效问题 | [#716](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/716) | lx123546879 | 2026-03-16 | functional | 5 | 32 | 0 |
+| 72 | [#827](https://gitcode.com/openharmony-tpc/flutter_packages/issues/827) | fix：image_picker修改chooseMedia调用参数 | [#666](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/666) | lx123546879 | 2026-01-20 | functional | 5 | 32 | 0 |
+| 73 | [#820](https://gitcode.com/openharmony-tpc/flutter_packages/issues/820) | image_picker-v1.2.1升级适配Flutter3.35 | [#661](https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/661) | lx123546879 | 2026-01-16 | functional | 5 | 32 | 0 |
 
 ---
 
@@ -163,9 +100,9 @@
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/860 (merged 2026-05-14)
 - **PR Title**: fix:The getStringList and setStringList methods of SharedPreferencesAsync are not working.
 - **PR 创建人**: huangyouhua
-- **质量评分**: 12 | Body: 2006 chars | Comments: 1
+- **质量评分**: 12 | Body: 2043 chars | Comments: 1
 - **评分明细**: body>500, body>1500, 复现步骤, 代码, 错误信息, 环境信息
-- **问题描述**: ## 问题描述 在 `shared_preferences_ohos` 包中，使用**新版异步 API**（`SharedPreferencesAsync`）调用 `getStringList` 时，始终返回 `null`，无法正确读取已存储的 String List 数据。 ## 影响范围
+- **问题描述**: ## 问题描述 分支：br_shared_preferences-v2.5.4_ohos，在 `shared_preferences_ohos` 包中，使用**新版异步 API**（`SharedPreferencesAsync`）调用 `getStringList` 时，始终返回 `null`，无法正确读取已存储的 String List 数据。 ## 影响范围
 
 ### 2. #1196 — [Bug]: 【pigeon】生成的ArkTs 数据类中toList 会因为undefined导致Dart读取数组异常，导致属性无法对应（functional）
 
@@ -227,47 +164,7 @@
 - **评分明细**: body>500, 复现步骤, 代码, 错误信息
 - **问题描述**: 感谢对OpenHarmony社区的支持与关注，欢迎反馈缺陷。 ### 发生了什么问题？ 使用社区的Pigeon库来实现FlutterApi时，自动生成的代码中包含类型错误。查看源码中writeFlutterApi方法内的部分实现
 
-### 8. #1266 — 新增br_image_picker-v1.2.1_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1266
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1149 (merged 2026-06-09)
-- **PR Title**: 新增br_image_picker-v1.2.1_ohos_dev的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 7 | Body: 82 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息, 截图
-- **问题描述**: ### 该问题是怎么引起的？ br_image_picker-v1.2.1_ohos_dev缺少OAT.xml文件，静态检查报错 ### 重现步骤
-
-### 9. #1265 — 新增br_image_picker-v1.2.1_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1265
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1148 (merged 2026-06-09)
-- **PR Title**: 新增br_image_picker-v1.2.1_ohos的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 7 | Body: 78 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息, 截图
-- **问题描述**: ### 该问题是怎么引起的？ br_image_picker-v1.2.1_ohos缺少OAT.xml文件，静态检查报错 ### 重现步骤
-
-### 10. #1264 — 新增br_image_picker-v1.1.2_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1264
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1147 (merged 2026-06-09)
-- **PR Title**: 新增br_image_picker-v1.1.2_ohos_dev的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 7 | Body: 82 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息, 截图
-- **问题描述**: ### 该问题是怎么引起的？ br_image_picker-v1.1.2_ohos_dev缺少OAT.xml文件，静态检查报错 ### 重现步骤
-
-### 11. #1263 — 新增br_image_picker-v1.1.2_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1263
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1146 (merged 2026-06-09)
-- **PR Title**: 新增br_image_picker-v1.1.2_ohos的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 7 | Body: 78 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息, 截图
-- **问题描述**: ### 该问题是怎么引起的？ br_image_picker-v1.1.2_ohos缺少OAT.xml文件，静态检查报错 ### 重现步骤
-
-### 12. #1220 — camera_ohos修改README文件（functional）
+### 8. #1220 — camera_ohos修改README文件（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1220
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1096 (merged 2026-05-27)
@@ -277,7 +174,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息, 截图
 - **问题描述**: ### 该问题是怎么引起的？ README文件中API表格中少了一个注册插件的接口说明，多了一个设置拍照图片格式的接口说明（暂未支持）。 ### 重现步骤
 
-### 13. #1218 — camera_ohos中捕获fps设置失败时发生的异常，防止程序奔溃（performance）
+### 9. #1218 — camera_ohos中捕获fps设置失败时发生的异常，防止程序奔溃（performance）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1218
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1094 (merged 2026-05-27)
@@ -287,7 +184,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息, 截图
 - **问题描述**: ### 该问题是怎么引起的？ 设置fps时，系统接口支持{60，60}，但实际设置在这个范围内时发生错误。 ### 重现步骤
 
-### 14. #1132 — br_image_picker-v1.2.1_ohos分支新增单元测试（functional）
+### 10. #1132 — br_image_picker-v1.2.1_ohos分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1132
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1003 (merged 2026-05-20)
@@ -297,7 +194,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息, 截图
 - **问题描述**: ### 该问题是怎么引起的？ br_image_picker-v1.2.1_ohos缺少相应的单元测试 ### 重现步骤
 
-### 15. #1128 — br_image_picker-v1.1.2_ohos_dev分支新增单元测试（functional）
+### 11. #1128 — br_image_picker-v1.1.2_ohos_dev分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1128
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/998 (merged 2026-05-21)
@@ -307,7 +204,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息, 截图
 - **问题描述**: ### 该问题是怎么引起的？ br_image_picker-v1.1.2_ohos_dev缺少相应的单元测试 ### 重现步骤
 
-### 16. #1127 — br_image_picker-v1.1.2_ohos分支新增单元测试（functional）
+### 12. #1127 — br_image_picker-v1.1.2_ohos分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1127
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/996 (merged 2026-05-20)
@@ -317,7 +214,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息, 截图
 - **问题描述**: ### 该问题是怎么引起的？ br_image_picker-v1.1.2_ohos缺少相应的单元测试 ### 重现步骤
 
-### 17. #919 — 【br_image_picker-v1.2.1_ohos_dev】修复image_picker选取同一照片，后续设置宽高未生效问题（functional）
+### 13. #919 — 【br_image_picker-v1.2.1_ohos_dev】修复image_picker选取同一照片，后续设置宽高未生效问题（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/919
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/748 (merged 2026-03-10)
@@ -327,7 +224,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息, 截图
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 18. #1424 — br_pigeon-v26.1.5_ohos_dev分支AI质量加固优化（performance）
+### 14. #1424 — br_pigeon-v26.1.5_ohos_dev分支AI质量加固优化（performance）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1424
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1299 (merged 2026-06-29)
@@ -337,7 +234,7 @@
 - **评分明细**: body>500, body>1500, 环境信息
 - **问题描述**: 基线概况： 约 1033 行 lib/src/arkts/arkts_generator.dart，已有 EventChannel 示例骨架与 test/arkts_generator_test.dart（内容过时），但 ProxyApi 生成、harness、ArkTS ProxyApi 测试均缺失。 缺少完整的 demo 真机测试用例。
 
-### 19. #1423 — br_pigeon-v25.3.2_ohos_dev分支AI质量加固优化（performance）
+### 15. #1423 — br_pigeon-v25.3.2_ohos_dev分支AI质量加固优化（performance）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1423
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1300 (merged 2026-06-29)
@@ -347,7 +244,7 @@
 - **评分明细**: body>500, 代码, 环境信息
 - **问题描述**: 基线概况： 约 1042 行 lib/src/arkts/arkts_generator.dart，已有 EventChannelMessages.ets 与带 StreamHandler 的 MessagePlugin.ets，但 ProxyApi/完整 harness/测试与 26.3.4 差距大。 缺少完整的 demo 真机测试用例。
 
-### 20. #1369 — br_file_selector-v1.1.0_ohos 分支中 packages/file_selector/file_selector/pubspec.yaml 存在 Tab 缩进，导致 flutter pub get 失败（functional）
+### 16. #1369 — br_file_selector-v1.1.0_ohos 分支中 packages/file_selector/file_selector/pubspec.yaml 存在 Tab 缩进，导致 flutter pub get 失败（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1369
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/983 (merged 2026-06-15)
@@ -357,17 +254,7 @@
 - **评分明细**: 代码, 错误信息, 环境信息
 - **问题描述**: ## 问题描述 项目在执行 `flutter pub get` 时失败，报错如下： Resolving dependencies...
 
-### 21. #1317 — 新增br_pigeon-v26.3.4_ohos_dev流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1317
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1199 (merged 2026-06-04)
-- **PR Title**: 新增br_pigeon-v26.3.4_ohos_dev流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 63 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_pigeon-v26.3.4_ohos_dev门禁缺失 ### 重现步骤
-
-### 22. #1316 — 修改yaml文件的分支为br_webview_flutter-v4.13.1_ohos_dev（functional）
+### 17. #1316 — 修改yaml文件的分支为br_webview_flutter-v4.13.1_ohos_dev（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1316
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1198 (merged 2026-06-05)
@@ -377,17 +264,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ yaml的分支与分支名不同，需修改为br_webview_flutter-v4.13.1_ohos_dev ### 重现步骤
 
-### 23. #1315 — 新增br_local_auth-v3.0.1_ohos_dev流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1315
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1197 (merged 2026-06-05)
-- **PR Title**: 新增br_local_auth-v3.0.1_ohos_dev流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 66 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_local_auth-v3.0.1_ohos_dev门禁缺失 ### 重现步骤
-
-### 24. #1314 — br_camera-v0.12.0+1_ohos_dev修改分支信息（functional）
+### 18. #1314 — br_camera-v0.12.0+1_ohos_dev修改分支信息（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1314
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1196 (merged 2026-06-05)
@@ -397,377 +274,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ yaml文件的分支信息错误，需要修改为br_camera-v0.12.0+1_ohos_dev ### 重现步骤
 
-### 25. #1313 — br_in_app_purchase-v3.2.3_ohos_dev新增流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1313
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1195 (merged 2026-06-04)
-- **PR Title**: 新增br_in_app_purchase-v3.2.3_ohos_dev流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 74 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_in_app_purchase-v3.2.3_ohos_dev流水线门禁缺失 ### 重现步骤
-
-### 26. #1312 — br_video_player-v2.11.1_ohos_dev新增流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1312
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1194 (merged 2026-06-05)
-- **PR Title**: 新增br_video_player-v2.11.1_ohos_dev流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 72 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_video_player-v2.11.1_ohos_dev缺失流水线门禁 ### 重现步骤
-
-### 27. #1307 — br_file_selector-v1.0.3_ohos增加流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1307
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1192 (merged 2026-06-05)
-- **PR Title**: 新增流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 37 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ 缺失门禁 ### 重现步骤
-
-### 28. #1306 — br_file_selector-v1.0.3_ohos_dev增加流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1306
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1193 (merged 2026-06-05)
-- **PR Title**: 新增br_file_selector-v1.0.3_ohos_dev流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 37 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ 缺失门禁 ### 重现步骤
-
-### 29. #1301 — 修改br_webview_flutter-v4.8.0_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1301
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1185 (merged 2026-06-09)
-- **PR Title**: 修改br_webview_flutter-v4.8.0_ohos_dev的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 85 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_webview_flutter-v4.8.0_ohos_dev的OAT.xml不完整，静态检查报错 ### 重现步骤
-
-### 30. #1300 — 修改br_webview_flutter-v4.13.0_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1300
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1184 (merged 2026-06-09)
-- **PR Title**: 修改br_webview_flutter-v4.13.0_ohos_dev的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 85 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_webview_flutter-v4.13.0_ohos_dev的OAT.xml缺失，静态检查报错 ### 重现步骤
-
-### 31. #1299 — 修改br_webview_flutter-v4.13.0_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1299
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1183 (merged 2026-06-09)
-- **PR Title**: 修改br_webview_flutter-v4.13.0_ohos的OAT.xml
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 82 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_webview_flutter-v4.13.0_ohos的OAT.xml不完整，静态检查报错 ### 重现步骤
-
-### 32. #1298 — 修改br_video_player-v2.9.2_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1298
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1182 (merged 2026-06-09)
-- **PR Title**: 修改br_video_player-v2.9.2_ohos_dev的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 82 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_video_player-v2.9.2_ohos_dev的OAT.xml不完整，静态检查报错 ### 重现步骤
-
-### 33. #1295 — 修改br_video_player-v2.10.1_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1295
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1180 (merged 2026-06-09)
-- **PR Title**: 修改br_video_player-v2.10.1_ohos_dev的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 83 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_video_player-v2.10.1_ohos_dev的OAT.xml不完整，静态检查报错 ### 重现步骤
-
-### 34. #1294 — 修改br_video_player-v2.10.1_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1294
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1178 (merged 2026-06-09)
-- **PR Title**: 修改br_video_player-v2.10.1_ohos的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 81 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_video_player-v2.10.1_ohos的OAT.xml文件不完整，静态检查报错 ### 重现步骤
-
-### 35. #1293 — 修改br_video_player-v2.10.0_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1293
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1177 (merged 2026-06-09)
-- **PR Title**: 修改br_video_player-v2.10.0_ohos_dev的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 83 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_video_player-v2.10.0_ohos_dev的OAT.xml不完整，静态检查报错 ### 重现步骤
-
-### 36. #1292 — 修改br_video_player-v2.10.0_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1292
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1176 (merged 2026-06-09)
-- **PR Title**: 修改br_video_player-v2.10.0_ohos的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 81 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_video_player-v2.10.0_ohos的OAT.xml文件不完整，静态检查报错 ### 重现步骤
-
-### 37. #1291 — 修改br_url_launcher_v6.3.1_ohos_dev的OAT.xml（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1291
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1175 (merged 2026-06-09)
-- **PR Title**: 修改br_url_launcher_v6.3.1_ohos_dev的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 82 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_url_launcher_v6.3.1_ohos_dev的OAT.xml不完整，静态检查报错 ### 重现步骤
-
-### 38. #1290 — 修改br_url_launcher_v6.3.1_ohos的OAT.xml（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1290
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1174 (merged 2026-06-09)
-- **PR Title**: 修改br_url_launcher_v6.3.1_ohos的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 78 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_url_launcher_v6.3.1_ohos的OAT.xml不完整，静态检查报错 ### 重现步骤
-
-### 39. #1289 — 新增br_url_launcher-v6.3.2_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1289
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1173 (merged 2026-06-09)
-- **PR Title**: 新增br_url_launcher-v6.3.2_ohos_dev的OAT.xml
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 83 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_url_launcher-v6.3.2_ohos_dev的OAT.xml文件缺失，静态检查报错 ### 重现步骤
-
-### 40. #1288 — 新增br_url_launcher-v6.3.2_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1288
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1172 (merged 2026-06-09)
-- **PR Title**: 新增br_url_launcher-v6.3.2_ohos的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 78 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_url_launcher-v6.3.2_ohos缺失OAT.xml文件，静态检查报错 ### 重现步骤
-
-### 41. #1287 — 新增br_url_launcher-v6.3.0_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1287
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1171 (merged 2026-06-09)
-- **PR Title**: 新增br_url_launcher-v6.3.0_ohos_dev的OAt,xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 82 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_url_launcher-v6.3.0_ohos_dev缺失OAT.xml文件，静态检查报错 ### 重现步骤
-
-### 42. #1286 — 新增br_url_launcher-v6.3.0_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1286
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1170 (merged 2026-06-09)
-- **PR Title**: 新增br_url_launcher-v6.3.0_ohos的OAT.xml
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 78 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_url_launcher-v6.3.0_ohos缺失OAT.xml文件，静态检查报错 ### 重现步骤
-
-### 43. #1281 — 修改br_shared_preferences-v2.5.4_ohos_dev的OAT.xml（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1281
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1164 (merged 2026-06-09)
-- **PR Title**: 修改br_shared_preferences-v2.5.4_ohos_dev的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 90 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_shared_preferences-v2.5.4_ohos_dev的OAT.xml文件不完整，静态检查报错 ### 重现步骤
-
-### 44. #1280 — 修改br_shared_preferences-v2.5.4_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1280
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1163 (merged 2026-06-09)
-- **PR Title**: 修改br_shared_preferences-v2.5.4_ohos的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 86 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_shared_preferences-v2.5.4_ohos的OAT.xml文件不完整，静态检查报错 ### 重现步骤
-
-### 45. #1278 — 修改br_shared_preferences-v2.5.3_ohos_dev的OAT.xml（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1278
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1162 (merged 2026-06-09)
-- **PR Title**: 修改br_shared_preferences-v2.5.3_ohos_dev的OAT.xml
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 88 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_shared_preferences-v2.5.3_ohos_dev的OAT.xml不完整，静态检查报错 ### 重现步骤
-
-### 46. #1277 — 修改br_shared_preferences-v2.5.3_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1277
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1160 (merged 2026-06-10)
-- **PR Title**: 修改br_shared_preferences-v2.5.3_ohos的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 86 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_shared_preferences-v2.5.3_ohos的OAT.xml文件不完整，静态检查报错 ### 重现步骤
-
-### 47. #1276 — 新增br_shared_preferences-v2.3.2_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1276
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1159 (merged 2026-06-09)
-- **PR Title**: 新增br_shared_preferences-v2.3.2_ohos_dev的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 88 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_shared_preferences-v2.3.2_ohos_dev缺失OAT.xml文件，静态检查报错 ### 重现步骤
-
-### 48. #1274 — 修改br_pigeon-v26.1.5_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1274
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1157 (merged 2026-06-09)
-- **PR Title**: 修改br_pigeon-v26.1.5_ohos_dev的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 79 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_pigeon-v26.1.5_ohos_dev的OAT.xml文件不完整，静态检查报错 ### 重现步骤
-
-### 49. #1273 — 修改br_path_provider-v2.1.5_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1273
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1156 (merged 2026-06-09)
-- **PR Title**: 修改br_path_provider-v2.1.5_ohos_dev的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 85 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_path_provider-v2.1.5_ohos_dev的OAT.xml文件不完整，静态检查报错 ### 重现步骤
-
-### 50. #1272 — 修改br_path_provider-v2.1.5_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1272
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1155 (merged 2026-06-09)
-- **PR Title**: 修改br_path_provider-v2.1.5_ohos的OAT.xmlm文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 81 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_path_provider-v2.1.5_ohos的OAT.xml文件不完整，静态检查报错 ### 重现步骤
-
-### 51. #1271 — 修改br_local_auth-v3.0.0_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1271
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1154 (merged 2026-06-10)
-- **PR Title**: 修改br_local_auth-v3.0.0_ohos_dev的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 80 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_local_auth-v3.0.0_ohos_dev的OAT.xml不完整，静态检查报错 ### 重现步骤
-
-### 52. #1270 — 修改br_local_auth-v3.0.0_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1270
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1153 (merged 2026-06-09)
-- **PR Title**: 修改br_local_auth-v3.0.0_ohos的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 76 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_local_auth-v3.0.0_ohos的OAT.xml不完整，静态检查报错 ### 重现步骤
-
-### 53. #1268 — 修改br_local_auth-v2.3.0_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1268
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1151 (merged 2026-06-10)
-- **PR Title**: 修改br_local_auth-v2.3.0_ohos的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 76 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_local_auth-v2.3.0_ohos缺少OAT.xml文件，静态检查报错 ### 重现步骤
-
-### 54. #1261 — 新增br_file_selector-v1.1.0_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1261
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1144 (merged 2026-06-09)
-- **PR Title**: 新增br_file_selector-v1.1.0_ohos的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 79 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_file_selector-v1.1.0_ohos缺少OAT.xml文件，静态检查报错 ### 重现步骤
-
-### 55. #1260 — 修改br_camera-v0.11.3_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1260
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1143 (merged 2026-06-09)
-- **PR Title**: 修改br_camera-v0.11.3_ohos_dev的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 77 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_camera-v0.11.3_ohos_dev的OAT.xml不完整，静态检查报错 ### 重现步骤
-
-### 56. #1259 — 修改br_camera-v0.11.3_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1259
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1142 (merged 2026-06-09)
-- **PR Title**: 修改br_camera-v0.11.3_ohos的OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 75 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_camera-v0.11.3_ohos的OAT.xml文件不完整，静态检查报错 ### 重现步骤
-
-### 57. #1258 — 修改br_camera-v0.11.1_ohos_dev的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1258
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1141 (merged 2026-06-09)
-- **PR Title**: 修改OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 77 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_camera-v0.11.1_ohos_dev的OAT.xml不完整，静态检查报错 ### 重现步骤
-
-### 58. #1257 — 修改br_camera-v0.11.1_ohos的OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1257
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1140 (merged 2026-06-09)
-- **PR Title**: 修改OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 76 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ 修改br_camera-v0.11.1_ohos的OAt.xml文件，防止静态检查报错 ### 重现步骤
-
-### 59. #1256 — br_camera-v0.11.0_2_ohos_dev新增OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1256
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1139 (merged 2026-06-09)
-- **PR Title**: br_camera-v0.11.0_2_ohos_dev新增OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 79 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_camera-v0.11.0_2_ohos-dev缺少oat.xml文件，静态检查报错 ### 重现步骤
-
-### 60. #1255 — br_camera-v0.11.0_2_ohos新增OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1255
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1138 (merged 2026-06-09)
-- **PR Title**: br_camera-v0.11.0_2_ohos新增OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 51 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ 缺少OAT.xml文件，静态检查报错 ### 重现步骤
-
-### 61. #1254 — br_camera-v0.11.0+2_ohos新增OAT.xml文件（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1254
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1137 (merged 2026-06-09)
-- **PR Title**: br_camera-v0.11.0+2_ohos增加OAT.xml文件
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 53 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ 静态检查报错，需要配置oat.xml文件 ### 重现步骤
-
-### 62. #1243 — br_url_launcher-v6.3.2_ohos分支去除电话号码多余空格（functional）
+### 19. #1243 — br_url_launcher-v6.3.2_ohos分支去除电话号码多余空格（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1243
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1123 (merged 2026-05-29)
@@ -777,7 +284,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ 没有增加去除电话号码的逻辑，导致输入电话号码的时候会解析错误 ### 重现步骤
 
-### 63. #1242 — br_url_launcher-v6.3.0_ohos分支去除电话号码多余空格（functional）
+### 20. #1242 — br_url_launcher-v6.3.0_ohos分支去除电话号码多余空格（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1242
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1122 (merged 2026-05-29)
@@ -787,7 +294,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ 没有增加去除电话号码中空格的逻辑，导致输入电话号码在解析的时候会有空格 ### 重现步骤
 
-### 64. #1235 — yaml文件指定依赖分支为br_url_launcher-v6.3.2_ohos_dev（functional）
+### 21. #1235 — yaml文件指定依赖分支为br_url_launcher-v6.3.2_ohos_dev（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1235
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1113 (merged 2026-05-29)
@@ -797,7 +304,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ 没有指定依赖分支为br_url_launcher-v6.3.2_ohos_dev ### 重现步骤
 
-### 65. #1234 — yaml文件修改依赖指定分支为br_url_launcher-v6.3.0_ohos_dev（functional）
+### 22. #1234 — yaml文件修改依赖指定分支为br_url_launcher-v6.3.0_ohos_dev（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1234
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1112 (merged 2026-05-29)
@@ -807,7 +314,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ 没有指定依赖分支为br_url_launcher-v6.3.0_ohos_dev ### 重现步骤
 
-### 66. #1233 — yaml文件指定依赖分支为br_url_launcher_v6.3.1_ohos_dev（functional）
+### 23. #1233 — yaml文件指定依赖分支为br_url_launcher_v6.3.1_ohos_dev（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1233
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1111 (merged 2026-05-29)
@@ -817,7 +324,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ 未指定依赖分支为br_url_launcher_v6.3.1_ohos_dev ### 重现步骤
 
-### 67. #1232 — yaml文件指定依赖分支为br_url_launcher_v6.3.1_ohos（functional）
+### 24. #1232 — yaml文件指定依赖分支为br_url_launcher_v6.3.1_ohos（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1232
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1110 (merged 2026-05-29)
@@ -827,7 +334,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_url_launcher_v6.3.1_ohos分支没有在ymal文件中指定 ### 重现步骤
 
-### 68. #1209 — 默认分支修复鸿蒙端webview通知用户加载资源时发生SSL错误回调现象（functional）
+### 25. #1209 — 默认分支修复鸿蒙端webview通知用户加载资源时发生SSL错误回调现象（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1209
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1084 (merged 2026-05-27)
@@ -837,7 +344,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 69. #1195 — bugfix:br_local_auth_v3.0.0_ohos readme描述与实际不符修改（functional）
+### 26. #1195 — bugfix:br_local_auth_v3.0.0_ohos readme描述与实际不符修改（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1195
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1031 (merged 2026-05-28)
@@ -847,37 +354,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 70. #1172 — 新增br_file_selector-v1.1.0_ohos流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1172
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1046 (merged 2026-05-21)
-- **PR Title**: 新增br_file_selector-v1.1.0_ohos流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 65 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_file_selector-v1.1.0_ohos缺失门禁 ### 重现步骤
-
-### 71. #1171 — 新增br_local_auth-v3.0.0_ohos_dev流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1171
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1045 (merged 2026-05-21)
-- **PR Title**: 新增br_local_auth-v3.0.0_ohos_dev流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 66 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_local_auth-v3.0.0_ohos_dev缺失门禁 ### 重现步骤
-
-### 72. #1170 — 新建br_local_auth-v3.0.0_ohos流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1170
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1044 (merged 2026-05-21)
-- **PR Title**: 新增br_local_auth-v3.0.0_ohos流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 70 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_local_auth-v3.0.0_ohos 缺少门禁导致门禁不通过 ### 重现步骤
-
-### 73. #1154 — br_webview_flutter-v4.8.0_ohos_dev分支新增单元测试（functional）
+### 27. #1154 — br_webview_flutter-v4.8.0_ohos_dev分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1154
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1023 (merged 2026-05-21)
@@ -887,7 +364,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_webview_flutter-v4.8.0_ohos_dev缺少相应的单元测试 ### 重现步骤
 
-### 74. #1153 — br_webview_flutter-v4.13.0_ohos分支新增单元测试（functional）
+### 28. #1153 — br_webview_flutter-v4.13.0_ohos分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1153
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1022 (merged 2026-05-20)
@@ -897,7 +374,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_webview_flutter-v4.13.0_ohos缺少相应的单元测试 ### 重现步骤
 
-### 75. #1152 — br_video_player-v2.9.2_ohos_dev分支新增单元测试（functional）
+### 29. #1152 — br_video_player-v2.9.2_ohos_dev分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1152
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1021 (merged 2026-05-20)
@@ -907,7 +384,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_video_player-v2.9.2_ohos_dev缺少相应的单元测试 ### 重现步骤
 
-### 76. #1151 — br_video_player-v2.10.1_ohos_dev分支新增单元测试（functional）
+### 30. #1151 — br_video_player-v2.10.1_ohos_dev分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1151
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1020 (merged 2026-05-19)
@@ -917,7 +394,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_video_player-v2.10.1_ohos_dev缺少相应的单元测试 ### 重现步骤
 
-### 77. #1150 — br_video_player-v2.10.1_ohos分支新增单元测试（functional）
+### 31. #1150 — br_video_player-v2.10.1_ohos分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1150
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1019 (merged 2026-05-20)
@@ -927,7 +404,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_video_player-v2.10.1_ohos缺少相应的单元测试 ### 重现步骤
 
-### 78. #1149 — br_video_player-v2.10.0_ohos_dev分支新增单元测试（functional）
+### 32. #1149 — br_video_player-v2.10.0_ohos_dev分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1149
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1017 (merged 2026-05-19)
@@ -937,7 +414,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_video_player-v2.10.0_ohos_dev缺少相应的单元测试 ### 重现步骤
 
-### 79. #1148 — br_url_launcher_v6.3.1_ohos_dev分支新增单元测试（functional）
+### 33. #1148 — br_url_launcher_v6.3.1_ohos_dev分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1148
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1016 (merged 2026-05-20)
@@ -947,7 +424,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_url_launcher_v6.3.1_ohos_dev缺少相应的单元测试 ### 重现步骤
 
-### 80. #1147 — br_url_launcher_v6.3.1_ohos分支新增单元测试（functional）
+### 34. #1147 — br_url_launcher_v6.3.1_ohos分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1147
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1015 (merged 2026-05-20)
@@ -957,7 +434,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_url_launcher_v6.3.1_ohos缺少相应的单元测试 ### 重现步骤
 
-### 81. #1146 — br_url_launcher-v6.3.2_ohos_dev分支新增单元测试（functional）
+### 35. #1146 — br_url_launcher-v6.3.2_ohos_dev分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1146
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1014 (merged 2026-05-20)
@@ -967,7 +444,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_url_launcher-v6.3.2_ohos_dev缺少相应的单元测试 ### 重现步骤
 
-### 82. #1145 — br_url_launcher-v6.3.2_ohos分支新增单元测试（functional）
+### 36. #1145 — br_url_launcher-v6.3.2_ohos分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1145
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1013 (merged 2026-05-20)
@@ -977,7 +454,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_url_launcher-v6.3.2_ohos缺少相应的单元测试 ### 重现步骤
 
-### 83. #1142 — br_url_launcher-v6.3.0_ohos分支新增单元测试（functional）
+### 37. #1142 — br_url_launcher-v6.3.0_ohos分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1142
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1011 (merged 2026-05-22)
@@ -987,7 +464,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_url_launcher-v6.3.0_ohos 缺少相应的单元测试 ### 重现步骤
 
-### 84. #1141 — br_shared_preferences-v2.5.4_ohos_dev分支新增单元测试（functional）
+### 38. #1141 — br_shared_preferences-v2.5.4_ohos_dev分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1141
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1010 (merged 2026-05-20)
@@ -997,7 +474,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_shared_preferences-v2.5.4_ohos_dev 缺少相应的单元测试 ### 重现步骤
 
-### 85. #1140 — br_shared_preferences-v2.5.4_ohos分支新增单元测试（functional）
+### 39. #1140 — br_shared_preferences-v2.5.4_ohos分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1140
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1009 (merged 2026-05-20)
@@ -1007,7 +484,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_shared_preferences-v2.5.4_ohos 缺少相应的单元测试 ### 重现步骤
 
-### 86. #1139 — br_shared_preferences-v2.5.3_ohos分支新增单元测试（functional）
+### 40. #1139 — br_shared_preferences-v2.5.3_ohos分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1139
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1008 (merged 2026-05-20)
@@ -1017,7 +494,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_shared_preferences-v2.5.3_ohos 缺少相应的单元测试 ### 重现步骤
 
-### 87. #1138 — br_shared_preferences-v2.3.2_ohos_dev分支新增单元测试（functional）
+### 41. #1138 — br_shared_preferences-v2.3.2_ohos_dev分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1138
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1007 (merged 2026-05-20)
@@ -1027,7 +504,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_shared_preferences-v2.3.2_ohos_dev 缺少相应的单元测试 ### 重现步骤
 
-### 88. #1136 — br_shared_preferences-v2.3.2_ohos分支新增单元测试（functional）
+### 42. #1136 — br_shared_preferences-v2.3.2_ohos分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1136
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1006 (merged 2026-05-20)
@@ -1037,7 +514,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_shared_preferences-v2.3.2_ohos 缺少相应的单元测试 ### 重现步骤
 
-### 89. #1135 — br_pigeon-v26.1.5_ohos_dev分支新增单元测试（functional）
+### 43. #1135 — br_pigeon-v26.1.5_ohos_dev分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1135
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1005 (merged 2026-05-20)
@@ -1047,7 +524,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_pigeon-v26.1.5_ohos_dev 缺少相应的单元测试 ### 重现步骤
 
-### 90. #1134 — br_path_provider-v2.1.5_ohos_dev分支新增单元测试（functional）
+### 44. #1134 — br_path_provider-v2.1.5_ohos_dev分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1134
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1004 (merged 2026-05-19)
@@ -1057,7 +534,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_path_provider-v2.1.5_ohos_dev分支缺少单元测试 ### 重现步骤
 
-### 91. #1126 — br_file_selector-v1.1.0_ohos_dev分支新增单元测试（functional）
+### 45. #1126 — br_file_selector-v1.1.0_ohos_dev分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1126
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/995 (merged 2026-05-20)
@@ -1067,7 +544,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_file_selector-v1.1.0_ohos_dev缺少相应的单元测试 ### 重现步骤
 
-### 92. #1125 — br_camera-v0.11.3_ohos分支新增单元测试（functional）
+### 46. #1125 — br_camera-v0.11.3_ohos分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1125
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/994 (merged 2026-05-19)
@@ -1077,7 +554,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_camera-v0.11.3_ohos缺少相应的单元测试 ### 重现步骤
 
-### 93. #1124 — br_camera-v0.11.1_ohos_dev分支新增单元测试（functional）
+### 47. #1124 — br_camera-v0.11.1_ohos_dev分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1124
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/993 (merged 2026-05-19)
@@ -1087,7 +564,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_camera-v0.11.1_ohos_dev缺少相应的单元测试 ### 重现步骤
 
-### 94. #1122 — br_camera-v0.11.0_2_ohos_dev分支新增单元测试（functional）
+### 48. #1122 — br_camera-v0.11.0_2_ohos_dev分支新增单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1122
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/991 (merged 2026-05-20)
@@ -1097,7 +574,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_camera-v0.11.0_2_ohos_dev缺少相应的单元测试 ### 重现步骤
 
-### 95. #1121 — br_camera-v0.11.0_2_ohos分支增加单元测试（functional）
+### 49. #1121 — br_camera-v0.11.0_2_ohos分支增加单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1121
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/990 (merged 2026-05-20)
@@ -1107,7 +584,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ br_camera-v0.11.0_2_ohos没有配置相应的单元测试 ### 重现步骤
 
-### 96. #1120 — br_camera-v0.11.0+2_ohos分支增加单元测试（functional）
+### 50. #1120 — br_camera-v0.11.0+2_ohos分支增加单元测试（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1120
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/988 (merged 2026-05-20)
@@ -1117,7 +594,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ 该分支没有配置相应的单元测试 ### 重现步骤
 
-### 97. #1109 — 【3.22】shared_preferences添加集成测试OHOS工程（functional）
+### 51. #1109 — 【3.22】shared_preferences添加集成测试OHOS工程（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1109
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/978 (merged 2026-05-18)
@@ -1127,57 +604,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 98. #1094 — 新增br_file_selector-v1.1.0_ohos_dev流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1094
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/953 (merged 2026-05-11)
-- **PR Title**: 新增br_file_selector-v1.1.0_ohos_dev流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 78 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_file_selector-v1.1.0_ohos_dev缺失流水线门禁，需进行配置 ### 重现步骤
-
-### 99. #1088 — 新增br_shared_preferences-v2.5.3_ohos流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1088
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/943 (merged 2026-05-09)
-- **PR Title**: 新增br_shared_preferences-v2.5.3_ohos流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 70 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_shared_preferences-v2.5.3_ohos缺失门禁 ### 重现步骤
-
-### 100. #1066 — 新增br_shared_preferences-v2.3.2_ohos流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1066
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/919 (merged 2026-04-29)
-- **PR Title**: 新增br_shared_preferences-v2.3.2_ohos门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 70 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_shared_preferences-v2.3.2_ohos门禁缺失 ### 重现步骤
-
-### 101. #1056 — 新增br_camera-v0.11.0_2_ohos门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1056
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/905 (merged 2026-04-27)
-- **PR Title**: 新增br_camera-v0.11.0_2_ohos分支流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 61 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_camera-v0.11.0_2_ohos缺失门禁 ### 重现步骤
-
-### 102. #1055 — 新增br_video_player-v2.10.1_ohos门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1055
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/904 (merged 2026-04-27)
-- **PR Title**: 新增br_video_player-v2.10.1_ohos流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 65 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ br_video_player-v2.10.1_ohos缺少门禁 ### 重现步骤
-
-### 103. #1042 — br_url_launcher_v6.3.2_ohos_dev：去除电话号码的空格（functional）
+### 52. #1042 — br_url_launcher_v6.3.2_ohos_dev：去除电话号码的空格（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1042
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/887 (merged 2026-04-23)
@@ -1187,7 +614,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 104. #1041 — br_url_launcher_v6.3.1_ohos_dev：去除电话号码的空格（functional）
+### 53. #1041 — br_url_launcher_v6.3.1_ohos_dev：去除电话号码的空格（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1041
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/886 (merged 2026-04-23)
@@ -1197,7 +624,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 105. #1040 — br_url_launcher-v6.3.0_ohos_dev分支去除电话号码中的空格（functional）
+### 54. #1040 — br_url_launcher-v6.3.0_ohos_dev分支去除电话号码中的空格（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1040
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/885 (merged 2026-04-23)
@@ -1207,47 +634,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 106. #1036 — 新建br_url_launcher-v6.3.2_ohos流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1036
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/882 (merged 2026-04-22)
-- **PR Title**: 新建br_url_launcher-v6.3.2_ohos流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 32 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
-
-### 107. #1035 — 新建br_shared_preferences-v2.3.2_ohos_dev流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1035
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/877 (merged 2026-04-22)
-- **PR Title**: 新增br_shared_preferences-v2.3.2_ohos_dev流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 32 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
-
-### 108. #1034 — 新建br_shared_preferences-v2.5.3_ohos_dev流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1034
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/881 (merged 2026-04-22)
-- **PR Title**: 新增br_shared_preferences-v2.5.3_ohos_dev流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 32 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
-
-### 109. #1033 — 新建br_shared_preferences-v2.5.4_ohos_dev流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1033
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/879 (merged 2026-04-22)
-- **PR Title**: 新建br_shared_preferences-v2.5.4_ohos_dev流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 32 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
-
-### 110. #1009 — 【video_player_ohos】视频结束后会自动关闭屏幕常亮（functional）
+### 55. #1009 — 【video_player_ohos】视频结束后会自动关闭屏幕常亮（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1009
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/851 (merged 2026-04-17)
@@ -1257,17 +644,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 111. #1005 — 新增br_webview_flutter-v4.13.0_ohos流水线门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1005
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/848 (merged 2026-04-14)
-- **PR Title**: 新增br_webview_flutter-v4.13.0_ohos分支流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 32 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
-
-### 112. #994 — 指定依赖分支br_url_launcher-v6.3.0_ohos（functional）
+### 56. #994 — 指定依赖分支br_url_launcher-v6.3.0_ohos（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/994
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/833 (merged 2026-04-10)
@@ -1277,77 +654,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 113. #988 — 配置br_video_player-v2.10.0_ohos_dev门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/988
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/832 (merged 2026-04-10)
-- **PR Title**: 新增br_video_player-v2.10.0_ohos_dev门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 32 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
-
-### 114. #987 — 配置br_video_player-v2.9.2_ohos_dev门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/987
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/831 (merged 2026-04-10)
-- **PR Title**: 新增br_video_player-v2.9.2_ohos_dev门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 32 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
-
-### 115. #986 — 配置br_video_player-v2.10.1_ohos_dev门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/986
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/830 (merged 2026-04-10)
-- **PR Title**: 新增br_video_player-v2.10.1_ohos_dev门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 32 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
-
-### 116. #985 — 配置br_url_launcher-v6.3.2_ohos_dev门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/985
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/828 (merged 2026-04-09)
-- **PR Title**: 新增br_url_launcher-v6.3.2_ohos_dev门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 32 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
-
-### 117. #984 — 配置br_pigeon-v26.1.5_ohos_dev门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/984
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/829 (merged 2026-04-10)
-- **PR Title**: 新增br_pigeon-v26.1.5_ohos_dev门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 32 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
-
-### 118. #983 — 配置br_path_provider-v2.1.5_ohos_dev门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/983
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/847 (merged 2026-04-13)
-- **PR Title**: 新增br_path_provider-v2.1.5_ohos_dev门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 32 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
-
-### 119. #982 — 配置br_url_launcher-v6.3.0_ohos_dev门禁（functional）
-
-- **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/982
-- **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/824 (merged 2026-04-09)
-- **PR Title**: 配置br_url_launcher-v6.3.0_ohos_dev流水线门禁
-- **PR 创建人**: qq_77777
-- **质量评分**: 6 | Body: 32 chars | Comments: 0
-- **评分明细**: 复现步骤, 错误信息, 环境信息
-- **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
-
-### 120. #976 — 稳定性遍历8小时出现9次jscrash（stability）
+### 57. #976 — 稳定性遍历8小时出现9次jscrash（stability）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/976
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/793 (merged 2026-04-02)
@@ -1357,7 +664,7 @@
 - **评分明细**: body>500, 错误信息, 环境信息
 - **问题描述**: 使用br_webview_flutter-v4.13.0_ohos，偶现jscrash，根据堆栈分析，发现是webview4.13特有问题。webview4.13是flutter3.27适配的配套库，在OhosWebView文件的web组件中新增了onHttpErrorReceive回调，该回调会触发createWebResourceErrorData方法，向createWebResourceEr
 
-### 121. #969 — 添加url_laucher插件库的ohos依赖（functional）
+### 58. #969 — 添加url_laucher插件库的ohos依赖（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/969
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/800 (merged 2026-04-02)
@@ -1367,7 +674,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ 缺少url_laucher_ohos依赖，导致flutter pub get的时候依赖缺失 ### 重现步骤
 
-### 122. #903 — br_path_provider-v2.1.5_ohos, The root directory configuration of path_provider does not include the OHOS platform.（functional）
+### 59. #903 — br_path_provider-v2.1.5_ohos, The root directory configuration of path_provider does not include the OHOS platform.（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/903
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/731 (merged 2026-03-04)
@@ -1377,7 +684,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### What caused this problem? The root directory configuration of path_provider does not include the OHOS platform. ### Steps to reproduce:
 
-### 123. #901 — [Bug]: br_camera-v0.11.3_ohos ，when calling stopRecordingVideo, there may be no return result.（functional）
+### 60. #901 — [Bug]: br_camera-v0.11.3_ohos ，when calling stopRecordingVideo, there may be no return result.（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/901
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/730 (merged 2026-03-17)
@@ -1387,7 +694,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### What caused this problem? When the state of the recording object is incorrect, no exception is thrown or returned. ### Steps to reproduce:
 
-### 124. #900 — [Bug]:br_camera-v0.11.0+2_ohos ，when calling stopRecordingVideo, there may be no return result.（functional）
+### 61. #900 — [Bug]:br_camera-v0.11.0+2_ohos ，when calling stopRecordingVideo, there may be no return result.（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/900
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/729 (merged 2026-03-17)
@@ -1397,7 +704,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### What caused this problem? When the state of the recording object is incorrect, no exception is thrown or returned. ### Steps to reproduce:
 
-### 125. #899 — [Bug]: br_camera-v0.11.1_ohos ，when calling stopRecordingVideo, there may be no return result.（functional）
+### 62. #899 — [Bug]: br_camera-v0.11.1_ohos ，when calling stopRecordingVideo, there may be no return result.（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/899
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/728 (merged 2026-03-17)
@@ -1407,7 +714,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### What caused this problem? When the state of the recording object is incorrect, no exception is thrown or returned. ### Steps to reproduce:
 
-### 126. #844 — br_camera-v0.11.0+2_ohos分支，camera仓库点击请求焦点无法正确对焦（functional）
+### 63. #844 — br_camera-v0.11.0+2_ohos分支，camera仓库点击请求焦点无法正确对焦（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/844
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/687 (merged 2026-01-26)
@@ -1417,7 +724,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ setFocusPoint传参未按照文档正确转换 ### 重现步骤
 
-### 127. #838 — In packages/camera/camera_ohos/exampl, if you turn on the constant flash and then click record, the constant icon will still be displayed even if the flash is turned off.（functional）
+### 64. #838 — In packages/camera/camera_ohos/exampl, if you turn on the constant flash and then click record, the constant icon will still be displayed even if the flash is turned off.（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/838
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/676 (merged 2026-01-26)
@@ -1427,7 +734,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### What caused this problem? 1. When switching from photo preview to video recording, the session also switches, but the flash state is not reset. ### Steps to reproduce:
 
-### 128. #835 — br_camera-v0.11.1_ohos分支，camera仓库点击请求焦点无法正确对焦（functional）
+### 65. #835 — br_camera-v0.11.1_ohos分支，camera仓库点击请求焦点无法正确对焦（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/835
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/673 (merged 2026-01-26)
@@ -1437,7 +744,7 @@
 - **评分明细**: 复现步骤, 错误信息, 环境信息
 - **问题描述**: ### 该问题是怎么引起的？ 1、MessageChannel数据解析不正确； 2、坐标未按照文档正确转化，参考https://developer.huawei.com/consumer/cn/doc/harmonyos-references/arkts-apis-camera-focus#setfocuspoint11
 
-### 129. #1444 — fix：dev分支 image_picker_ohos运行test报错（functional）
+### 66. #1444 — fix：dev分支 image_picker_ohos运行test报错（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1444
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1340 (merged 2026-07-02)
@@ -1447,7 +754,7 @@
 - **评分明细**: 错误信息, 环境信息, 截图
 - **问题描述**: Error: No named parameter with the name 'limit'.
 
-### 130. #1183 — 【dev】image_picker库fix:ImagePickerCache.getCacheMap IMAGE_QUALITY 设置错误（functional）
+### 67. #1183 — 【dev】image_picker库fix:ImagePickerCache.getCacheMap IMAGE_QUALITY 设置错误（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1183
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1058 (merged 2026-05-22)
@@ -1457,7 +764,7 @@
 - **评分明细**: 复现步骤, 错误信息, 截图
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 131. #1180 — 【dev】ImagePickerApiCodec 序列化 type tag 错误（functional）
+### 68. #1180 — 【dev】ImagePickerApiCodec 序列化 type tag 错误（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1180
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1055 (merged 2026-05-22)
@@ -1467,7 +774,7 @@
 - **评分明细**: 复现步骤, 错误信息, 截图
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 132. #1178 — 【dev】image_picker库fix:FileUtils.getPathFromUri 空 context 返回值置为null（functional）
+### 69. #1178 — 【dev】image_picker库fix:FileUtils.getPathFromUri 空 context 返回值置为null（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1178
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/1053 (merged 2026-05-22)
@@ -1477,7 +784,7 @@
 - **评分明细**: 复现步骤, 错误信息, 截图
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 133. #1097 — image_picker库yaml文件格式错误修复（functional）
+### 70. #1097 — image_picker库yaml文件格式错误修复（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/1097
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/957 (merged 2026-05-20)
@@ -1487,7 +794,7 @@
 - **评分明细**: 复现步骤, 错误信息, 截图
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 134. #874 — 【3.22/3.27】修复image_picker选取同一照片，后续设置宽高未生效问题（functional）
+### 71. #874 — 【3.22/3.27】修复image_picker选取同一照片，后续设置宽高未生效问题（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/874
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/716 (merged 2026-03-16)
@@ -1497,7 +804,7 @@
 - **评分明细**: 复现步骤, 错误信息, 截图
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 135. #827 — fix：image_picker修改chooseMedia调用参数（functional）
+### 72. #827 — fix：image_picker修改chooseMedia调用参数（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/827
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/666 (merged 2026-01-20)
@@ -1507,7 +814,7 @@
 - **评分明细**: 复现步骤, 错误信息, 截图
 - **问题描述**: ### 该问题是怎么引起的？ ### 重现步骤 ### 报错信息
 
-### 136. #820 — image_picker-v1.2.1升级适配Flutter3.35（functional）
+### 73. #820 — image_picker-v1.2.1升级适配Flutter3.35（functional）
 
 - **Issue**: https://gitcode.com/openharmony-tpc/flutter_packages/issues/820
 - **PR**: https://gitcode.com/openharmony-tpc/flutter_packages/merge_requests/661 (merged 2026-01-16)
@@ -1527,8 +834,8 @@
 | 内存泄漏 (memory-leak) | 0 | — |
 | 渲染 (rendering) | 0 | — |
 | 性能 (performance) | 4 | 6-10 |
-| 功能 (functional) | 131 | 5-12 |
-| **总计** | **136** | **5-12** |
+| 功能 (functional) | 68 | 5-12 |
+| **总计** | **73** | **5-12** |
 
 ## 质量保证
 
@@ -1543,9 +850,9 @@
 
 ## 数据收集方法
 
-1. **获取已关闭 Issue**: 通过 GitCode API v5 `GET /repos/openharmony-tpc/flutter_packages/issues?state=closed` 分页获取所有已关闭 Issue（共扫描 1447 条）
-2. **时间范围过滤**: 按 `updated_at` 过滤近 6 个月内的 Issue（2026-01-07 之后，共 1447 条）
-3. **质量评分**: 对每个 Issue 按 body长度、复现步骤、代码示例、错误信息、环境信息、截图、评论数进行评分，筛选 score ≥ 5（共 314 条）
+1. **获取已关闭 Issue**: 通过 GitCode API v5 `GET /repos/openharmony-tpc/flutter_packages/issues?state=closed` 分页获取所有已关闭 Issue（共扫描 1474 条）
+2. **时间范围过滤**: 按 `updated_at` 过滤近 6 个月内的 Issue（2026-01-07 之后，共 1362 条）
+3. **质量评分**: 对每个 Issue 按 body长度、复现步骤、代码示例、错误信息、环境信息、截图、评论数进行评分，筛选 score ≥ 5（共 244 条）
 4. **查询 Issue-PR 关联**: 通过 `GET /repos/openharmony-tpc/flutter_packages/issues/{number}/pull_requests` 正向查询每个高质量 Issue 关联的 PR
 5. **验证 PR 合并状态**: 逐一通过 `GET /repos/openharmony-tpc/flutter_packages/pulls/{pr_number}` 获取 PR 详情，确认 `state=merged` 且 `merged_at` 非空，且合入时间在近 6 个月内
-6. **最终匹配**: 同时满足「质量评分达标」和「关联了已合入 PR」的 Issue 纳入测试集（共 136 条）
+6. **最终匹配**: 同时满足「质量评分达标」和「关联了已合入 PR」的 Issue 纳入测试集（共 73 条）

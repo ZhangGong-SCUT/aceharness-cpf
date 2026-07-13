@@ -172,6 +172,7 @@ Token 从配置文件 `skills/gitcode-issue-collector/config.json` 的 `gitcode.
 5. **API 限流**：GitCode API 有请求频率限制，每次请求间隔至少 0.15-0.3 秒。
 6. **Token 过期**：Token 可能过期（返回 401 Unauthorized），需更新配置文件 `config.json` 中的 `access_token` 字段。
 7. **CP Issue 信息不全**：Cherry-Pick Issue 使用 CP 模板创建，若模板未正确填写，标题会包含 `<title>` 占位符（如 `[CP] <title>从flutter3.32同步...`），正文也是 CP 模板内容（Issue Link、Target、PR Link 等字段）而非标准 Bug 报告。这类 Issue 信息不全，不适合作为测试用例，应在质量评分前过滤掉。
+8. **仓库管理类 Issue**：部分 Issue 是仓库管理类操作（如 OAT 门禁配置、流水线门禁新增/修改、测试用例补充等），标题通常含 `OAT.xml`、`OAT文件`、`门禁`（包括"流水线门禁"、"门禁缺失"、"新增门禁"、"配置门禁"等各种组合）、`测试用例`、`测试案例` 等关键词。这类 Issue 不是真正的功能/缺陷问题，不适合作为诊断测试用例，应在质量评分前过滤掉。
 
 ## 可配置参数
 

@@ -137,15 +137,23 @@ filtered_issues = []
 cp_removed = 0
 for issue in all_issues:
     title = issue.get("title", "") or ""
+    title_lower = title.lower()
     # CP 模板未正确填写时标题含 <title> 占位符，这类 Issue 信息不全
-    if "<title>" in title.lower():
+    if "<title>" in title_lower:
         cp_removed += 1
-        print(f"  过滤 #{issue['number']}: {title[:60]}...")
+        print(f"  过滤 CP Issue #{issue['number']}: {title[:60]}...")
+        continue
+    # 过滤仓库管理类 Issue（OAT 门禁、流水线门禁、测试用例等），这些不是真正的功能/缺陷问题
+    # 使用 re.IGNORECASE 匹配大小写（标题中常为 "OAT.xml" 大写）
+    # "门禁" 单独匹配：标题含"门禁"的 Issue 都是流水线门禁配置类
+    if re.search(r"oat\.xml|oat文件|门禁|测试用例|测试案例", title, re.IGNORECASE):
+        cp_removed += 1
+        print(f"  过滤门禁/测试用例 Issue #{issue['number']}: {title[:60]}...")
         continue
     filtered_issues.append(issue)
 
 all_issues = filtered_issues
-print(f"步骤 1.5 完成: 过滤 {cp_removed} 个信息不全的 CP Issue，剩余 {len(all_issues)} 条")
+print(f"步骤 1.5 完成: 过滤 {cp_removed} 个信息不全/仓库管理类 Issue，剩余 {len(all_issues)} 条")
 
 
 # ============ 步骤 2: 质量评分 ============

@@ -10,8 +10,6 @@ temperature: 0.3
 allowedTools:
   - Bash
   - Read
-  - Write
-  - Edit
   - Glob
   - Grep
 capabilities:
@@ -22,6 +20,8 @@ capabilities:
 skills:
   - flutter-ohos-issue-analysis
 systemPrompt: |
+  【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
+
   你是 OHOS 跨平台框架问题诊断的代码修改专家。根据审查通过的修复建议，执行代码修改，产出可编译的修复补丁。
 
   【知识参考范围】只参考 Skill 中的以下文件，不要读取其他文件：

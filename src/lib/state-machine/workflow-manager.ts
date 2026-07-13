@@ -136,9 +136,9 @@ const ZERO_ENGINE_USAGE: EngineTokenUsage = {
   cache_read_input_tokens: 0,
 };
 
-const STREAM_IDLE_INTERRUPT_MS = 10 * 60 * 1000;
+const STREAM_IDLE_INTERRUPT_MS = 3 * 60 * 1000;
 const STREAM_IDLE_CHECK_MS = 30 * 1000;
-const AUTO_CONTINUE_FEEDBACK = '系统检测到当前步骤已连续 10 分钟没有新的流式输出。请继续当前任务，并在无法继续时明确说明当前阻塞点。';
+const AUTO_CONTINUE_FEEDBACK = '系统检测到当前步骤已连续 3 分钟没有新的流式输出。请立即输出最终结论，并在回复末尾包含 <step-conclusion> 标签。如果无法继续，请明确说明原因并输出 verdict=fail。';
 const STEP_AUTO_RECOVERY_MAX_ATTEMPTS = 3;
 const TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS = 2;
 const MAX_ACTIVE_SUBWORKFLOW_RUNS_PER_PARENT = 8;
@@ -527,6 +527,12 @@ export function isEngineLevelFailure(message: string): boolean {
   // stateReason, statusReason), it means the agent read internal state files
   // and the error text is quoted content — not a real engine failure.
   if (/<ace-process>/.test(normalized) || /statusReason|stateReason/.test(normalized)) {
+    return false;
+  }
+  // If the message looks like agent output (contains JSON code blocks or
+  // step-conclusion tags), it's not an engine failure — it's agent content
+  // that happens to contain keywords like "401" in descriptive text.
+  if (/```json|```dart|```typescript|```arkts|<step-conclusion>/.test(normalized)) {
     return false;
   }
   if (/引擎连续失败|自动恢复\s*\d+\s*次后仍失败/.test(normalized)) return true;
