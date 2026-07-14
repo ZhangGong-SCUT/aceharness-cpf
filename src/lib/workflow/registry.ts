@@ -228,6 +228,30 @@ class WorkflowRegistry extends EventEmitter {
     return running.length > 0 ? running[0].manager : null;
   }
 
+  /**
+   * Create a dedicated manager instance for a specific run.
+   * This enables parallel workflow execution — each run gets its own manager
+   * with an independent engine execution lock, so multiple issues can be
+   * diagnosed simultaneously without blocking each other.
+   *
+   * The manager is keyed by `run:${runId}` so it won't conflict with the
+   * shared top-level manager (`config:${configFile}`).
+   *
+   * @returns the newly created manager (always fresh, never reused)
+   */
+  async createManagerForRun(configFile: string, runId: string): Promise<AnyWorkflowManager> {
+    const managerKey = `run:${runId}`;
+    // If a manager already exists for this run (e.g. retry), remove it first
+    const existing = this.managers.get(managerKey);
+    if (existing) {
+      existing.manager.removeAllListeners();
+      this.managers.delete(managerKey);
+    }
+    const manager = await this.createManagerOnce(configFile, undefined, managerKey);
+    this.managerKeysByRunId.set(runId, managerKey);
+    return manager;
+  }
+
   getAllManagers(): ManagerEntry[] {
     return Array.from(this.managers.values());
   }

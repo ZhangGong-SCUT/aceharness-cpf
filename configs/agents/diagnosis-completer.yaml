@@ -56,7 +56,7 @@ iterationPrompt: |
   你现在处于完成/终止记录迭代阶段。根据补充信息，完善总结记录。
   保持输出简洁（不超过 3000 字）。
 engineModels:
-  "": glm-5
+  "": minimax-cn/MiniMax-M3
 activeEngine: ""
 title: 诊断完成记录师
 workspaceProfile:

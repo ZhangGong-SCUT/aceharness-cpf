@@ -7,10 +7,22 @@ import { loadRunState, saveRunState } from '@/lib/run/state-persistence';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
-    const { configFile } = body as { configFile?: string };
+    const { configFile, runId } = body as { configFile?: string; runId?: string };
     const touchedRunIds = new Set<string>();
 
-    if (configFile) {
+    if (runId) {
+      // Stop a specific run by runId — finds the per-run manager (created by
+      // createManagerForRun) so that parallel runs of the same config are not
+      // affected.
+      const manager = await workflowRegistry.getManagerByRunId(runId).catch(() => null);
+      if (manager) {
+        const status = manager.getStatus();
+        if (status.status === 'running' || status.status === 'preparing') {
+          await manager.stop();
+          if (status.runId) touchedRunIds.add(status.runId);
+        }
+      }
+    } else if (configFile) {
       const manager = workflowRegistry.getRunningManager(configFile);
       if (manager) {
         const runId = manager.getStatus().runId as string | undefined;
@@ -31,9 +43,19 @@ export async function POST(request: NextRequest) {
 
     // Fallback: if there is no active manager but run records are still marked
     // as running/preparing, force them to stopped so History view is consistent.
-    const candidateRuns = configFile
-      ? await listRunsByConfig(configFile)
-      : await listRuns();
+    // When a specific runId is requested, only clean up that run; otherwise clean
+    // up all runs for the given configFile (or all runs if neither is provided).
+    let candidateRuns: Array<{ id: string; status: string; configFile?: string }>;
+    if (runId) {
+      const runState = await loadRunState(runId).catch(() => null);
+      candidateRuns = runState
+        ? [{ id: runId, status: runState.status, configFile: runState.configFile }]
+        : [];
+    } else if (configFile) {
+      candidateRuns = await listRunsByConfig(configFile);
+    } else {
+      candidateRuns = await listRuns();
+    }
     for (const run of candidateRuns) {
       if (run.status !== 'running' && run.status !== 'preparing') continue;
       if (touchedRunIds.has(run.id)) continue;

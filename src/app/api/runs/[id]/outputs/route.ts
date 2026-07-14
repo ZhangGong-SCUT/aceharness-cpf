@@ -13,12 +13,33 @@ export async function GET(
 ) {
   const runId = (await params).id;
   const stepName = request.nextUrl.searchParams.get('step');
+  const outputRef = request.nextUrl.searchParams.get('outputRef');
 
   try {
-    if (stepName) {
+    if (stepName || outputRef) {
+      const outputDir = resolve(RUNS_DIR, runId, 'outputs');
+      // outputRef 是 run 内部相对路径（如 outputs/step-logs/{step}-{uuid}.md 或
+      // step-logs/{step}-{uuid}.md），最终指向给开发者看的报告/输出。
+      if (outputRef) {
+        const refRelative = outputRef.replace(/^\/+/, '');
+        if (refRelative.includes('..')) {
+          return NextResponse.json({ error: 'outputRef 不合法' }, { status: 400 });
+        }
+        // 兼容两种写法：带 outputs/ 前缀 或 不带
+        const runDir = resolve(RUNS_DIR, runId);
+        const baseRel = refRelative.startsWith('outputs/') ? refRelative : `outputs/${refRelative}`;
+        const candidatePaths = [resolve(runDir, baseRel), resolve(outputDir, refRelative)];
+        for (const p of candidatePaths) {
+          try {
+            const content = await readFile(p, 'utf-8');
+            return NextResponse.json({ stepName: stepName || outputRef, content });
+          } catch { /* try next */ }
+        }
+        return NextResponse.json({ error: '未找到该步骤的输出' }, { status: 404 });
+      }
+
       // Return content of a specific step's output
       const safeName = stepName.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
-      const outputDir = resolve(RUNS_DIR, runId, 'outputs');
       // Try .md first, then .txt
       let content = '';
       try {

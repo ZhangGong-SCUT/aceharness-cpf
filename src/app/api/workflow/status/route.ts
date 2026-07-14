@@ -336,13 +336,17 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
 
 async function resolveWorkflowStatusPayload(configFile?: string | null, requestedRunId?: string | null) {
   if (configFile) {
-    const runningManager = workflowRegistry.getRunningManager(configFile);
-    const runningStatus = runningManager?.getStatus?.();
-    if (runningStatus && (!requestedRunId || runningStatus.runId === requestedRunId)) {
-      return withCreationSession(runningStatus, configFile);
-    }
-
+    // When a specific runId is requested, prefer the per-run manager (created
+    // by createManagerForRun) so that parallel runs of the same config each
+    // get their own status.  Fall back to the shared top-level manager only
+    // when no per-run manager exists (e.g. historical run restored from disk).
     if (requestedRunId) {
+      const runManager = await workflowRegistry.getManagerByRunId(requestedRunId).catch(() => null);
+      const runManagerStatus = runManager?.getStatus?.();
+      if (runManagerStatus && (runManagerStatus.status === 'running' || runManagerStatus.status === 'preparing')) {
+        return withCreationSession(runManagerStatus, configFile);
+      }
+
       const runState = await loadRunState(requestedRunId);
       if (runState && runState.configFile === configFile) {
         const pendingHumanQuestion = runState.pendingHumanQuestionId
@@ -372,6 +376,13 @@ async function resolveWorkflowStatusPayload(configFile?: string | null, requeste
       }
     }
 
+    // No runId requested — fall back to the shared top-level manager.
+    const runningManager = workflowRegistry.getRunningManager(configFile);
+    const runningStatus = runningManager?.getStatus?.();
+    if (runningStatus) {
+      return withCreationSession(runningStatus, configFile);
+    }
+
     const manager = await workflowRegistry.getManager(configFile);
     return withCreationSession(manager.getStatus(), configFile);
   }
@@ -391,13 +402,15 @@ async function resolveWorkflowStatusPayload(configFile?: string | null, requeste
 
 async function resolveWorkflowLiveStatusPayload(configFile?: string | null, requestedRunId?: string | null) {
   if (configFile) {
-    const runningManager = workflowRegistry.getRunningManager(configFile);
-    const runningStatus = runningManager?.getStatus?.();
-    if (runningStatus && (!requestedRunId || runningStatus.runId === requestedRunId)) {
-      return compactWorkflowStatusForLive(runningStatus, configFile);
-    }
-
+    // When a specific runId is requested, prefer the per-run manager so that
+    // parallel runs of the same config each get their own live status stream.
     if (requestedRunId) {
+      const runManager = await workflowRegistry.getManagerByRunId(requestedRunId).catch(() => null);
+      const runManagerStatus = runManager?.getStatus?.();
+      if (runManagerStatus && (runManagerStatus.status === 'running' || runManagerStatus.status === 'preparing')) {
+        return compactWorkflowStatusForLive(runManagerStatus, configFile);
+      }
+
       const runState = await loadRunState(requestedRunId);
       if (runState && runState.configFile === configFile) {
         return compactWorkflowStatusForLive({
@@ -410,6 +423,13 @@ async function resolveWorkflowLiveStatusPayload(configFile?: string | null, requ
             : runState.pendingCheckpoint?.humanQuestion || null,
         }, configFile);
       }
+    }
+
+    // No runId — fall back to the shared top-level manager.
+    const runningManager = workflowRegistry.getRunningManager(configFile);
+    const runningStatus = runningManager?.getStatus?.();
+    if (runningStatus) {
+      return compactWorkflowStatusForLive(runningStatus, configFile);
     }
 
     const manager = await workflowRegistry.getManager(configFile);

@@ -1,6 +1,6 @@
 # Issue 内容采集参考
 
-> 用于 diagnosis-repo-cloner Agent 的 Issue 内容采集指导。本文件提供领域经验，不定义执行步骤。
+> 用于 diagnosis-issue-collector Agent 的 Issue 内容采集指导。本文件提供领域经验，不定义执行步骤。
 
 ## 1. Issue 评论获取策略
 

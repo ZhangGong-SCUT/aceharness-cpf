@@ -209,6 +209,18 @@ function mergeAgentsWithSessionIds(
   return merged;
 }
 
+function resolveStepLogsWithEnglishAgent(detail: any, state: any) {
+  // 优先使用 state 中的 stepLogs（agent 字段是英文 name，与前端 agent.name 对齐），
+  // snapshot.stepLogs 的 agent 是中文 label，会导致前端按 agent.name 过滤时全部丢失。
+  if (!state) return detail;
+  const stateStepLogs = Array.isArray(state.stepLogs) ? state.stepLogs : null;
+  if (!stateStepLogs || stateStepLogs.length === 0) return detail;
+  return {
+    ...detail,
+    stepLogs: stateStepLogs.map(compactStepLog),
+  };
+}
+
 function mergeSnapshotWithRunState(snapshot: any, state: any, finalReview: any) {
   const compactState = compactRunDetail(state, finalReview);
   const snapshotSessions = normalizeSessionMap(snapshot.attachedAgentSessions);
@@ -224,9 +236,16 @@ function mergeSnapshotWithRunState(snapshot: any, state: any, finalReview: any) 
     ...(supervisorAgent && supervisorSessionId ? { [supervisorAgent]: supervisorSessionId } : {}),
   };
 
+  // 优先使用 state 中的 stepLogs（agent 字段是英文 name，与前端 agent.name 对齐），
+  // snapshot.stepLogs 的 agent 是中文 label，会导致前端按 agent.name 过滤时全部丢失。
+  const mergedStepLogs = Array.isArray(compactState.stepLogs) && compactState.stepLogs.length > 0
+    ? compactState.stepLogs
+    : snapshot.stepLogs;
+
   return {
     ...compactState,
     ...snapshot,
+    stepLogs: mergedStepLogs,
     workflowFrontendSessionId: nonEmptyString(snapshot.workflowFrontendSessionId)
       || nonEmptyString(state.workflowFrontendSessionId)
       || null,
@@ -261,6 +280,10 @@ export async function GET(
           if (state) {
             detail = mergeSnapshotWithRunState(detail, state, finalReview);
           }
+        } else {
+          // 始终用 state.stepLogs 覆盖 snapshot.stepLogs（agent 字段英文名 vs 中文 label）
+          const state = await loadRunState(id, { hydrateLargeOutputs: false }).catch(() => null);
+          detail = resolveStepLogsWithEnglishAgent(detail, state);
         }
         detail = await withResolvedWorkflowFrontendSessionId(id, detail);
         return NextResponse.json({

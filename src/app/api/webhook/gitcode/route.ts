@@ -67,6 +67,7 @@ interface GitCodeWebhookPayload {
   object_attributes?: {
     action?: string; // "open" | "close" | "reopen" | "update"
     number?: number | string;
+    iid?: number | string; // GitCode uses iid for issue numbers
     title?: string;
     description?: string;
     body?: string;
@@ -213,6 +214,105 @@ function parseIssueUrl(url: string): { owner: string; repo: string; number: stri
 }
 
 /**
+ * 读取诊断报告并回写到 GitCode Issue 评论
+ *
+ * 报告查找优先级：
+ * 1. step-logs/报告沉淀-生成诊断报告-*.md — reporter agent 的完整诊断报告（含根因+修复建议）
+ * 2. 报告沉淀-生成诊断报告.md — reporter agent 的摘要输出（仅结论）
+ * 3. 拼接所有阶段输出 — 兜底方案
+ */
+async function postReportComment(
+  runId: string,
+  issueInfo: { owner: string; repo: string; number: string; title: string; url: string },
+  status: string,
+): Promise<void> {
+  const runDir = join(getWorkspaceRoot(), 'runs', runId);
+  const outputsDir = join(runDir, 'outputs');
+  const stepLogsDir = join(outputsDir, 'step-logs');
+
+  let reportContent = '';
+
+  // 优先级 1：从 step-logs 中查找报告沉淀的完整输出（含根因分析+修复建议全文）
+  if (existsSync(stepLogsDir)) {
+    const { readdir } = await import('fs/promises');
+    const stepFiles = await readdir(stepLogsDir);
+    // 查找报告沉淀的 step-log 文件（包含完整诊断报告）
+    const reportStepFile = stepFiles.find(f => f.startsWith('报告沉淀') && f.endsWith('.md'));
+    if (reportStepFile) {
+      let rawContent = readFileSync(join(stepLogsDir, reportStepFile), 'utf-8');
+      // 截掉 <step-conclusion> 标签及其后面的内容（工作流内部元数据，不应出现在报告中）
+      const conclusionIdx = rawContent.indexOf('<step-conclusion>');
+      if (conclusionIdx > 0) {
+        rawContent = rawContent.substring(0, conclusionIdx).trimEnd();
+      }
+      // 同时截掉结尾的裁决 JSON 块（```json ... ```）
+      rawContent = rawContent.replace(/```json\s*\{[\s\S]*?"verdict"[\s\S]*?\}\s*```/g, '').trimEnd();
+      reportContent = rawContent;
+    }
+  }
+
+  // 优先级 2：查找摘要报告文件
+  if (!reportContent) {
+    const possibleReports = [
+      'diagnosis-report-issue-1.md',
+      '报告沉淀-生成诊断报告.md',
+    ];
+    for (const name of possibleReports) {
+      const path = join(outputsDir, name);
+      if (existsSync(path)) {
+        reportContent = readFileSync(path, 'utf-8');
+        break;
+      }
+    }
+  }
+
+  // 优先级 3：拼接所有阶段的摘要输出（根因分析 + 修复建议 + 报告沉淀 + 完成）
+  if (!reportContent) {
+    if (existsSync(outputsDir)) {
+      const { readdir } = await import('fs/promises');
+      const files = await readdir(outputsDir);
+      // 按阶段顺序拼接关键输出文件
+      const stageOrder = ['根因分析', '修复建议', '报告沉淀', '完成'];
+      const parts: string[] = [];
+      for (const stage of stageOrder) {
+        const file = files.find(f => f.startsWith(stage) && f.endsWith('.md') && !f.includes('step-logs'));
+        if (file) {
+          const content = readFileSync(join(outputsDir, file), 'utf-8');
+          parts.push(`## ${stage}\n\n${content}`);
+        }
+      }
+      if (parts.length > 0) {
+        reportContent = parts.join('\n\n---\n\n');
+      }
+    }
+  }
+
+  if (!reportContent) {
+    reportContent = `工作流已完成（状态: ${status}），但未找到诊断报告文件。请到 ACEHarness 查看完整结果。\n\nRun ID: ${runId}`;
+  }
+
+  // 构造评论内容
+  const commentBody = `## 🤖 ACEHarness 自动诊断报告
+
+> 本报告由 ACEHarness 自动诊断工作流生成，Issue 创建后自动触发。
+
+**Issue**: ${issueInfo.title}
+**诊断状态**: ${status === 'completed' ? '✅ 完成' : '❌ ' + status}
+**诊断时间**: ${new Date().toISOString()}
+
+---
+
+${reportContent}
+
+---
+
+> 由 [ACEHarness](http://127.0.0.1:3000) 自动生成`;
+
+  // 回写到 GitCode Issue 评论
+  await postCommentToGitCodeIssue(issueInfo.owner, issueInfo.repo, issueInfo.number, commentBody);
+}
+
+/**
  * 监控工作流完成并回写评论
  */
 async function monitorAndComment(
@@ -231,71 +331,28 @@ async function monitorAndComment(
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
 
     try {
-      const manager = await workflowRegistry.getManager(configFile);
+      // Use getManagerByRunId to get the specific manager for this run
+      // (supports parallel runs — each run has its own manager instance)
+      const manager = await workflowRegistry.getManagerByRunId(runId);
+      if (!manager) {
+        console.warn(`[webhook/gitcode] Manager not found for run ${runId}, may have been cleaned up`);
+        // Try to read the run state directly to check if it completed
+        const runStatePath = join(getWorkspaceRoot(), 'runs', runId, 'summary.json');
+        if (existsSync(runStatePath)) {
+          const runState = JSON.parse(readFileSync(runStatePath, 'utf-8'));
+          if (runState.status === 'completed' || runState.status === 'failed' || runState.status === 'crashed') {
+            console.log(`[webhook/gitcode] Run ${runId} finished (from state file) with status: ${runState.status}`);
+            await postReportComment(runId, issueInfo, runState.status);
+            return;
+          }
+        }
+        continue;
+      }
       const status = manager.getStatus();
 
       if (status.status === 'completed' || status.status === 'failed' || status.status === 'crashed') {
         console.log(`[webhook/gitcode] Run ${runId} finished with status: ${status.status}`);
-
-        // 读取诊断报告
-        const runDir = join(getWorkspaceRoot(), 'runs', runId);
-        const reportPath = join(runDir, 'outputs', 'diagnosis-report-issue-1.md');
-
-        // 尝试多个可能的报告文件名
-        const possibleReports = [
-          'diagnosis-report-issue-1.md',
-          '报告沉淀-生成诊断报告.md',
-        ];
-
-        let reportContent = '';
-        for (const name of possibleReports) {
-          const path = join(runDir, 'outputs', name);
-          if (existsSync(path)) {
-            reportContent = readFileSync(path, 'utf-8');
-            break;
-          }
-        }
-
-        // 如果没找到报告文件，尝试读取所有输出文件拼接
-        if (!reportContent) {
-          const outputsDir = join(runDir, 'outputs');
-          if (existsSync(outputsDir)) {
-            const { readdir } = await import('fs/promises');
-            const files = await readdir(outputsDir);
-            const mdFiles = files.filter((f) => f.endsWith('.md') && !f.includes('step-logs'));
-            const parts: string[] = [];
-            for (const f of mdFiles) {
-              const content = readFileSync(join(outputsDir, f), 'utf-8');
-              parts.push(`## ${f}\n\n${content}`);
-            }
-            reportContent = parts.join('\n\n---\n\n');
-          }
-        }
-
-        if (!reportContent) {
-          reportContent = `工作流已完成（状态: ${status.status}），但未找到诊断报告文件。请到 ACEHarness 查看完整结果。\n\nRun ID: ${runId}`;
-        }
-
-        // 构造评论内容
-        const commentBody = `## 🤖 ACEHarness 自动诊断报告
-
-> 本报告由 ACEHarness 自动诊断工作流生成，Issue 创建后自动触发。
-
-**Issue**: ${issueInfo.title}
-**Run ID**: \`${runId}\`
-**诊断状态**: ${status.status === 'completed' ? '✅ 完成' : '❌ ' + status.status}
-**诊断时间**: ${new Date().toISOString()}
-
----
-
-${reportContent}
-
----
-
-> 由 [ACEHarness](http://127.0.0.1:3000) 自动生成 | Run ID: \`${runId}\``;
-
-        // 回写到 GitCode Issue 评论
-        await postCommentToGitCodeIssue(issueInfo.owner, issueInfo.repo, issueInfo.number, commentBody);
+        await postReportComment(runId, issueInfo, status.status);
         return;
       }
     } catch (error: any) {
@@ -423,14 +480,9 @@ export async function POST(request: NextRequest) {
       completedSteps: 0,
     });
 
-    // 获取 workflow manager 并启动
-    const manager = await workflowRegistry.getManager(WEBHOOK_CONFIG_FILE);
-
-    // 检查是否已在运行
-    const currentStatus = manager.getStatus();
-    if (currentStatus.status === 'running' || currentStatus.status === 'preparing') {
-      return NextResponse.json({ error: '该配置的工作流已在运行中' }, { status: 409 });
-    }
+    // 为此 run 创建独立的 workflow manager 实例（支持多 Issue 并行）
+    // 每个 run 拥有独立的引擎执行锁，不会互相阻塞
+    const manager = await workflowRegistry.createManagerForRun(WEBHOOK_CONFIG_FILE, runId);
 
     // 设置用户信息
     (manager as any)._createdBy = user.id;

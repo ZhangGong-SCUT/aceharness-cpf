@@ -382,16 +382,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const manager = await workflowRegistry.getManager(configFile);
-
-    // Check if this specific config is already running
-    const currentStatus = manager.getStatus();
-    if (currentStatus.status === 'running' || currentStatus.status === 'preparing') {
-      return NextResponse.json(
-        { error: '该配置的工作流已在运行中' },
-        { status: 409 }
-      );
-    }
+    // Use a dedicated per-run manager so multiple runs of the same config can
+    // execute in parallel (each gets its own engine execution lock + isolated
+    // working directory).  The manager is keyed by `run:${runId}` and will not
+    // conflict with the shared top-level manager (`config:${configFile}`).
+    const manager = await workflowRegistry.createManagerForRun(configFile, runId);
 
     // Pass userId for createdBy tracking
     (manager as any)._createdBy = user.id;

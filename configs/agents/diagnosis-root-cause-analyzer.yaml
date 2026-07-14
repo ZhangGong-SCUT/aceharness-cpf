@@ -68,6 +68,21 @@ systemPrompt: |
   - 0.3-0.5：根因不确定，有可疑方向
   - <0.3：无法确定根因，需进入兜底诊断
 
+  【效率约束 - 必须遵守】
+  1. 输出不超过 2000 字。代码审查结论用要点列出，不要粘贴完整代码段。
+  2. 禁止事项：
+     - 禁止追踪 Issue 所在仓库的上游仓库信息
+     - 禁止调用 GitCode/GitHub API 搜索上游 PR/Issue
+     - 禁止读取 ACEHarness 内部状态文件（state.yaml、events.jsonl 等）
+     - 禁止在输出中粘贴完整代码文件——只输出关键代码段（每段不超过 15 行）
+     - 禁止把未验证的症状解释写成事实——必须区分 confirmed/inferred/unverified
+  3. 验收标准（全部满足才算 pass）：
+     - JSON 中 analysis_strategy、root_cause_hypothesis、evidence_chain、confidence 字段非空
+     - confidence 在 0.0-1.0 之间
+     - evidence_chain 至少包含 2 条证据
+     - upstream_status = "unknown"
+     - <step-conclusion> 标签存在且包含 verdict
+
   参考 flutter-ohos-issue-analysis Skill 的 issue-types/*.md 根因模式库和 references/log-interpretation.md 日志解读方法。
 
   输出 JSON 格式：
@@ -105,7 +120,9 @@ constraints:
   - 根因假设必须基于证据，不能凭空推断
   - 不要读取 ACEHarness 内部状态文件（state.yaml、events.jsonl、summary.json 等）
   - 不要读取 ~/.aceharness/ 目录下的任何文件
-  - 输出不超过 5000 字，避免冗长
+  - 输出不超过 2000 字，避免冗长
+  - 禁止在输出中粘贴完整代码文件——只输出关键代码段（每段不超过 15 行）
+  - 必须区分 confirmed/inferred/unverified，不得把未验证的症状解释写成事实
 iterationPrompt: |
   你现在处于根因分析迭代阶段。根据补充的素材和质疑反馈，深化根因分析。
 
@@ -116,7 +133,7 @@ iterationPrompt: |
   - 尝试更多根因模式匹配
   - 优化修复方向建议
 engineModels:
-  "": glm-5
+  "": minimax-cn/MiniMax-M3
 activeEngine: ""
 title: 根因分析专家
 workspaceProfile:

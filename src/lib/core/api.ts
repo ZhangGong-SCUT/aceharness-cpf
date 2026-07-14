@@ -1828,8 +1828,14 @@ export const runsApi = {
     return response.json();
   },
 
-  async getStepOutput(id: string, stepName: string): Promise<{ stepName: string; content: string }> {
-    const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/outputs?step=${encodeURIComponent(stepName)}`);
+  async getStepOutput(id: string, stepName: string, options?: { outputRef?: string }): Promise<{ stepName: string; content: string }> {
+    const params = new URLSearchParams();
+    if (options?.outputRef) {
+      params.set('outputRef', options.outputRef);
+    } else {
+      params.set('step', stepName);
+    }
+    const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/outputs?${params.toString()}`);
     if (!response.ok) throw new Error('获取步骤输出失败');
     return response.json();
   },
@@ -2032,11 +2038,11 @@ export const workflowApi = {
     return response.json();
   },
 
-  async stop(configFile?: string): Promise<ApiResponse> {
+  async stop(configFile?: string, runId?: string): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/workflow/stop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ configFile }),
+      body: JSON.stringify({ configFile, runId }),
     });
     if (!response.ok) throw new Error('停止工作流失败');
     return response.json();

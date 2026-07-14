@@ -7242,6 +7242,8 @@ try {
     let accumulatedDuration = 0;
     let autoRecoveryAttempts = 0;
     let transientEngineRetryAttempts = 0;
+    let idleFeedbackRetryCount = 0;
+    const MAX_IDLE_FEEDBACK_RETRIES = 3;
     const accumulatedTokenUsage: TokenUsage = toPersistedTokenUsage(ZERO_ENGINE_USAGE);
 
     // Use state-prefixed step name so frontend stream polling matches persisted stream files
@@ -7383,6 +7385,22 @@ try {
           const isFeedbackOnly = this.feedbackInterrupt;
           this.interruptFlag = false;
           this.feedbackInterrupt = false;
+
+          // Circuit breaker: if idle-feedback retries exceed limit, force-accept current output
+          if (isFeedbackOnly) {
+            idleFeedbackRetryCount += 1;
+            if (idleFeedbackRetryCount > MAX_IDLE_FEEDBACK_RETRIES) {
+              this.emit('log', {
+                agent: runtimeAgentName,
+                level: 'warning',
+                message: `步骤 "${streamStepName}" 空闲反馈重试 ${idleFeedbackRetryCount - 1}/${MAX_IDLE_FEEDBACK_RETRIES} 次后仍未输出结论，强制接受当前输出`,
+              });
+              // Clear remaining feedback and break out of loop
+              this.liveFeedback = [];
+              break;
+            }
+          }
+
           const proc = processManager.getProcess(currentProcessId);
           if (proc?.streamContent) {
             flushProcessStream(proc.streamContent);
@@ -7532,6 +7550,9 @@ try {
       }
       if (transientEngineRetryAttempts > 0) {
         transientEngineRetryAttempts = 0;
+      }
+      if (idleFeedbackRetryCount > 0) {
+        idleFeedbackRetryCount = 0;
       }
       const roundOutput = result.result || '';
       const humanHelpRequests = this.parseHumanHelpRequests(roundOutput, config);

@@ -4931,6 +4931,10 @@ export default function WorkbenchPage({
     try {
       const detail = await runsApi.getRunDetail(runId);
       setRunDetail(detail);
+      // 同步把 detail.stepLogs 注入到持久化步骤记录，确保 web UI 在 history 模式下也能看到完整步骤
+      if (Array.isArray(detail?.stepLogs) && detail.stepLogs.length > 0) {
+        setPersistedStepLogs(detail.stepLogs as any[]);
+      }
     } catch {
       setRunDetail(null);
     }
@@ -5952,7 +5956,7 @@ export default function WorkbenchPage({
     const createdRunId = startupCreatedRunIdRef.current;
     if (createdRunId) {
       try {
-        await workflowApi.stop(configFile);
+        await workflowApi.stop(configFile, createdRunId);
         setRehearsalProgressSteps((prev) => [...prev, '已停止已创建的运行']);
       } catch (error: any) {
         setRehearsalProgressSteps((prev) => [...prev, `取消停止请求失败：${error?.message || '未知错误'}`]);
@@ -6098,7 +6102,7 @@ export default function WorkbenchPage({
       if (startupCancelRequestedRef.current) {
         if (startResult.runId) {
           try {
-            await workflowApi.stop(configFile);
+            await workflowApi.stop(configFile, startResult.runId);
             setRehearsalProgressSteps((prev) => [...prev, '启动已取消，已停止刚创建的运行']);
           } catch (error: any) {
             setRehearsalProgressSteps((prev) => [...prev, `启动已取消，但停止运行失败：${error?.message || '未知错误'}`]);
@@ -6158,7 +6162,7 @@ export default function WorkbenchPage({
 
   const stopWorkflow = useCallback(async () => {
     try {
-      const stopResult = await workflowApi.stop(configFile) as { runIds?: string[] };
+      const stopResult = await workflowApi.stop(configFile, runId || selectedRun?.id || initialRunId) as { runIds?: string[] };
       const stoppedAt = new Date().toISOString();
       const stoppedRunIds = new Set(
         (Array.isArray(stopResult.runIds) ? stopResult.runIds : [])
@@ -6794,6 +6798,7 @@ export default function WorkbenchPage({
     status: 'completed' | 'failed';
     output: string;
     error: string;
+    outputRef?: string;
   }) => {
     const resultKey = log.id || log.stepName;
     const result = stepResults[resultKey];
@@ -6801,6 +6806,17 @@ export default function WorkbenchPage({
     const rid = runId || selectedRun?.id;
 
     if (rid && log.status !== 'failed') {
+      // 1) 优先用 stepLog.outputRef 读取 step-logs/{stepName}-{uuid}.md
+      //    这是给开发者看的最终报告/输出（如"报告沉淀-生成诊断报告"步骤的 6 章节报告）。
+      if (log.outputRef) {
+        try {
+          const { content } = await runsApi.getStepOutput(rid, log.stepName, { outputRef: log.outputRef });
+          if (content) {
+            setMarkdownModal({ title: `${log.stepName} · 给开发者看的报告`, chunks: [content] });
+            return;
+          }
+        } catch { /* fall through to next strategy */ }
+      }
       try {
         const streamContent = await streamApi.getStreamContent(rid, fileName);
         if (streamContent) {
