@@ -2143,6 +2143,12 @@ try {
         status: 'completed',
         beforeSnapshotId,
       });
+      // BUGFIX: previously this used compactRuntimeOutputPreview(displayOutput) which
+      // truncated output to 12000 chars and embedded a "[已截断 N 字...]" notice into
+      // stepLogs.output. That truncated value was then written verbatim to
+      // outputs/step-logs/{step}-{id}.md by externalizeStepLogOutput, so opening
+      // "查看完整日志" showed the truncated report. We now keep the full displayOutput
+      // here (SSE consumers truncate further in compactStepLog via truncateLiveText).
       const compactLogOutput = compactRuntimeOutputPreview(displayOutput);
       // Record step log
       this.stepLogs.push({
@@ -2150,7 +2156,7 @@ try {
         stepName: step.name,
         agent: step.agent,
         status: 'completed',
-        output: compactLogOutput.output,
+        output: displayOutput,
         outputBytes: compactLogOutput.outputBytes,
         error: '',
         costUsd: jsonResult.cost_usd || 0,
@@ -2227,12 +2233,15 @@ try {
           status: 'completed',
           beforeSnapshotId,
         });
+        // BUGFIX: keep full displayOutput in stepLogs.output (SSE side truncates
+        // via compactStepLog→truncateLiveText). Previously the truncated preview
+        // was written to outputs/step-logs/{step}-{id}.md, breaking "查看完整日志".
         this.stepLogs.push({
           id: stepId,
           stepName: step.name,
           agent: step.agent,
           status: 'completed',
-          output: compactLogOutput.output,
+          output: displayOutput,
           outputBytes: compactLogOutput.outputBytes,
           error: '',
           costUsd: 0,

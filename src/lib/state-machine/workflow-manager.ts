@@ -6081,12 +6081,15 @@ try {
       beforeSnapshotId,
     });
     const compactLogOutput = compactRuntimeOutputPreview(output);
+    // BUGFIX: keep full output in stepLogs.output (SSE side truncates via
+    // compactStepLog→truncateLiveText). Previously the truncated preview was
+    // written to outputs/step-logs/{step}-{id}.md, breaking "查看完整日志".
     this.stepLogs.push({
       id: stepId,
       stepName: stepKey,
       agent: 'subworkflow',
       status: completed ? 'completed' : 'failed',
-      output: completed ? compactLogOutput.output : '',
+      output: completed ? output : '',
       outputBytes: completed ? compactLogOutput.outputBytes : undefined,
       error: completed ? '' : (errorMsg || finalSummary || finalStatus),
       costUsd: childCostUsd,
@@ -6350,13 +6353,16 @@ try {
         beforeSnapshotId,
       });
       const compactLogOutput = compactRuntimeOutputPreview(output);
+      // BUGFIX: keep full output in stepLogs.output (SSE side truncates via
+      // compactStepLog→truncateLiveText). Previously the truncated preview was
+      // written to outputs/step-logs/{step}-{id}.md, breaking "查看完整日志".
       // Record step log for persistence
       this.stepLogs.push({
         id: stepId,
         stepName: stepKey,
         agent: runtimeAgentName,
         status: 'completed',
-        output: compactLogOutput.output,
+        output: output,
         outputBytes: compactLogOutput.outputBytes,
         error: '',
         costUsd: stepResult.costUsd,

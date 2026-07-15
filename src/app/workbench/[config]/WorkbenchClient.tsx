@@ -12291,6 +12291,7 @@ export default function WorkbenchPage({
       }}>
         <DialogContent className={`p-0 flex flex-col gap-0 ${specCodingModalFullscreen ? 'max-w-none w-screen h-screen rounded-none' : 'max-w-5xl w-[90vw] h-[80vh]'}`}>
           <DialogTitle className="sr-only">SpecCoding 文件管理器</DialogTitle>
+          <DialogDescription className="sr-only">浏览、补全并同步 SpecCoding 文档，便于后续工作流按规范执行。</DialogDescription>
           {renderSpecCodingExplorer()}
         </DialogContent>
       </Dialog>
@@ -12309,6 +12310,7 @@ export default function WorkbenchPage({
           <DialogTitle className="sr-only">
             {designOptimizationTarget ? getDesignOptimizationDialogTitle(designOptimizationTarget) : 'AI 工作流优化'}
           </DialogTitle>
+          <DialogDescription className="sr-only">基于 AI 分析当前工作流结构并给出优化建议，支持选择优化目标后生成新版本候选。</DialogDescription>
           {designOptimizationTarget ? (
             <div className="flex h-full min-w-0 flex-col overflow-hidden">
               <div className="min-w-0 border-b px-6 py-4">
@@ -12606,6 +12608,7 @@ export default function WorkbenchPage({
       <Dialog open={!specCodingDisabled && !!specBindingReview} onOpenChange={(open) => !open && setSpecBindingReview(null)}>
         <DialogContent className="max-w-3xl w-[92vw] max-h-[85vh] overflow-hidden p-0">
           <DialogTitle className="sr-only">task 绑定检查</DialogTitle>
+          <DialogDescription className="sr-only">逐条核对任务与 Spec 节点的绑定关系，确认是否需要补绑、拆分或忽略。</DialogDescription>
           {specBindingReview ? (
             <div className="flex max-h-[85vh] flex-col">
               <div className="border-b px-6 py-4">
@@ -12709,6 +12712,7 @@ export default function WorkbenchPage({
         <DialogContent className="max-w-4xl w-[92vw] max-h-[85vh] overflow-hidden p-0">
           <ComboboxPortalProvider>
             <DialogTitle className="sr-only">工作流引擎与模型</DialogTitle>
+            <DialogDescription className="sr-only">选择工作流执行引擎、模型组合、并发与超时策略，以适配当前任务规模和资源。</DialogDescription>
             <div className="flex max-h-[85vh] flex-col">
               <div className="border-b px-6 py-4">
                 <div className="text-base font-semibold">工作流引擎与模型</div>
@@ -12886,9 +12890,9 @@ export default function WorkbenchPage({
         <DialogContent className="max-w-5xl w-[90vw] h-[80vh] p-0 flex flex-col gap-0">
           <div className="border-b px-4 py-3">
             <DialogTitle className="text-base font-semibold">合入 Master Spec</DialogTitle>
-            <div className="mt-1 text-xs text-muted-foreground">
+            <DialogDescription className="mt-1 text-xs text-muted-foreground">
               AI 会根据 Delta Spec 生成合并候选，确认前不会写入 master spec.md。
-            </div>
+            </DialogDescription>
           </div>
           <div className="flex-1 overflow-hidden p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -12961,9 +12965,9 @@ export default function WorkbenchPage({
             <div className="flex items-start justify-between gap-4">
               <div>
                 <DialogTitle className="text-base font-semibold">运行分析</DialogTitle>
-                <div className="mt-1 text-xs text-muted-foreground">
+                <DialogDescription className="mt-1 text-xs text-muted-foreground">
                   基于实际 step 输出、token 消耗、重试情况和会话复用情况做运行分析。
-                </div>
+                </DialogDescription>
               </div>
               {analysisSummary ? (
                 <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -13412,6 +13416,9 @@ export default function WorkbenchPage({
                 <span className="material-symbols-outlined text-primary">theater_comedy</span>
                 演练结果
               </DialogTitle>
+              <DialogDescription className="mt-1 text-sm text-muted-foreground">
+                演练模式下会列出 dry-run 结果，可选择继续、回到上下文补齐或放弃。
+              </DialogDescription>
             </div>
 
             <div className="flex-1 overflow-y-auto px-6 py-4">
@@ -13523,11 +13530,11 @@ export default function WorkbenchPage({
                 <span className="material-symbols-outlined text-primary">pending_actions</span>
                 {startupProgressMode === 'rehearsal' ? '演练进行中' : '正式启动中'}
               </DialogTitle>
-              <div className="mt-1 text-xs text-muted-foreground">
+              <DialogDescription className="mt-1 text-xs text-muted-foreground">
                 {startupProgressMode === 'rehearsal'
                   ? '正在执行演练模式，下面会显示当前启动与执行阶段。'
                   : '正在执行正式启动流程，下面会显示当前检查与启动阶段。'}
-              </div>
+              </DialogDescription>
             </div>
             <div className="px-6 py-4 space-y-3">
               {rehearsalProgressSteps.map((item, index) => (
