@@ -20,6 +20,10 @@
 | 2 | `GET` | `/api/workflow/status` | 查询工作流运行状态（含最终报告） |
 | 3 | `GET` | `/api/runs/{runId}/outputs` | 列出 / 读取某个 run 的步骤输出文件 |
 | 4 | `GET` | `/api/runs/{runId}/final-review` | 获取 Supervisor 最终评审报告（可选） |
+| 5 | `GET` | `/api/runs/{runId}/outputs?outputRef=...` | ⭐ 获取给开发者的完整诊断报告 |
+
+> **获取诊断报告的推荐方式**：先调用 #3（无参数）列出文件列表，从返回的 `files[].outputRef` 字段拿到报告路径，再用 `?outputRef=...` 参数读取完整内容。详见 [§3.1](#31-获取诊断报告完整版推荐)。
+
 
 ---
 
@@ -443,6 +447,127 @@ curl "http://127.0.0.1:3031/api/runs/run-.../outputs?outputRef=outputs/step-logs
 2. **`outputRef` 优先**：如果从 `status` 接口拿到了 `stepLogs[].outputRef`，直接用它读取最精确
 3. **内容无截断**：返回的 `content` 是完整文件内容，不受日志大小限制
 4. **文件格式**：优先 `.md`，找不到则尝试 `.txt`
+5. **⚠️ 中文文件名需 URL 编码**：步骤名含中文时，`outputRef` / `step` 参数值必须做 URL 编码（percent-encoding），否则会返回 404。curl 用 `--data-urlencode`，JS 用 `encodeURIComponent()`，Python `requests` 自动处理
+
+#### `step` vs `outputRef` 的关键区别
+
+| 参数 | 读取的文件 | 内容 | 适用场景 |
+|---|---|---|---|
+| `step={步骤名}` | `outputs/{safeStepName}.md` | **精简版**（只有 verdict 摘要） | 快速查看步骤结论 |
+| `outputRef=outputs/step-logs/{name}-{uuid}.md` | `outputs/step-logs/{name}-{uuid}.md` | **完整版**（全量输出） | ⭐ 获取给开发者的完整诊断报告 |
+
+> **获取完整诊断报告必须用 `outputRef` 参数**，不能用 `step` 参数。`step` 只返回精简版摘要。
+
+---
+
+### 3.1 获取诊断报告（完整版，推荐）
+
+工作流完成后，`diagnosis-reporter` Agent 会按 `skills/flutter-ohos-issue-analysis/references/report-template.md` 模板生成完整的诊断报告。该报告是**给开发者看的核心交付物**，包含问题概述、环境信息、复现步骤、根因结论、修复建议、验证建议六大章节。
+
+#### 获取流程（3 步）
+
+```bash
+RUN_ID="run-1784106341431-eab0725c"
+BASE="http://127.0.0.1:3031"
+
+# 步骤 1：列出所有输出文件，找到报告沉淀步骤的 outputRef
+curl -s "$BASE/api/runs/$RUN_ID/outputs" \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq '.files[] | select(.stepName | contains("报告沉淀")) | {stepName, filename, outputRef}'
+
+# 返回示例：
+# {
+#   "stepName": "报告沉淀-生成诊断报告",
+#   "filename": "报告沉淀-生成诊断报告-b5295855-c471-4f35-9987-a544ac89172f.md",
+#   "outputRef": "outputs/step-logs/报告沉淀-生成诊断报告-b5295855-c471-4f35-9987-a544ac89172f.md"
+# }
+
+# 步骤 2：用 outputRef 读取完整报告内容（注意 --data-urlencode 自动处理中文）
+curl -s "$BASE/api/runs/$RUN_ID/outputs" \
+  -G \
+  --data-urlencode "outputRef=outputs/step-logs/报告沉淀-生成诊断报告-b5295855-c471-4f35-9987-a544ac89172f.md" \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq -r '.content'
+
+# 步骤 3：保存到本地文件
+curl -s "$BASE/api/runs/$RUN_ID/outputs" \
+  -G \
+  --data-urlencode "outputRef=outputs/step-logs/报告沉淀-生成诊断报告-b5295855-c471-4f35-9987-a544ac89172f.md" \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq -r '.content' > 诊断报告.md
+```
+
+#### 响应示例
+
+```json
+{
+  "stepName": "outputs/step-logs/报告沉淀-生成诊断报告-b5295855-....md",
+  "content": "# 诊断报告\n\n## 问题概述\nPigeon 生成的 ArkTS API 在序列化 double 入参时...\n- **问题类型**: 功能\n- **问题层面**: 插件层\n- **优先级**: P1\n\n## 环境信息\n| 项 | 值 |\n...\n\n## 复现步骤\n1. ...\n\n## 根因结论\n...\n\n## 修复建议\n### 短期修复（Workaround）\n...\n### 根因修复\n...\n\n## 验证建议\n1. ...\n\n---\n```json\n{\"verdict\":\"pass\",\"summary\":\"...\"}\n```"
+}
+```
+
+#### 多语言调用示例
+
+**JavaScript / 前端**
+
+```javascript
+const runId = 'run-1784106341431-eab0725c';
+const outputRef = 'outputs/step-logs/报告沉淀-生成诊断报告-b5295855-c471-4f35-9987-a544ac89172f.md';
+
+// encodeURIComponent 自动编码中文
+const url = `http://127.0.0.1:3031/api/runs/${runId}/outputs?outputRef=${encodeURIComponent(outputRef)}`;
+
+const res = await fetch(url, {
+  headers: { 'Authorization': `Bearer ${token}` }
+});
+const data = await res.json();
+console.log(data.content);  // 完整 Markdown 报告
+```
+
+**Python**
+
+```python
+import requests
+
+run_id = 'run-1784106341431-eab0725c'
+output_ref = 'outputs/step-logs/报告沉淀-生成诊断报告-b5295855-c471-4f35-9987-a544ac89172f.md'
+
+res = requests.get(
+    f'http://127.0.0.1:3031/api/runs/{run_id}/outputs',
+    params={'outputRef': output_ref},  # requests 自动 URL 编码
+    headers={'Authorization': f'Bearer {token}'}
+)
+report_content = res.json()['content']
+```
+
+#### 报告文件结构
+
+诊断报告按 `report-template.md` 模板生成，包含以下章节：
+
+| 章节 | 内容 |
+|---|---|
+| `# 诊断报告` | 报告标题 |
+| `## 问题概述` | 问题类型 / 问题层面 / 优先级 |
+| `## 环境信息` | 仓库 / 分支 / Commit / 框架版本 / 设备型号 / 系统版本（缺失项标注"未提供"） |
+| `## 复现步骤` | 步骤列表 + 预期结果 + 实际结果 |
+| `## 根因结论` | 根因描述 + 置信度 + 证据链（confirmed / inferred / unverified 三级分级） |
+| `## 修复建议` | 短期修复（Workaround）+ 根因修复（含代码 before/after）+ 长期改进 |
+| `## 验证建议` | 可操作的验证步骤清单 |
+| 结尾 JSON | `{"verdict":"pass|conditional_pass|fail","summary":"...",...}` |
+
+#### ⚠️ 常见问题
+
+**Q：用 `step` 参数取到的内容不是完整报告？**
+
+A：`step` 参数读取的是 `outputs/{safeStepName}.md`（精简版），只有 verdict 摘要。完整报告在 `outputs/step-logs/{name}-{uuid}.md`，必须用 `outputRef` 参数读取。
+
+**Q：中文文件名导致 404？**
+
+A：`outputRef` 参数值含中文时必须做 URL 编码。curl 用 `-G --data-urlencode`，JS 用 `encodeURIComponent()`，Python `requests` 的 `params` 参数自动处理。直接拼 URL 传中文会导致 404。
+
+**Q：如何知道哪个文件是诊断报告？**
+
+A：先调用 `GET /api/runs/{runId}/outputs`（无参数）列出所有文件，找 `stepName` 包含 `"报告沉淀"` 或 `"生成诊断报告"` 的条目，取其 `outputRef` 字段。
 
 ---
 
@@ -531,13 +656,23 @@ while true; do
   sleep 5
 done
 
-# 步骤 3：获取最终报告
+# 步骤 3：获取 Supervisor 最终评审报告（含 Agent 评分、经验沉淀）
 curl -s "http://127.0.0.1:3031/api/workflow/status?runId=$RUN_ID" \
   -H "Authorization: Bearer $TOKEN" | jq '.finalReview'
 
-# 步骤 4：读取某个步骤的完整输出
-curl -s "http://127.0.0.1:3031/api/runs/$RUN_ID/outputs?step=collect-device-info" \
-  -H "Authorization: Bearer $TOKEN" | jq -r '.content'
+# 步骤 4：获取给开发者的完整诊断报告（按 report-template.md 模板生成）
+# 4a. 先列出输出文件，找到报告沉淀步骤的 outputRef
+REPORT_REF=$(curl -s "http://127.0.0.1:3031/api/runs/$RUN_ID/outputs" \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq -r '.files[] | select(.stepName | contains("报告沉淀")) | .outputRef' | head -1)
+
+# 4b. 用 outputRef 读取完整报告内容（--data-urlencode 自动处理中文文件名）
+curl -s "http://127.0.0.1:3031/api/runs/$RUN_ID/outputs" \
+  -G --data-urlencode "outputRef=$REPORT_REF" \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq -r '.content' > 诊断报告.md
+
+echo "诊断报告已保存到 诊断报告.md"
 ```
 
 ### 场景：SSE 实时监听
