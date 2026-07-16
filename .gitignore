@@ -46,7 +46,8 @@ vite.config.ts
 .ace-outputs/
 .aceharness/
 
-runs/
+# 运行时生成的 run 数据目录（不忽略 src/app/api/runs/ 源码）
+/runs/
 
 # check script outputs
 scripts/.check-batch-logs/

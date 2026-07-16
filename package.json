@@ -9,6 +9,7 @@
     "build": "npm run build:napi-cj && npm run build:cli && next build",
     "prune:package-maps": "node scripts/prune-package-maps.js",
     "clean": "node -e \"const fs=require('fs'); for (const p of ['dist','.next','dist-build']) fs.rmSync(p,{recursive:true,force:true});\"",
+    "sync:configs": "node -e \"const fs=require('fs'),path=require('path');const src='configs',dst=path.join(require('os').homedir(),'.aceharness','configs');if(!fs.existsSync(dst)){console.log('Runtime configs dir not found:',dst);process.exit(0);}function copy(s,d){for(const e of fs.readdirSync(s,{withFileTypes:true})){const sp=path.join(s,e.name),dp=path.join(d,e.name);if(e.isDirectory()){fs.mkdirSync(dp,{recursive:true});copy(sp,dp);}else if(/\\.(ya?ml|json)$/.test(e.name)){fs.copyFileSync(sp,dp);console.log('  synced:',e.name);}}}copy(src,dst);console.log('✅ Configs synced to',dst);\"",
     "start": "node --max-old-space-size=8192 server.js start",
     "lint": "eslint . --cache",
     "lint:fix": "eslint . --cache --fix",

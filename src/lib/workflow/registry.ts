@@ -125,7 +125,7 @@ class WorkflowRegistry extends EventEmitter {
     return this.createManagerOnce(input.configFile, expectedIsStateMachine, input.managerKey);
   }
 
-  private createManagerOnce(configFile: string, isSM: boolean, managerKey = this.topLevelManagerKey(configFile)): Promise<AnyWorkflowManager> {
+  private createManagerOnce(configFile: string, isSM: boolean | undefined, managerKey = this.topLevelManagerKey(configFile)): Promise<AnyWorkflowManager> {
     const pending = this.pendingManagerCreations.get(managerKey);
     if (pending) return pending;
 

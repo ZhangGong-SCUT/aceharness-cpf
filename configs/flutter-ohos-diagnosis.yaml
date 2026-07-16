@@ -271,13 +271,15 @@ workflow:
           agent: diagnosis-reporter
           role: defender
           task: |
-            收集全流程上下文，生成结构化诊断报告：
+            收集全流程上下文，生成结构化诊断报告。
+            【⚠️ 输出方式约束】你的最终输出内容（不是调用 write 工具，而是直接输出的文本）将被工作流引擎自动保存为 outputs/报告沉淀-生成诊断报告.md。因此你必须直接输出完整的诊断报告内容，不要只输出摘要或路径。
+            报告内容要求：
             1. 严格按标准模板生成报告，只输出模板中定义的章节（问题概述、环境信息、复现步骤、根因结论、修复建议、验证建议），不得增减章节
             2. 报告面向定位问题的开发者，语言简洁直接，避免元数据和工作流内部术语
             3. 报告中必须显式区分：已确认事实直接陈述；基于代码推断的写"推测"；未运行时验证的写"待验证"
             4. 如果 Issue 正文/评论/截图/日志缺失，在对应位置标注"未提供"，不得编造；报告不得给出"已验证解决"结论
-            5. 写入报告后，在最终输出末尾追加可解析 JSON：
-               `{"verdict":"pass|conditional_pass|fail","summary":"...","artifact_path":"outputs/...md","key_findings":[...],"report_path":"outputs/...md","verification_status":"verified|skipped|needs_runtime_validation","missing_evidence":[...]}`
+            5. 报告末尾追加可解析 JSON：
+               `{"verdict":"pass|conditional_pass|fail","summary":"...","key_findings":[...],"verification_status":"verified|skipped|needs_runtime_validation","missing_evidence":[...]}`
             参考 flutter-ohos-issue-analysis Skill 的 references/report-template.md 报告模板。
             输出不超过 2000 字。
       transitions:
@@ -307,11 +309,14 @@ workflow:
           role: defender
           task: |
             诊断流程完成，输出最终总结：
-            1. 诊断报告路径
+            1. 诊断报告路径（完整报告可通过 GET /api/runs/{runId}/step-logs?step=报告沉淀-生成诊断报告 获取）
             2. 根因结论摘要
             3. 修复建议摘要
             4. 后续行动建议
             5. 明确修复验证状态；如果前序报告标记为 skipped 或 needs_runtime_validation，不得表述为已解决。
+            6. 【磁盘清理】输出最终总结后，执行以下清理命令删除本次 run clone 的仓库目录以回收磁盘空间（诊断报告和状态已持久化到 ~/.aceharness/runs/，不受影响）：
+               rm -rf repo/
+               清理失败不影响诊断结论，在输出中标注清理结果即可。
             输出不超过 1000 字。
       transitions: []
 
@@ -328,6 +333,9 @@ workflow:
           role: defender
           task: |
             记录诊断终止原因和已有分析记录。
+            然后执行磁盘清理，删除本次 run clone 的仓库目录：
+            rm -rf repo/
+            清理失败不影响终止记录，在输出中标注清理结果即可。
             输出不超过 1000 字。
       transitions: []
 

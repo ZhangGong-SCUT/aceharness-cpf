@@ -39,7 +39,7 @@ export async function GET(
       }
 
       // Return content of a specific step's output
-      const safeName = stepName.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
+      const safeName = (stepName || '').replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
       // Try .md first, then .txt
       let content = '';
       try {

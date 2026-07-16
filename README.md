@@ -39,6 +39,7 @@ ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。�
 - [产品全景](#产品全景)
 - [一人公司模式](#一人公司模式)
 - [快速开始](#快速开始)
+- [部署到公网域名（Cloudflare Tunnel）](#部署到公网域名cloudflare-tunnel)
 - [核心机制](#核心机制)
 - [系统架构](#系统架构)
 - [产品界面](#产品界面)
@@ -131,6 +132,242 @@ ace update beta  # 更新到指定 npm tag 或版本号，例如 beta / release 
 ```
 
 启动向导支持直接开启后台运行；如同时启用守护进程，ACE 会以 daemon 模式托管后台服务，并在异常退出后自动拉起。执行 `ace update` 时会检查这些受管的 ACE 实例；交互模式下可选择停止后更新、继续更新但不停止，或取消更新。脚本中可用 `ace update --stop-running` 先停止运行中的实例，或用 `ace update --force` 在实例仍运行时继续安装，运行中的服务重启后才会使用新版本。
+
+---
+
+## 部署到公网域名（Cloudflare Tunnel）
+
+通过 Cloudflare Tunnel（cloudflared）可以将本地运行的 ACEHarness 服务安全地暴露到公网域名，无需公网 IP、无需端口转发、无需修改防火墙。以下是完整步骤。
+
+### 前置条件
+
+- 一个域名（如 `cpf-manager.xyz`），DNS 已托管到 Cloudflare
+- 本地已安装 `cloudflared` CLI
+- ACEHarness 服务已在本地正常运行
+
+### 步骤 1：安装 cloudflared
+
+```bash
+# macOS
+brew install cloudflared
+
+# 验证
+cloudflared --version
+```
+
+### 步骤 2：登录 Cloudflare 并创建 Tunnel
+
+```bash
+# 登录（会打开浏览器授权）
+cloudflared tunnel login
+
+# 创建一个 tunnel
+cloudflared tunnel create aceharness
+# 输出示例：
+# Created tunnel aceharness with id 769ef0ee-a101-4f38-b384-cb5642d47bf2
+# Credentials written to /Users/<user>/.cloudflared/769ef0ee-xxxx.json
+```
+
+### 步骤 3：配置 DNS 路由
+
+```bash
+# 将域名 DNS CNAME 指向 tunnel ID
+cloudflared tunnel route dns aceharness cpf-manager.xyz
+```
+
+这会自动在 Cloudflare DNS 添加一条 CNAME 记录：`cpf-manager.xyz → 769ef0ee-xxxx.cfargotunnel.com`。
+
+### 步骤 4：编写 config.yml
+
+创建 `~/.cloudflared/config.yml`：
+
+```yaml
+tunnel: <你的-tunnel-id>
+credentials-file: /Users/<user>/.cloudflared/<tunnel-id>.json
+
+# 中国网络环境推荐使用 http2 协议（QUIC/UDP 可能被 GFW 阻断）
+protocol: http2
+
+ingress:
+  - hostname: cpf-manager.xyz
+    service: http://localhost:3031
+  - service: http_status:404
+```
+
+> **端口说明**：`service` 中的端口必须与 ACEHarness 实际监听端口一致。ACEHarness 默认监听 3000，可通过 `ACE_PORT` 环境变量修改（见步骤 5）。
+
+### 步骤 5：启动 ACEHarness 服务
+
+```bash
+cd /path/to/ACEHarness
+
+# 开发模式（dev）：热编译，适合调试，但长期运行会 OOM
+nohup env ACE_PORT=3031 npm run dev > /tmp/aceharness.log 2>&1 &
+
+# 生产模式（推荐长期运行）：先 build 再 start
+npm run build
+nohup env ACE_PORT=3031 npm start > /tmp/aceharness.log 2>&1 &
+
+# 验证本地服务
+curl -s -o /dev/null -w "HTTP %{http_code}\n" http://127.0.0.1:3031/
+# → HTTP 200
+```
+
+> ⚠️ **端口冲突注意**：如果 3000 端口被其他服务占用，务必通过 `ACE_PORT=3031` 指定端口。不要使用 `env -C`（macOS 不支持）或 `PORT=`（可能被覆盖），统一用 `ACE_PORT`。
+
+### 步骤 6：启动 cloudflared
+
+```bash
+nohup cloudflared tunnel run > ~/.cloudflared/cloudflared.log 2>&1 &
+
+# 验证 tunnel 连接
+cloudflared tunnel info <tunnel-id>
+# 应显示 4 条 connection（connIndex=0~3），location 为最近的 edge 节点
+```
+
+### 步骤 7：验证公网访问
+
+```bash
+# 直接访问（如果本地网络可直连 Cloudflare）
+curl -sI https://cpf-manager.xyz/
+
+# 中国网络环境可能需要走代理
+curl -sk -o /dev/null -w "HTTP %{http_code} | TTFB=%{time_starttransfer}s\n" \
+  --proxy http://127.0.0.1:7890 https://cpf-manager.xyz/
+# → HTTP 200 | TTFB=0.8s
+```
+
+浏览器打开 `https://cpf-manager.xyz` 即可访问 ACEHarness。
+
+### 常见问题排查
+
+#### 问题 1：公网返回 HTTP 530（Origin Error）
+
+**原因**：cloudflared 连不上本地 origin 服务。
+
+```bash
+# 检查 ACEHarness 是否在运行
+ps aux | grep "[n]ode.*server.js"
+lsof -iTCP:3031 -sTCP:LISTEN
+
+# 检查 cloudflared 日志
+tail -20 ~/.cloudflared/cloudflared.log
+# 如果看到 "dial tcp [::1]:3031: connect: connection refused"
+# 说明 ACEHarness 进程挂了或端口不对
+```
+
+**修复**：重启 ACEHarness 服务（见步骤 5）。
+
+#### 问题 2：Next.js dev lock 冲突
+
+**原因**：多个 dev 实例同时启动，`.next/dev/lock` 被占用。
+
+```bash
+# 错误信息：
+# ⨯ Unable to acquire lock at .next/dev/lock, is another instance of next dev running?
+
+# 修复：杀掉所有残留进程 + 删除 lock
+pkill -9 -f "node.*server.js"
+rm -f .next/dev/lock
+
+# 重新启动
+nohup env ACE_PORT=3031 npm run dev > /tmp/aceharness.log 2>&1 &
+```
+
+#### 问题 3：dev 模式 OOM 崩溃
+
+**原因**：dev 模式下 Next.js 热编译 + 多个 opencode-sdk session 并发，内存持续增长直到被系统 OOM killer 杀掉。
+
+```bash
+# 日志中的警告：
+# ⚠ 正在以 DEV（开发）模式运行 —— 长期运行内存会持续增长直至 OOM，请勿用于部署。
+
+# 修复：长期运行改用 production 模式
+npm run build
+nohup env ACE_PORT=3031 npm start > /tmp/aceharness.log 2>&1 &
+```
+
+#### 问题 4：QUIC 协议被 GFW 阻断
+
+**原因**：cloudflared 默认使用 QUIC（UDP 7844），在中国网络环境可能被阻断。
+
+**修复**：在 `config.yml` 中强制使用 `http2` 协议：
+
+```yaml
+protocol: http2  # 走 TCP，不依赖 QUIC/UDP
+```
+
+#### 问题 5：DNS 未生效
+
+**原因**：域名 NS 未指向 Cloudflare，或 DNS 记录未传播。
+
+```bash
+# 检查 NS 是否指向 Cloudflare
+dig +short cpf-manager.xyz NS
+# 应返回 *.ns.cloudflare.com
+
+# 检查 A 记录
+dig +short cpf-manager.xyz A
+# 应返回 Cloudflare 的 anycast IP（104.x.x.x 或 172.67.x.x）
+
+# 多 DNS 服务器检查传播情况
+for d in 8.8.8.8 1.1.1.1 114.114.114.114 223.5.5.5; do
+  echo "--- $d ---"
+  dig +short cpf-manager.xyz NS @$d
+done
+```
+
+如果 NS 未指向 Cloudflare，需要到域名注册商（如腾讯云）修改 NS 为 Cloudflare 分配的 NS 服务器。
+
+### 一键重启脚本
+
+将以下脚本保存为 `scripts/restart-service.sh`，方便快速重启：
+
+```bash
+#!/bin/bash
+# ACEHarness + Cloudflare Tunnel 一键重启脚本
+
+export PATH="/Applications/DevEco-Studio.app/Contents/tools/node/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+cd /Users/hyh/Desktop/FlutterProject/ACEHarness
+
+PORT=3031
+TUNNEL_ID="769ef0ee-a101-4f38-b384-cb5642d47bf2"
+
+echo "=== 1. 停止旧进程 ==="
+pkill -9 -f "node.*server.js" 2>/dev/null
+pkill -f "cloudflared" 2>/dev/null
+sleep 2
+
+echo "=== 2. 清理 lock ==="
+rm -f .next/dev/lock
+
+echo "=== 3. 启动 ACEHarness (port $PORT) ==="
+nohup env "PATH=$PATH" ACE_PORT=$PORT npm run dev > /tmp/aceharness.log 2>&1 &
+echo "  ACEHarness PID: $!"
+sleep 15
+
+echo "=== 4. 启动 cloudflared ==="
+nohup cloudflared tunnel run > ~/.cloudflared/cloudflared.log 2>&1 &
+echo "  cloudflared PID: $!"
+sleep 5
+
+echo "=== 5. 验证 ==="
+curl -s -o /dev/null -w "  本地: HTTP %{http_code}\n" http://127.0.0.1:$PORT/
+curl -sk -o /dev/null -w "  公网: HTTP %{http_code}\n" --proxy http://127.0.0.1:7890 https://cpf-manager.xyz/
+
+echo "=== 完成 ==="
+echo "  访问地址: https://cpf-manager.xyz"
+```
+
+### Cloudflare 免费额度说明
+
+- **Cloudflare Tunnel**：完全免费，无流量限制、无请求数限制
+- **DNS / SSL / CDN / DDoS 防护**：免费
+- **Zero Trust 用户**：免费 50 个用户
+- **Tunnel 连接数**：每个 tunnel 最多 4 条并发连接（足够个人/小团队使用）
+- **请求 body 限制**：100 MB
+
+> 中国跨境访问 Cloudflare 的固有延迟约 500-1000ms（TTFB），这是网络物理距离决定的，非配置问题。如需加速可考虑 Cloudflare Argo Smart Routing（$5/月）或部署到国内服务器。
 
 ---
 
