@@ -40,6 +40,7 @@ ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。�
 - [一人公司模式](#一人公司模式)
 - [快速开始](#快速开始)
 - [部署到公网域名（Cloudflare Tunnel）](#部署到公网域名cloudflare-tunnel)
+  - [Windows 部署指南（最简版）](./docs/deploy-windows-guide.md)
 - [核心机制](#核心机制)
 - [系统架构](#系统架构)
 - [产品界面](#产品界面)
@@ -368,6 +369,162 @@ echo "  访问地址: https://cpf-manager.xyz"
 - **请求 body 限制**：100 MB
 
 > 中国跨境访问 Cloudflare 的固有延迟约 500-1000ms（TTFB），这是网络物理距离决定的，非配置问题。如需加速可考虑 Cloudflare Argo Smart Routing（$5/月）或部署到国内服务器。
+
+---
+
+## 跨平台部署（macOS ⇄ Windows 切换）
+
+> **本节配套 3 个文件**（仓库已自带）：
+> - `ecosystem.config.cjs` — PM2 配置，平台自动分流
+> - `scripts/deploy-windows.ps1` — Windows 一键部署脚本
+> - `scripts/switch-tunnel.sh` — Mac/Linux 一键切换 DNS 指向的 tunnel
+
+### 场景
+
+开发机在 Mac、生产机在 Windows（或反过来）。两台机器都装了 cloudflared、都创建了 tunnel，但**同一时间只能让一台对外提供服务**——否则请求会被随机分配到不同机器，体验分裂。
+
+### 架构原理
+
+```
+用户浏览器
+   ↓ https://cpf-manager.xyz
+Cloudflare 边缘节点（自动选最近）
+   ↓ CNAME 解析
+Tunnel A（Mac 临时）  ←  当前 DNS 指向这台
+Tunnel B（Windows 生产）
+   ↓ http://localhost:3031
+ACEHarness (Next.js + server.js)
+```
+
+**核心原则**：DNS CNAME 一次只指向一个 tunnel。要切换时，执行 `switch-tunnel.sh` 即可。
+
+### 仓库内置部署工具
+
+#### 1. `ecosystem.config.cjs`（PM2 配置，跨平台）
+
+| 平台 | Node 解释器 | cloudflared 路径 | 备注 |
+|------|------------|------------------|------|
+| macOS | `/Users/hyh/node22/bin/node` | `/opt/homebrew/bin/cloudflared` | 强制 Node 22（DevEco 自带 18 太老）|
+| Windows | `node`（系统 PATH） | `%USERPROFILE%\cloudflared.exe` | 用 `winget install Cloudflare.cloudflared` |
+
+**关键设计**：
+- `exec_mode: 'fork'`：server.js 不是 cluster 安全的
+- `max_memory_restart: '2G'`：超过 2G 自动重启（防 OOM 静默死亡）
+- 完整 `PATH` 注入 opencode / hdc / adb 等子命令
+- 日志统一输出到 `logs/aceharness-*.log` 和 `logs/cloudflared-*.log`
+
+#### 2. `scripts/deploy-windows.ps1`（Windows 一键部署）
+
+在 Windows PowerShell 里执行 `.\scripts\deploy-windows.ps1`，会自动：
+1. ✅ 检查 Node 20.9+ / PM2 / cloudflared
+2. ✅ `npm ci` + `npm run build`
+3. ✅ 创建日志目录
+4. ✅ `cloudflared tunnel login`（首次需要浏览器授权）
+5. ✅ 创建或复用名为 `aceharness` 的 tunnel
+6. ✅ 生成 `~/.cloudflared/config.yml`
+7. ✅ `pm2 start ecosystem.config.cjs && pm2 save`
+8. ✅ 端到端验证本地 + 公网
+
+#### 3. `scripts/switch-tunnel.sh`（DNS 切换，Mac/Linux）
+
+```bash
+# 列出所有 tunnel
+./scripts/switch-tunnel.sh
+
+# 把 cpf-manager.xyz 切到指定 tunnel
+./scripts/switch-tunnel.sh 24341696-3a8f-47dd-8737-933ff80f4801
+```
+
+内部调用 Cloudflare API 的 PATCH `/dns_records/{id}`，5 秒内全球生效。
+
+### 完整工作流：Mac 验证 → Windows 生产
+
+#### Phase 1：Mac 临时验证（当前）
+
+```bash
+# Mac 端
+cd /Users/hyh/Desktop/FlutterProject/ACEHarness
+npm run build
+pm2 start ecosystem.config.cjs
+pm2 save
+./scripts/switch-tunnel.sh $(cloudflared tunnel list | grep aceharness-mac | awk '{print $1}')
+```
+
+公网验证：`https://cpf-manager.xyz` 返回 200。
+
+#### Phase 2：切到 Windows 机器
+
+```powershell
+# Windows 端（PowerShell）
+cd C:\path\to\ACEHarness
+.\scripts\deploy-windows.ps1
+```
+
+部署完成后在 Windows 上看到本机 tunnel id（`xxxx-yyyy-...`）。
+
+#### Phase 3：DNS 切到 Windows tunnel
+
+**二选一**：
+
+```bash
+# 在 Mac 上（推荐：Mac 仍是开发主控机）
+./scripts/switch-tunnel.sh <windows-tunnel-id>
+
+# 或在 Windows 上
+.\scripts\switch-tunnel.ps1 <windows-tunnel-id>
+```
+
+#### Phase 4：清理 Mac 端（可选）
+
+```bash
+# Mac 端
+pm2 delete all
+cloudflared tunnel delete aceharness-mac
+```
+
+### 多 tunnel 共存时的注意事项
+
+| 现象 | 原因 | 解决 |
+|------|------|------|
+| 公网访问随机失败 | DNS 指向的 tunnel 在那台机器没运行 | `switch-tunnel.sh` 切到正在运行的 tunnel |
+| `cpf-manager.xyz` 解析到 `104.21.x.x` | Proxied CNAME 被 Cloudflare 隐藏链 | 正常现象，看不到中间 cfargotunnel 链 |
+| Dashboard 看不到 A 记录 | CF 把 Proxied CNAME 当 A 记录存 | 用 API 列：`curl -H "Authorization: Bearer $TOKEN" .../dns_records` |
+| 多台机器 tunnel 名冲突 | Cloudflare 同一账号下 tunnel 名唯一 | 用机器后缀：`aceharness-mac` / `aceharness-win` |
+
+### 开机自启
+
+#### macOS
+
+```bash
+pm2 startup
+# 会输出类似：sudo env PATH=... pm2 startup launchd -u hyh --hp /Users/hyh
+# 把那行命令复制执行一次即可
+pm2 save
+```
+
+#### Windows（推荐 NSSM）
+
+```powershell
+# 安装 nssm
+choco install nssm
+
+# 把 pm2 注册成 Windows 服务
+nssm install ACEHarness-PM2 "C:\Program Files\nodejs\node.exe" "C:\Users\<user>\.npm-global\node_modules\pm2\bin\pm2" " resurrect"
+nssm set ACEHarness-PM2 AppDirectory "C:\path\to\ACEHarness"
+nssm start ACEHarness-PM2
+```
+
+> ⚠️ 简单场景也可以用 `pm2-startup`（`npm i -g pm2-windows-startup && pm2-startup install`），但稳定性不如 NSSM。
+
+### 跨平台同步 checklist
+
+- [ ] Mac 和 Windows 都装了 Node 20.9+
+- [ ] 两边都 `npm ci && npm run build`
+- [ ] 两边 `cloudflared tunnel list` 能看到自己的 tunnel
+- [ ] 同一时间只让一台机器的 PM2 跑 `aceharness + cloudflared`
+- [ ] DNS 切到正在跑的那台的 tunnel id
+- [ ] 不跑的那台可以保留 tunnel（备用），但 PM2 进程关掉
+- [ ] 代码改动通过 git push/pull 同步，不要直接拷贝 `.next` 目录
 
 ---
 
