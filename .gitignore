@@ -25,6 +25,9 @@ yarn-debug.log*
 yarn-error.log*
 .eslintcache
 
+# runtime logs (PM2 / cloudflared)
+logs/
+
 # local env files
 .env
 .env*.local

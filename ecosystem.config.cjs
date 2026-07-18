@@ -36,7 +36,13 @@ const nodeInterpreter = isWin
   : '/Users/hyh/node22/bin/node';           // macOS：DevEco 自带 Node 18 太老，强制用 22
 
 const cloudflaredBin = isWin
-  ? path.join(home, 'cloudflared.exe')       // Windows 手动安装的位置
+  ? (process.env.PATH.split(';')
+        .map(p => path.join(p, 'cloudflared.exe'))
+        .find(p => {
+          try { return require('fs').existsSync(p); } catch { return false; }
+        })
+     || path.join(home, 'cloudflared.exe')        // 回退：手动下载放用户目录
+     || 'cloudflared')                             // 最终回退：交给 PATH 解析
   : '/opt/homebrew/bin/cloudflared';        // macOS brew 安装位置
 
 // opencode SDK 路径（ACE 引擎依赖，PM2 进程里必须能找到）

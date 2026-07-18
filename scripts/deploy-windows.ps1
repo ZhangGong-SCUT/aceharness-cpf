@@ -1,4 +1,4 @@
-<#
+﻿<#
   ACEHarness Windows 部署脚本（PowerShell）
 
   用途：把 Mac 上验证过的整套配置一键复制到 Windows
@@ -41,6 +41,50 @@ function Step($msg)  { Write-Host "`n==[ $($msg) ]==" -ForegroundColor Cyan }
 function Ok($msg)    { Write-Host "  ✓ $msg" -ForegroundColor Green }
 function Warn($msg)  { Write-Host "  ! $msg" -ForegroundColor Yellow }
 function Fail($msg)  { Write-Host "  ✗ $msg" -ForegroundColor Red; exit 1 }
+
+# 安全执行原生命令：在 $ErrorActionPreference = 'Stop' 下，
+# 原生命令写 stderr 会被包装成 NativeCommandError 异常抛出。
+# 本函数临时放宽策略，把 stdout+stderr 合并收集，返回对象：
+#   { Output: [string], ExitCode: [int] }
+# 调用方按需判断 $LASTEXITCODE / 输出内容，避免脚本意外终止。
+#
+# 实现说明：用 cmd /c 包装，而不是 PowerShell 的 & 调用 + splatting。
+# 原因：npm 在 Windows 上安装的命令（pm2 / cloudflared 等）是 .ps1 shim，
+# 用 & $cmd @args 调用 .ps1 shim 时，splatting 数组会被当成单个位置参数，
+# 导致 shim 内部 $args 解析错位，pm2 报 [PM2][ERROR] Command not found。
+# 走 cmd /c 能保证参数解析和命令行直接敲一致。
+function Invoke-NativeSafe {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [string[]]$ArgumentList,
+        [string]$WorkingDirectory
+    )
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        # 对每个参数做 cmd 安全的引号包装：含空格或特殊字符的用双引号包住，
+        # 内部双引号转义为 ""。简单参数原样传递。
+        $quoted = $ArgumentList | ForEach-Object {
+            if ($_ -match '\s|["<>|&^()]') { '"' + ($_ -replace '"', '""') + '"' } else { $_ }
+        }
+        $cmdLine = $quoted -join ' '
+        $out = if ($WorkingDirectory) {
+            Push-Location $WorkingDirectory
+            try { & cmd /c $cmdLine 2>&1 } finally { Pop-Location }
+        } else {
+            & cmd /c $cmdLine 2>&1
+        }
+        $code = $LASTEXITCODE
+        if ($null -eq $code) { $code = 0 }
+    } catch {
+        $out = $_.Exception.Message
+        $code = 1
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+    [pscustomobject]@{ Output = ($out -join "`n"); ExitCode = $code }
+}
 
 # ────────────────────────────────────────────────────────────
 # Step 1: 基础环境检查
@@ -129,17 +173,32 @@ if (-not (Test-Path "$CloudflaredDir\cert.pem")) {
 # ────────────────────────────────────────────────────────────
 Step "6/8 Tunnel 准备（名称: $WinTunnelName）"
 
-# 列出已有 tunnel
-$existing = & cloudflared tunnel list 2>&1
-$hasIt = $existing | Select-String -Pattern "^\S+\s+$WinTunnelName\s"
+# 列出已有 tunnel（用 Invoke-NativeSafe 避免 stderr 触发 NativeCommandError）
+$listResult = Invoke-NativeSafe @('cloudflared', 'tunnel', 'list')
+if ($listResult.ExitCode -ne 0) {
+    Fail "cloudflared tunnel list 失败：$($listResult.Output)"
+}
+$existing = $listResult.Output -split "`n"
 
-if ($hasIt) {
-    Ok "Tunnel '$WinTunnelName' 已存在，复用"
-    $tunnelId = ($existing | Select-String -Pattern "^\S+\s+$WinTunnelName\s" | ForEach-Object { ($_ -split '\s+')[0] })
+# 匹配形如「<uuid> aceharness  ...」的行，注意要避免误匹配 aceharness-mac
+# 用 \s 作为 NAME 列的右边界，确保精确匹配 tunnel 名
+$matchLine = $existing | Where-Object { $_ -match "^\S+\s+$([regex]::Escape($WinTunnelName))\s" }
+
+if ($matchLine) {
+    $tunnelId = ($matchLine -split '\s+')[0]
+    Ok "Tunnel '$WinTunnelName' 已存在，复用，ID: $tunnelId"
 } else {
-    cloudflared tunnel create $WinTunnelName
-    if ($LASTEXITCODE -ne 0) { Fail "tunnel 创建失败" }
-    $tunnelId = (& cloudflared tunnel list | Select-String -Pattern "^\S+\s+$WinTunnelName\s" | ForEach-Object { ($_ -split '\s+')[0] })
+    $createResult = Invoke-NativeSafe @('cloudflared', 'tunnel', 'create', $WinTunnelName)
+    if ($createResult.ExitCode -ne 0) {
+        Fail "tunnel 创建失败：$($createResult.Output)"
+    }
+    # 重新 list 拿 id
+    $relist = Invoke-NativeSafe @('cloudflared', 'tunnel', 'list')
+    $relistLines = $relist.Output -split "`n"
+    $tunnelId = ($relistLines | Where-Object { $_ -match "^\S+\s+$([regex]::Escape($WinTunnelName))\s" } | ForEach-Object { ($_ -split '\s+')[0] })
+    if (-not $tunnelId) {
+        Fail "tunnel 创建后未能从 list 中解析出 ID，请手动检查：cloudflared tunnel list"
+    }
     Ok "Tunnel 创建成功: $tunnelId"
 }
 
@@ -152,7 +211,15 @@ credentials-file: $CloudflaredDir\$tunnelId.json
 # GFW 阻断 UDP/QUIC，强制走 HTTP/2 over TCP
 protocol: http2
 
-# 优化：边缘连接复用
+# 日志：warn 级别减少 IO 开销（info 日志量大，长期运行影响性能）
+loglevel: warn
+transport-loglevel: warn
+
+# 连接重试与优雅关闭
+retries: 5                    # 连接失败重试次数（默认 5，显式声明）
+grace-period: 30s             # 重启时给 30s 完成现有请求，避免中断
+
+# 全局 origin 请求优化
 originRequest:
   connectTimeout: 10s
   tlsTimeout: 10s
@@ -160,21 +227,32 @@ originRequest:
   keepAliveConnections: 100
   keepAliveTimeout: 90s
   http2Origin: true
+  noTLSVerify: true           # origin 是本地 localhost，跳过 TLS 校验开销
+  noHappyEyeballs: true       # 国内服务器 IPv6 路由常异常，禁用避免回源超时
 
 ingress:
   - hostname: $Domain
     service: http://localhost:$Port
+    originRequest:
+      connectTimeout: 10s
+      keepAliveConnections: 100
+      keepAliveTimeout: 90s
+      http2Origin: true
   - service: http_status:404
 "@
 Set-Content -Path $configPath -Value $configContent -Encoding UTF8
 Ok "config.yml 已写入 $configPath"
 
 # 绑定 DNS（如果之前没绑）
-$routeExists = & cloudflared tunnel route dns $WinTunnelName $Domain 2>&1
-if ($LASTEXITCODE -eq 0) {
+# cloudflared 在记录已存在时会写 stderr（code: 1003 ... already exists），
+# 用 Invoke-NativeSafe 捕获，识别为良性情况。
+$route = Invoke-NativeSafe @('cloudflared', 'tunnel', 'route', 'dns', $WinTunnelName, $Domain)
+if ($route.ExitCode -eq 0) {
     Ok "DNS route 已创建"
+} elseif ($route.Output -match 'already exists|code: 1003') {
+    Warn "DNS 记录已存在，跳过（正常情况）：$Domain"
 } else {
-    Warn "DNS route 失败（可能已存在）：$routeExists"
+    Warn "DNS route 失败：$($route.Output)"
 }
 
 # ────────────────────────────────────────────────────────────
@@ -182,10 +260,24 @@ if ($LASTEXITCODE -eq 0) {
 # ────────────────────────────────────────────────────────────
 Step "7/8 启动 PM2"
 # 平台分流：ecosystem.config.cjs 已自动判断 Windows
-pm2 delete all 2>&1 | Out-Null
-pm2 start "$ProjectDir\ecosystem.config.cjs" 2>&1 | Out-Null
-pm2 save
+# pm2 delete all 在无进程时会写 stderr 警告 [PM2][WARN] No process found，
+# 用 Invoke-NativeSafe 吞掉，避免 NativeCommandError 中断脚本。
+$del = Invoke-NativeSafe @('pm2', 'delete', 'all')
+if ($del.ExitCode -ne 0 -and $del.Output -notmatch 'No process found') {
+    Warn "pm2 delete all 输出：$($del.Output)"
+}
+
+$start = Invoke-NativeSafe @('pm2', 'start', "$ProjectDir\ecosystem.config.cjs")
+if ($start.ExitCode -ne 0) {
+    Fail "pm2 start 失败：$($start.Output)"
+}
 Ok "PM2 启动完成"
+
+$save = Invoke-NativeSafe @('pm2', 'save')
+if ($save.ExitCode -ne 0) {
+    Warn "pm2 save 输出：$($save.Output)"
+}
+
 pm2 list
 
 # ────────────────────────────────────────────────────────────
