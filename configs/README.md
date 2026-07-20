@@ -6,7 +6,7 @@
 
 ### 0. 鸿蒙跨平台框架问题 AI 自动诊断工作流 ★
 
-**文件**: `flutter-ohos-diagnosis.yaml`
+**文件**: `cpf-ohos-diagnosis.yaml`
 
 **描述**: 面向 OHOS 跨平台框架（Flutter-OHOS / React Native-OHOS / KMP-CMP 等）鸿蒙化场景的问题诊断与解决
 
@@ -22,9 +22,9 @@
 
 **适用场景**: 鸿蒙跨平台框架问题诊断、Crash 分析、内存泄漏排查、渲染问题定位
 
-**关联 Skill**: `flutter-ohos-issue-analysis`
+**关联 Skill**: `cpf-ohos-issue-analysis`
 
-**详细文档**: [docs/flutter-ohos-diagnosis-workflow.md](../docs/flutter-ohos-diagnosis-workflow.md)
+**详细文档**: [docs/cpf-ohos-diagnosis-workflow.md](../docs/cpf-ohos-diagnosis-workflow.md)
 
 ---
 

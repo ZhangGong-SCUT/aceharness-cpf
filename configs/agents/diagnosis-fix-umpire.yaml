@@ -16,7 +16,7 @@ capabilities:
   - 修复质量评分
   - 收敛判断
 skills:
-  - flutter-ohos-issue-analysis
+  - cpf-ohos-issue-analysis
 systemPrompt: |
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
 

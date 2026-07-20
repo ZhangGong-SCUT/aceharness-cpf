@@ -27,8 +27,8 @@ export WEBHOOK_SECRET="your-webhook-secret"
 # GitCode API token（用于回写评论，需要 issues:write 权限）
 export GITCODE_ACCESS_TOKEN="your-gitcode-access-token"
 
-# 工作流配置文件（默认 flutter-ohos-diagnosis.yaml）
-export WEBHOOK_CONFIG_FILE="flutter-ohos-diagnosis.yaml"
+# 工作流配置文件（默认 cpf-ohos-diagnosis.yaml）
+export WEBHOOK_CONFIG_FILE="cpf-ohos-diagnosis.yaml"
 
 # 默认用户 ID（可选，不设则自动选择第一个用户）
 export WEBHOOK_DEFAULT_USER_ID=""
@@ -39,7 +39,7 @@ export WEBHOOK_DEFAULT_USER_ID=""
 ```env
 WEBHOOK_SECRET=your-webhook-secret
 GITCODE_ACCESS_TOKEN=your-gitcode-access-token
-WEBHOOK_CONFIG_FILE=flutter-ohos-diagnosis.yaml
+WEBHOOK_CONFIG_FILE=cpf-ohos-diagnosis.yaml
 WEBHOOK_DEFAULT_USER_ID=
 ```
 
@@ -105,7 +105,7 @@ curl http://127.0.0.1:3000/api/webhook/gitcode
   "config": {
     "webhookSecret": "已配置",
     "gitcodeToken": "已配置",
-    "configFile": "flutter-ohos-diagnosis.yaml",
+    "configFile": "cpf-ohos-diagnosis.yaml",
     "defaultUserId": "自动选择第一个用户"
   }
 }

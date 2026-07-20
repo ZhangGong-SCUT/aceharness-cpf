@@ -61,7 +61,7 @@ workflow:
                - 如果没有找到 merge commit（Issue 时间太早或仓库历史不足）：保持当前 HEAD，记录 warning
             10. 验证当前 HEAD 状态：git -C repo/ log --oneline -1
             11. 列出关键文件路径
-            参考 flutter-ohos-issue-analysis Skill 的 references/issue-content-collection.md 获取 Issue 内容采集的详细指导。
+            参考 cpf-ohos-issue-analysis Skill 的 references/issue-content-collection.md 获取 Issue 内容采集的详细指导。
             输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、repo_path、branch、commit、issue_created_at、reset_target_merge_commit、issue_content_complete、issue_comments_count、screenshots、environment_info、environment_completeness、missing_evidence。
             输出不超过 3000 字。
       transitions:
@@ -160,7 +160,7 @@ workflow:
             5. 评估优先级（P0-P3）
             6. 给出初步排查方向
             7. 如果上游输出中 issue_content_complete=false 或 missing_evidence 非空，在分类结果中继承这些字段，不得隐瞒信息缺失
-            参考 flutter-ohos-issue-analysis Skill 的问题类型识别表。
+            参考 cpf-ohos-issue-analysis Skill 的问题类型识别表。
             输出 JSON 格式的分类结果，包含 verdict、summary、artifact_path、key_findings、problem_type、layer、priority、confidence、initial_direction、issue_content_complete、missing_evidence。
             注意：如果 Issue 中提到了修复 PR 或上游仓库地址，也记录下来供下游 Agent 使用。
             输出不超过 2000 字。
@@ -203,7 +203,7 @@ workflow:
             5. 必须区分 confirmed（已由 Issue/API/日志/代码直接证明）、inferred（基于代码和平台差异推断）、unverified（待运行时验证）；不得把未验证的症状解释写成事实。
             6. 【硬约束】不要搜索 Issue 所在仓库的其他 PR 和 Issue（如列出仓库所有 PR、搜索相关 PR/Issue 等）。但允许获取当前 Issue 本身的信息（标题、body、评论、创建时间等），可通过 GitCode/GitHub API 的 issues/{number} 端点获取。所有代码分析只在本地代码仓（repo/ 目录）中进行。
             7. 如果根因分析需要参考上游信息，必须以 upstream_status="unknown" + upstream_search_keywords（供用户手动搜索的关键词）形式输出，不得给出确定的 PR/Issue 链接，不得自行推断上游仓库地址。
-            参考 flutter-ohos-issue-analysis Skill 的 issue-types/*.md 和 references/log-interpretation.md。
+            参考 cpf-ohos-issue-analysis Skill 的 issue-types/*.md 和 references/log-interpretation.md。
             输出 JSON 或 Markdown+JSON 均可，但结尾必须包含 verdict、summary、artifact_path、key_findings、confidence、confirmed_evidence、inferred_evidence、missing_evidence、upstream_status（只能为 "unknown"）、upstream_search_keywords。
             输出不超过 2000 字。
       transitions:
@@ -280,7 +280,7 @@ workflow:
             4. 如果 Issue 正文/评论/截图/日志缺失，在对应位置标注"未提供"，不得编造；报告不得给出"已验证解决"结论
             5. 报告末尾追加可解析 JSON：
                `{"verdict":"pass|conditional_pass|fail","summary":"...","key_findings":[...],"verification_status":"verified|skipped|needs_runtime_validation","missing_evidence":[...]}`
-            参考 flutter-ohos-issue-analysis Skill 的 references/report-template.md 报告模板。
+            参考 cpf-ohos-issue-analysis Skill 的 references/report-template.md 报告模板。
             输出不超过 2000 字。
       transitions:
         - to: 完成
@@ -360,4 +360,4 @@ context:
     defaultEngine: opencode
     defaultModel: minimax-cn/MiniMax-M3
   skills:
-    - flutter-ohos-issue-analysis
+    - cpf-ohos-issue-analysis

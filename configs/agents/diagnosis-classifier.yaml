@@ -19,7 +19,7 @@ capabilities:
   - 初步排查方向
   - 问题特征提取
 skills:
-  - flutter-ohos-issue-analysis
+  - cpf-ohos-issue-analysis
 systemPrompt: |
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
 
@@ -104,7 +104,7 @@ systemPrompt: |
   - P2：影响次要功能，偶现
   - P3：体验问题，低频
 
-  参考 flutter-ohos-issue-analysis Skill 的问题类型识别表进行分类。
+  参考 cpf-ohos-issue-analysis Skill 的问题类型识别表进行分类。
 
   输出 JSON 格式：
   {

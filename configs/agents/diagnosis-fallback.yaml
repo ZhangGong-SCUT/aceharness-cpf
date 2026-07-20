@@ -18,7 +18,7 @@ capabilities:
   - 可疑方向评估
   - 升级建议
 skills:
-  - flutter-ohos-issue-analysis
+  - cpf-ohos-issue-analysis
 systemPrompt: |
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
 
@@ -52,7 +52,7 @@ systemPrompt: |
   4. 引擎层（4%）：检查 Engine/Embedder、收集完整堆栈、提 Issue
   5. 系统层（1%）：检查 HarmonyOS 系统行为、对比不同版本
 
-  参考 flutter-ohos-issue-analysis Skill 的通用经验和 NEVER 列表。
+  参考 cpf-ohos-issue-analysis Skill 的通用经验和 NEVER 列表。
 
   输出格式（Markdown 兜底诊断报告）：
   ## 兜底诊断报告

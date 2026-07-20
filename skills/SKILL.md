@@ -49,7 +49,7 @@ Available skills for working with the Cangjie compiler project and Anthropics of
 | [aceharness-chat-card](./aceharness-chat-card/SKILL.md) | 通用富文本卡片渲染：12 种 Block 类型，AI 通过 JSON 动态生成可视化卡片 |
 | [aceharness-workflow-creator](./aceharness-workflow-creator/SKILL.md) | 引导用户创建 ACEHarness 工作流配置，提供格式规范和校验脚本 |
 | [gitcode-issue-collector](./gitcode-issue-collector/SKILL.md) | 从 GitCode 仓库收集已关闭 Issue 并匹配已合并 PR，按质量评分筛选测试用例集 |
-| [flutter-ohos-issue-analysis](./flutter-ohos-issue-analysis/SKILL.md) | 鸿蒙跨平台框架问题 AI 诊断：问题分类、根因模式库、日志解读、上游追踪、修复建议、报告模板 |
+| [cpf-ohos-issue-analysis](./cpf-ohos-issue-analysis/SKILL.md) | 鸿蒙跨平台框架问题 AI 诊断：问题分类、根因模式库、日志解读、上游追踪、修复建议、报告模板 |
 
 ## HarmonyOS Skills
 

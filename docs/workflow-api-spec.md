@@ -45,7 +45,7 @@ Content-Type: application/json
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `configFile` | `string` | ✅ | 工作流配置文件名，如 `"flutter-ohos-issue-diagnosis.yaml"` |
+| `configFile` | `string` | ✅ | 工作流配置文件名，如 `"cpf-ohos-issue-diagnosis.yaml"` |
 | `frontendSessionId` | `string` | ❌ | 前端已有的聊天会话 ID。传入则复用，不传则新建 |
 | `creationSessionId` | `string` | ❌ | Spec Coding 创建会话 ID，用于绑定 task。不传则自动查找该 configFile 的最新创建会话 |
 | `skipPreflight` | `boolean` | ❌ | `true` 跳过启动前检查。默认 `false` |
@@ -62,7 +62,7 @@ curl -X POST http://127.0.0.1:3031/api/workflow/start \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "configFile": "flutter-ohos-issue-diagnosis.yaml",
+    "configFile": "cpf-ohos-issue-diagnosis.yaml",
     "initialContexts": {
       "globalContext": "issue-key: PROJ-123\nstack trace: NullPointerException at ..."
     }
@@ -197,7 +197,7 @@ curl -N "http://127.0.0.1:3031/api/workflow/status?runId=run-...&live=1" \
 {
   "status": "running",            // idle | preparing | running | completed | failed | stopped | paused
   "runId": "run-1721036800000-a1b2c3d4",
-  "currentConfigFile": "flutter-ohos-issue-diagnosis.yaml",
+  "currentConfigFile": "cpf-ohos-issue-diagnosis.yaml",
   "currentPhase": "root-cause-analysis",
   "currentStep": "analyze-stack-trace",
   "runStartTime": "2026-07-15T10:00:00.000Z",
@@ -206,7 +206,7 @@ curl -N "http://127.0.0.1:3031/api/workflow/status?runId=run-...&live=1" \
   // —— 最终评审报告（工作流完成后才有）——
   "finalReview": {
     "runId": "run-...",
-    "configFile": "flutter-ohos-issue-diagnosis.yaml",
+    "configFile": "cpf-ohos-issue-diagnosis.yaml",
     "workflowName": "鸿蒙跨平台问题诊断",
     "supervisorAgent": "diagnosis-supervisor",
     "status": "completed",
@@ -228,7 +228,7 @@ curl -N "http://127.0.0.1:3031/api/workflow/status?runId=run-...&live=1" \
       }
     ],
     "agentNames": ["info-collector", "reproducer", "root-cause-analyzer", "fix-proposer"],
-    "keywords": ["flutter-ohos", "arm64", "texture-upload"],
+    "keywords": ["cpf-ohos", "arm64", "texture-upload"],
     "generatedAt": "2026-07-15T10:15:32.000Z"
   },
 
@@ -293,7 +293,7 @@ curl -N "http://127.0.0.1:3031/api/workflow/status?runId=run-...&live=1" \
 {
   "status": "running",
   "runId": "run-...",
-  "currentConfigFile": "flutter-ohos-issue-diagnosis.yaml",
+  "currentConfigFile": "cpf-ohos-issue-diagnosis.yaml",
   "currentPhase": "root-cause-analysis",
   "currentStep": "analyze-stack-trace",
   "pendingHumanQuestion": null
@@ -462,7 +462,7 @@ curl "http://127.0.0.1:3031/api/runs/run-.../outputs?outputRef=outputs/step-logs
 
 ### 3.1 获取诊断报告（完整版，推荐）
 
-工作流完成后，`diagnosis-reporter` Agent 会按 `skills/flutter-ohos-issue-analysis/references/report-template.md` 模板生成完整的诊断报告。该报告是**给开发者看的核心交付物**，包含问题概述、环境信息、复现步骤、根因结论、修复建议、验证建议六大章节。
+工作流完成后，`diagnosis-reporter` Agent 会按 `skills/cpf-ohos-issue-analysis/references/report-template.md` 模板生成完整的诊断报告。该报告是**给开发者看的核心交付物**，包含问题概述、环境信息、复现步骤、根因结论、修复建议、验证建议六大章节。
 
 #### 获取流程（3 步）
 
@@ -634,7 +634,7 @@ RESP=$(curl -s -X POST http://127.0.0.1:3031/api/workflow/start \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "configFile": "flutter-ohos-issue-diagnosis.yaml",
+    "configFile": "cpf-ohos-issue-diagnosis.yaml",
     "initialContexts": {
       "globalContext": "issue: NullPointerException in texture upload"
     }

@@ -68,13 +68,13 @@ configs/agents/
 
 ```
 configs/
-└── flutter-ohos-diagnosis.yaml         # 状态机工作流配置
+└── cpf-ohos-diagnosis.yaml         # 状态机工作流配置
 ```
 
 ### 2.3 Skill 知识源
 
 ```
-skills/flutter-ohos-issue-analysis/
+skills/cpf-ohos-issue-analysis/
 ├── SKILL.md                            # 技能主文件（问题类型识别表、通用经验、NEVER 列表）
 ├── issue-types/                        # 根因模式库
 │   ├── stability.md                    # 稳定性问题根因模式（8个）
@@ -195,7 +195,7 @@ stateDiagram-v2
 ### 6.1 通过 ACEHarness 工作台使用
 
 1. 打开 ACEHarness 工作台（`/workflows` 页面）
-2. 选择工作流配置 `flutter-ohos-diagnosis.yaml`
+2. 选择工作流配置 `cpf-ohos-diagnosis.yaml`
 3. 填写问题描述（现象、触发条件、复现步骤、环境信息）
 4. 启动工作流
 5. 在修复建议阶段进行人工审查
@@ -208,7 +208,7 @@ stateDiagram-v2
 curl -X POST http://localhost:3000/api/runs \
   -H "Content-Type: application/json" \
   -d '{
-    "configFile": "flutter-ohos-diagnosis.yaml",
+    "configFile": "cpf-ohos-diagnosis.yaml",
     "configName": "鸿蒙跨平台框架问题AI自动诊断",
     "totalSteps": 20
   }'
@@ -282,7 +282,7 @@ curl -X POST http://localhost:3000/api/runs \
 
 ## 10. 相关文档
 
-- [设计文档（原始）](../../Ai-Skill/cpf-flutter-skills/flutter-ohos-issue-analysis/docs/ai-diagnosis-system-design.md)
+- [设计文档（原始）](../../Ai-Skill/cpf-flutter-skills/cpf-ohos-issue-analysis/docs/ai-diagnosis-system-design.md)
 - [ACEHarness 工作流创建技能](../aceharness-workflow-creator/SKILL.md)
 - [ACEHarness Spec Coding](../aceharness-spec-coding/SKILL.md)
 - [ACEHarness 配置 README](../../configs/README.md)

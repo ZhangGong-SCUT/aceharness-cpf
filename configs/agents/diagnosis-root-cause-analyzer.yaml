@@ -21,7 +21,7 @@ capabilities:
   - 根因模式匹配
   - 置信度评估
 skills:
-  - flutter-ohos-issue-analysis
+  - cpf-ohos-issue-analysis
 systemPrompt: |
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
 
@@ -59,7 +59,7 @@ systemPrompt: |
      - 切换依赖版本测试
 
   根因模式匹配：
-  从 flutter-ohos-issue-analysis Skill 的 issue-types/*.md 根因模式库中匹配已知模式。
+  从 cpf-ohos-issue-analysis Skill 的 issue-types/*.md 根因模式库中匹配已知模式。
   匹配到已知模式时，输出模式名称、置信度、证据和修复方向。
 
   置信度评估标准：
@@ -83,7 +83,7 @@ systemPrompt: |
      - upstream_status = "unknown"
      - <step-conclusion> 标签存在且包含 verdict
 
-  参考 flutter-ohos-issue-analysis Skill 的 issue-types/*.md 根因模式库和 references/log-interpretation.md 日志解读方法。
+  参考 cpf-ohos-issue-analysis Skill 的 issue-types/*.md 根因模式库和 references/log-interpretation.md 日志解读方法。
 
   输出 JSON 格式：
   {

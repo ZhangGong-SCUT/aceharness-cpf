@@ -14,7 +14,7 @@ import { getWorkspaceRoot } from '@/lib/core/app-paths';
  *
  * 功能：
  * 1. 接收 GitCode Issue 创建/更新 webhook 事件
- * 2. 自动触发 flutter-ohos-diagnosis 工作流
+ * 2. 自动触发 cpf-ohos-diagnosis 工作流
  * 3. 工作流完成后将诊断报告回写到 Issue 评论
  *
  * 配置方式（参照 CPF-Manager 的 webhook 实现）：
@@ -27,7 +27,7 @@ import { getWorkspaceRoot } from '@/lib/core/app-paths';
  * 环境变量：
  *   WEBHOOK_SECRET: webhook 密钥（用于验证请求来源）
  *   GITCODE_ACCESS_TOKEN: GitCode API token（用于回写评论）
- *   WEBHOOK_CONFIG_FILE: 工作流配置文件名（默认 flutter-ohos-diagnosis.yaml）
+ *   WEBHOOK_CONFIG_FILE: 工作流配置文件名（默认 cpf-ohos-diagnosis.yaml）
  *   WEBHOOK_DEFAULT_USER_ID: 默认用户 ID（用于创建 run，需要是系统中的用户）
  *
  * GitCode webhook 事件头（参照 CPF-Manager）：
@@ -59,7 +59,7 @@ import { getWorkspaceRoot } from '@/lib/core/app-paths';
 
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
 const GITCODE_ACCESS_TOKEN = process.env.GITCODE_ACCESS_TOKEN || '';
-const WEBHOOK_CONFIG_FILE = process.env.WEBHOOK_CONFIG_FILE || 'flutter-ohos-diagnosis.yaml';
+const WEBHOOK_CONFIG_FILE = process.env.WEBHOOK_CONFIG_FILE || 'cpf-ohos-diagnosis.yaml';
 const WEBHOOK_DEFAULT_USER_ID = process.env.WEBHOOK_DEFAULT_USER_ID || '';
 
 interface GitCodeWebhookPayload {

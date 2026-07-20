@@ -1,8 +1,9 @@
 ---
-name: flutter-ohos-issue-analysis
-description: OHOS 跨平台框架（Flutter-OHOS / React Native-OHOS / KMP-CMP 等）鸿蒙化问题 AI 诊断技能。提供问题分类识别表、根因模式库、日志解读方法、环境信息采集清单、修复建议和报告模板等专家经验，作为诊断 Agent 的知识源。
-descriptionZH: 鸿蒙跨平台框架问题 AI 诊断技能，提供分类识别、根因模式、日志解读、采集清单、修复建议和报告模板。
+name: cpf-ohos-issue-analysis
+description: OHOS 跨平台框架（Flutter-OHOS / React Native-OHOS / KMP-CMP 等）鸿蒙化问题 AI 诊断技能（CPF 版）。提供问题分类识别表、根因模式库、日志解读方法、环境信息采集清单、修复建议和报告模板等专家经验，作为诊断 Agent 的知识源。
+descriptionZH: CPF 鸿蒙跨平台框架问题 AI 诊断技能，提供分类识别、根因模式、日志解读、采集清单、修复建议和报告模板。
 tags:
+  - CPF
   - 鸿蒙
   - OHOS
   - Flutter
@@ -13,7 +14,7 @@ tags:
 source: aceharness
 ---
 
-# Flutter-OHOS 问题 AI 诊断技能
+# CPF 鸿蒙跨平台框架问题 AI 诊断技能
 
 ## 技能定位
 
@@ -124,10 +125,10 @@ flowchart LR
 
 ## 多框架扩展
 
-本技能当前聚焦 Flutter-OHOS，架构支持按框架扩展：
+本技能当前聚焦 Flutter-OHOS（CPF 版），架构支持按框架扩展：
 
 ```
-flutter-ohos-issue-analysis/       # 当前（Flutter-OHOS）
+cpf-ohos-issue-analysis/           # 当前（CPF 鸿蒙跨平台框架）
 ├── issue-types/
 └── references/
 

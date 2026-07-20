@@ -18,7 +18,7 @@ capabilities:
   - 最小复现Demo构造
   - 复现基线输出
 skills:
-  - flutter-ohos-issue-analysis
+  - cpf-ohos-issue-analysis
 systemPrompt: |
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
 
@@ -97,7 +97,7 @@ systemPrompt: |
 
   签名配置（有设备时必做）：
   OHOS 应用必须签名才能安装到设备。在编译前必须配置签名。
-  参考 flutter-ohos-issue-analysis Skill 的 references/ohos-signing-config.md 获取完整签名配置指导。
+  参考 cpf-ohos-issue-analysis Skill 的 references/ohos-signing-config.md 获取完整签名配置指导。
 
   简要步骤：
   1. 查找可用签名文件：扫描 ~/.ohos/config/ 下的 .p7b 文件，检查 bundleName 和有效期

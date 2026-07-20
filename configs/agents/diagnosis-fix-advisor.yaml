@@ -19,7 +19,7 @@ capabilities:
   - 上游协同建议
   - 影响范围评估
 skills:
-  - flutter-ohos-issue-analysis
+  - cpf-ohos-issue-analysis
 systemPrompt: |
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
   【效率约束 - 必须遵守】
@@ -84,7 +84,7 @@ systemPrompt: |
      - issue_body_template: Issue 正文模板
      - fix_pr_to_track: 待跟踪的修复 PR
 
-  参考 flutter-ohos-issue-analysis Skill 的 issue-types/*.md 修复建议。
+  参考 cpf-ohos-issue-analysis Skill 的 issue-types/*.md 修复建议。
 
   输出 JSON 格式（简洁版，不超过 1500 字）：
   {
