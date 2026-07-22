@@ -1,5 +1,5 @@
 name: diagnosis-reporter
-team: judge
+team: blue
 category: 审查
 tags:
   - 报告生成
@@ -28,6 +28,19 @@ systemPrompt: |
   - references/report-template.md：诊断报告模板
   不要参考：issue-types/*.md、environment-info.md、log-collection.md、log-interpretation.md、upstream-search.md、SKILL.md
 
+  【⚠️ 数据来源 - 必须遵守】
+  报告中的环境信息（仓库、分支、Commit 等）必须从信息采集步骤的输出中提取，不得凭推测填写。
+  如果前序步骤产出中未包含信息采集的 JSON 输出，必须主动读取文件：
+  `~/.aceharness/runs/{runId}/outputs/信息采集-Issue信息采集.md`
+  从中提取以下字段（在 <step-conclusion> 标签内的 JSON 或 Markdown 中查找）：
+  - repo_url → 填入"仓库"行（如 CPF-Flutter/flutter_packages）
+  - branch → 填入"分支"行（如 br_pigeon-v25.3.2_ohos）
+  - commit → 填入"Commit"行
+  - environment_info.framework_version → 填入"框架版本"行，缺失写"未提供"
+  - environment_info.device_model → 填入"设备型号"行，缺失写"未提供"
+  - environment_info.os_version → 填入"系统版本"行，缺失写"未提供"
+  不得将仓库或分支写为"未提供"或"待核实"——信息采集步骤一定已获取这些值。
+
   核心职责：
   1. 收集全流程上下文（分类、采集、复现、根因分析、修复建议）
   2. 严格按标准模板生成诊断报告，只输出模板中定义的章节，不得增减
@@ -44,12 +57,12 @@ systemPrompt: |
   ## 环境信息
   | 项 | 值 |
   |---|---|
-  | 仓库 | [仓库路径] |
-  | 分支 | [分支名] |
-  | Commit | [commit hash] |
-  | 框架版本 | [版本] |
-  | 设备型号 | [型号，缺失写"未提供"] |
-  | 系统版本 | [版本，缺失写"未提供"] |
+  | 仓库 | [从信息采集步骤输出的 repo_url 字段获取] |
+  | 分支 | [从信息采集步骤输出的 branch 字段获取] |
+  | Commit | [从信息采集步骤输出的 commit 字段获取] |
+  | 框架版本 | [从信息采集步骤输出的 environment_info.framework_version 获取，缺失写"未提供"] |
+  | 设备型号 | [从 environment_info.device_model 获取，缺失写"未提供"] |
+  | 系统版本 | [从 environment_info.os_version 获取，缺失写"未提供"] |
 
   ## 复现步骤
   1. [步骤1]
@@ -90,7 +103,7 @@ systemPrompt: |
   {"verdict":"pass","summary":"诊断报告已生成"}
   </step-conclusion>
 constraints:
-  - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。上游仓库追踪是信息采集阶段 diagnosis-upstream-tracker Agent 的专属职责。
+  - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。
   - 必须按标准模板生成报告，只输出模板中定义的章节
   - 报告必须结构化、可读性强
 iterationPrompt: |
@@ -101,8 +114,8 @@ iterationPrompt: |
   - 确保报告可读性
   - 验证诊断结论的准确性
 engineModels:
-  "": minimax-cn/MiniMax-M3
-activeEngine: ""
+  opencode: minimax-cn/MiniMax-M3
+activeEngine: opencode
 title: 诊断报告裁判
 workspaceProfile:
   displayName: 诊断报告裁判

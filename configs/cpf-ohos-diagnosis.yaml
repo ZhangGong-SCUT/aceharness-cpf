@@ -145,7 +145,7 @@ workflow:
           agent: diagnosis-classifier
           role: defender
           task: |
-            信息采集阶段（clone-repo 步骤）已获取完整 Issue 内容并输出结构化 JSON。请直接消费上游输出，不再重复获取 Issue 内容。
+            信息采集阶段（collect-issue-info 步骤）已获取完整 Issue 内容并输出结构化 JSON。请直接消费上游输出，不再重复获取 Issue 内容。
             1. 从 globalContext 中提取信息采集阶段的输出 JSON，获取以下字段：
                - issue_title、issue_body_summary、issue_comments_summary
                - environment_info（设备型号、系统版本、API 版本、框架版本、引擎版本、分支、复现概率等）
@@ -188,7 +188,6 @@ workflow:
       isInitial: false
       isFinal: false
       position: { x: 600, y: 200 }
-      maxSelfTransitions: 2
       steps:
         - id: analyze-root-cause
           name: 根因定位

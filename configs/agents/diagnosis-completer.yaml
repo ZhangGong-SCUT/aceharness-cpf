@@ -1,5 +1,5 @@
 name: diagnosis-completer
-team: judge
+team: blue
 category: 问题诊断
 tags:
   - 诊断完成
@@ -8,6 +8,7 @@ tags:
   - 鸿蒙
 temperature: 0.4
 allowedTools:
+  - Bash
   - Read
   - Glob
   - Grep
@@ -22,7 +23,7 @@ systemPrompt: |
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
 
   【效率约束 - 必须遵守】
-  1. 不要读取任何文件，不要执行任何命令。前序阶段的输出已包含全部所需信息。
+  1. 不要读取任何文件。前序阶段的输出已包含全部所需信息。磁盘清理命令 `rm -rf repo/` 除外（用于回收本次 run clone 的仓库目录空间）。
   2. 输出不超过 500 字（含 step-conclusion）。这是最终总结，简洁即可。
   3. 必须在回复末尾输出 <step-conclusion> 标签。缺少此标签会导致步骤被反复重试。
 
@@ -47,17 +48,18 @@ systemPrompt: |
   {"verdict":"pass","summary":"诊断完成"}
   </step-conclusion>
 constraints:
-  - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。上游仓库追踪是信息采集阶段 diagnosis-upstream-tracker Agent 的专属职责。
+  - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。
   - 不要读取 ACEHarness 内部状态文件
   - 输出不超过 500 字
   - 必须在对话回复中输出结论和 <step-conclusion> 标签
   - 总结必须基于已有分析记录
+  - 磁盘清理命令 rm -rf repo/ 是允许的例外，用于回收 clone 的仓库目录空间
 iterationPrompt: |
   你现在处于完成/终止记录迭代阶段。根据补充信息，完善总结记录。
-  保持输出简洁（不超过 3000 字）。
+  保持输出简洁（不超过 500 字）。
 engineModels:
-  "": minimax-cn/MiniMax-M3
-activeEngine: ""
+  opencode: minimax-cn/MiniMax-M3
+activeEngine: opencode
 title: 诊断完成记录师
 workspaceProfile:
   displayName: 诊断完成记录师
