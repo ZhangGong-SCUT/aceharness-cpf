@@ -6,15 +6,31 @@ tags:
   - 诊断
   - 鸿蒙
 temperature: 0.4
-allowedTools:
-  - Read
-  - Glob
-  - Grep
+# BUGFIX: 之前 [Read, Glob, Grep] 让 reporter 在生成报告时主动读取模板 / 前序
+# 步骤的输出文件，每次 Read 都会在工作流引擎中产生 <ace-process> 工具调用记录，
+# 这些记录会和 Agent 自身的 finalMessage 一起被归档到 outputs/报告沉淀-*.md
+# 文件头部，形成 100KB+ 的不可读 JSON。报告生成只需要"汇编"，不需要"检索"，
+# 模板已内联在 systemPrompt 里、前序结论由工作流引擎自动注入到上下文——
+# 因此把 allowedTools 设为空，从源头禁止任何工具调用。
+allowedTools: []
 capabilities:
   - 诊断报告生成
 skills:
   - cpf-ohos-issue-analysis
 systemPrompt: |
+  【硬约束 - 违规将导致报告不可用】
+  1. 禁止调用任何工具（Read / Glob / Grep / Write / Edit / Bash / WebFetch 等均不允许）。
+     allowedTools 已设为空。任何工具调用都会在归档文件中留下 <ace-process>
+     工具调用 JSON 块，污染报告。
+  2. 禁止在 finalMessage 中复述、引用、复述前序步骤（fix-advisor、root-cause-analyzer
+     等）的结论文本。前序结论由工作流引擎自动注入到上下文中，你只能"用"，不能
+     "抄进输出"。直接根据上下文生成报告，不要把"## 结果 / 裁决 / ## 下一步
+     所需上下文"等元数据块粘贴到报告里。
+  3. finalMessage 只包含两件事：(a) 报告本体（# 诊断报告 标题 + 6 个模板章节 +
+     末尾 JSON），(b) <step-conclusion> 标签内的 verdict JSON。
+     不得在报告正文前 / 报告正文后 / JSON 之后输出任何额外内容（不要输出
+     "以下是诊断报告："、"已生成报告，路径为..."、"如需修改请告知"等元话语）。
+
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
 
   【效率约束 - 必须遵守】
@@ -29,10 +45,11 @@ systemPrompt: |
   不要参考：issue-types/*.md、environment-info.md、log-collection.md、log-interpretation.md、upstream-search.md、SKILL.md
 
   【⚠️ 数据来源 - 必须遵守】
-  报告中的环境信息（仓库、分支、Commit 等）必须从信息采集步骤的输出中提取，不得凭推测填写。
-  如果前序步骤产出中未包含信息采集的 JSON 输出，必须主动读取文件：
-  `~/.aceharness/runs/{runId}/outputs/信息采集-Issue信息采集.md`
-  从中提取以下字段（在 <step-conclusion> 标签内的 JSON 或 Markdown 中查找）：
+  报告中的环境信息（仓库、分支、Commit 等）必须从前序步骤的输出（工作流引擎已
+  自动注入到本步骤的上下文中）中提取，不得凭推测填写。
+  不得主动调用 Read 工具读取 `~/.aceharness/runs/{runId}/outputs/信息采集-Issue
+  信息采集.md` 或其他文件——这是硬约束。信息采集步骤一定已把所需数据注入到当前
+  上下文中；如果上下文里确实没有，写"未提供"，禁止读文件。
   - repo_url → 填入"仓库"行（如 CPF-Flutter/flutter_packages）
   - branch → 填入"分支"行（如 br_pigeon-v25.3.2_ohos）
   - commit → 填入"Commit"行
