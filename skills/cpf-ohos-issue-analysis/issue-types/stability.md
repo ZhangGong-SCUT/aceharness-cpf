@@ -2,6 +2,35 @@
 
 > 问题类型：stability（崩溃/ANR/闪退/冻结）
 
+## 修复建议结构（通用）
+
+所有问题类型的修复建议都遵循以下四层结构：
+
+| 层级 | 字段 | 说明 |
+|---|---|---|
+| **短期修复** | `short_term_fix` | 快速止血方案，含 description、risk（低/中/高）、applicable_scenario |
+| **根因修复** | `root_cause_fix` | 指明具体 file、line、change、code_before、code_after |
+| **长期改进** | `long_term_improvement` | 测试补充建议、CI 改进建议（数组） |
+| **上游协同** | `upstream_collaboration` | 仅生成模板（Issue 标题/正文模板 + PR 检索关键词），upstream_status 一律 "unknown" |
+
+### 修复策略选择（根据根因层面）
+
+| 根因层面 | 修复策略 |
+|---|---|
+| 应用层 | 建议修改用户代码 |
+| 插件层 | 建议修改插件鸿蒙实现 |
+| 框架层 | 建议修改框架鸿蒙化代码 |
+| 引擎层 | 建议提 Issue + 临时 patch |
+| 系统层 | 建议使用等效 API 替代 |
+
+### 上游协同策略（仅生成模板，不实际查询）
+
+- 生成【用户手动跟踪用】的 Issue 标题与正文模板
+- 生成【用户手动 cherry-pick 用】的 PR 检索关键词提示
+- `upstream_collaboration.upstream_status` 一律记为 `"unknown"`
+
+---
+
 ## 根因模式
 
 ### RC-S-01: 插件未注册 (Plugin Not Registered)

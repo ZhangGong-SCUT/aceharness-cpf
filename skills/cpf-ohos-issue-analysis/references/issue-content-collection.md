@@ -165,3 +165,74 @@ Issue body 通常包含结构化字段，需要从中提取：
 - [ ] 关联 PR/Issue（如有）
 
 如果以上任一项缺失，在输出中标记 `issue_content_complete=false`，并在 `missing_evidence` 中写明影响。
+
+## 5. 分支推断规则
+
+从 Issue 内容推断代码仓分支，按以下优先级：
+
+### 优先级 1：从版本号推断
+
+Issue 标题或内容中明确提到版本号时，按映射表推断对应分支：
+
+| Issue 中的版本号 | 对应分支 |
+|---|---|
+| [3.41] / 3.41.x / 3.41.10-ohos | `oh-3.41.9-dev` |
+| [3.35] / 3.35.x / 3.35.7-ohos | `oh-3.35.7-dev` |
+| [3.27] / 3.27.x / 3.27.4-ohos | `oh-3.27.4-dev` |
+
+> 注：版本号→分支映射会随版本迭代更新，维护者请保持此表与实际仓库分支同步。
+
+### 优先级 2：从 Issue 内容直接提取分支名
+
+Issue body 或评论中明确提到分支名（如 `br_pigeon-v26.1.5_ohos`），直接使用该分支。
+
+### 优先级 3：使用仓库默认分支
+
+以上都无法推断时，使用仓库默认分支（clone 后不切换分支）。
+
+### 输出字段
+
+- `branch`：最终使用的分支名
+- `branch_source`：`inferred_from_issue`（从版本号推断）/ `explicit_in_issue`（Issue 中明确提到）/ `default_branch`（使用默认分支）
+
+## 6. 输出 JSON 模板
+
+信息采集完成后，在 `<step-conclusion>` 标签内输出以下结构化 JSON（供下游 Agent 直接提取关键字段）：
+
+```json
+{
+  "clone_result": "success|skipped|failed",
+  "repo_url": "CPF-Flutter/flutter_packages",
+  "branch": "br_pigeon-v25.3.2_ohos",
+  "branch_source": "inferred_from_issue|explicit_in_issue|default_branch",
+  "local_path": "repo/",
+  "key_files": ["packages/pigeon/lib/src/arkts/arkts_generator.dart", "..."],
+  "commit": "d2530f60c0554637971e62e516a27cf06ca06b43",
+  "issue_created_at": "2026-07-08T19:46:17+08:00",
+  "reset_target_merge_commit": "d2530f60c... 或 null",
+  "reset_status": "success|skipped|failed",
+  "issue_content_complete": true,
+  "issue_title": "【pigeon】需要兼容1.0浮点数的传递",
+  "issue_body_summary": "ArkTS 端 1.0 经 Number.isInteger 误判为 INT32...",
+  "issue_comments_count": 1,
+  "issue_comments_summary": "维护者已认领，正在分析",
+  "screenshots": [{"url": "https://raw.gitcode.com/...", "path": "outputs/screenshots/screenshot_1.png", "download_status": "success|failed"}],
+  "screenshot_analysis": "vision|ocr|skipped_no_vision|failed",
+  "screenshot_descriptions": ["错误界面：显示 Number.isInteger 启发式", "..."],
+  "screenshot_contexts": ["图片前后的 Issue body 文字描述", "..."],
+  "environment_info": {
+    "device_model": "华为 Mate 60 Pro 或 missing",
+    "os_version": "HarmonyOS 5.0.1 或 missing",
+    "api_version": "API 12 或 missing",
+    "framework_version": "Flutter 3.22.0-ohos 或 missing",
+    "engine_version": "engine 028be699 或 missing",
+    "app_version": "v1.0.2 或 missing",
+    "branch": "br_pigeon-v25.3.2_ohos 或 missing",
+    "reproducibility": "必现|偶现|missing"
+  },
+  "environment_completeness": "complete|partial|minimal",
+  "missing_evidence": ["设备型号缺失", "系统版本缺失", "..."]
+}
+```
+
+> **重要**：`repo_url`、`branch`、`commit` 是下游报告 Agent 必须读取的字段，务必填写实际值，不要写"待核实"。

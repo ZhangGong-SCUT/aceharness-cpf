@@ -100,7 +100,12 @@ flowchart LR
 
 1. **上游优先**：先查上游社区是否已有同类问题/修复，再深入自研代码
 2. **渐进式深入**：从快速分类到深度分析，分层投入精力
-3. **对比分析法**：鸿蒙特有问题，对比 Android/iOS 实现
+3. **对比分析法（硬约束）**：鸿蒙特有问题，**必须先对比 Android 和 iOS 源码**，再下根因结论和修复建议。鸿蒙化问题绝大多数是"鸿蒙实现与 Android/iOS 基线不一致"导致的，不对比基线就无法定位根因。对比要求：
+   - 在 repo/ 中搜索 Android 实现（`*.kt` / `*.java`）和 iOS 实现（`*.swift` / `*.m`）
+   - 逐函数对比三端实现逻辑：Android vs iOS vs OHOS（ArkTS）
+
+   - 在证据链/修复建议中必须引用 Android/iOS 基线（标注文件路径和行号）
+   - 如果 repo/ 中找不到 Android/iOS 实现，在 missing_evidence 中明确记录
 4. **最小复现法**：构造最小复现 Demo，便于上游提 Issue
 5. **日志先行**：先采集完整日志，再分析代码
 6. **GitCode 获取锁定降级链**：GitCode Issue/PR 页面常是 SPA，页面抓取可能只返回空壳；必须依次尝试 API v5、comments API、带 Cookie/登录态请求、用户人工导出。页面抓取失败不得等同于 Issue 内容为空。
@@ -122,6 +127,26 @@ flowchart LR
 - **NEVER** 跳过人工审查直接执行代码修改
 - **NEVER** 对偶现问题标记为"已修复"而不提供 trigger_pattern
 - **NEVER** 在兜底诊断中只说"不知道"而不提供排查思路
+
+## 问题归属判断（problem_ownership）
+
+分类时必须明确判断问题归属，输出 `problem_ownership` 字段：
+
+| 归属类型 | 含义 | 特征 | 排查方向 |
+|---|---|---|---|
+| **business_code**（上层业务代码） | 问题出在用户自己写的 Dart/ArkTS 业务代码中 | API 使用方式错误、状态管理逻辑错误、生命周期处理不当、参数传递错误 | 检查用户代码的 API 调用、参数、逻辑流程 |
+| **framework_library**（底层框架/库） | 问题出在 Flutter-OHOS 框架、插件鸿蒙化实现、引擎 Embedder、Pigeon 生成代码等 | 用户代码调用方式正确，但框架/库内部处理有 bug | 审查框架/库源码、对比 Android/iOS 实现、检查鸿蒙化适配代码 |
+| **mixed**（混合问题） | 上层业务代码触发了底层框架/库的 bug | 用户代码没问题，但框架内部处理有缺陷，两者协同才触发 | 先确认用户代码正确性，再深入框架/库源码定位 bug |
+
+### 判断依据
+
+1. Issue 中的代码片段是标准 API 用法 → 倾向 `framework_library`
+2. Issue 中的代码片段有明显的逻辑错误 → 倾向 `business_code`
+3. Issue 提到"Android/iOS 正常但鸿蒙异常" → 倾向 `framework_library`
+4. Issue 提到"升级版本后出现问题" → 倾向 `framework_library`
+5. Issue 只在特定业务场景下出现 → 需要进一步分析是 `business_code` 还是 `mixed`
+
+---
 
 ## 多框架扩展
 
