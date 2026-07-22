@@ -7,6 +7,7 @@ import type { SpecCodingDocument, StepTaskBindingSnapshot, StepTaskBindingValida
 import { buildRunSummaryCacheFromState, saveRunSummaryCache } from '@/lib/run/summary-cache';
 import { normalizeSpecCodingDocument } from '@/lib/spec/coding-store';
 import { getWorkflowEventStore } from '@/lib/workflow/event-store';
+import { stripAceProcessBlocks } from '@/lib/chat/ai-process-blocks';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 const streamPersistedLengths = new Map<string, number>();
@@ -596,18 +597,30 @@ async function externalizeStepLogOutput(runId: string, log: PersistedStepLog): P
   if (!log || typeof log !== 'object') return log;
   if (typeof log.output !== 'string' || log.output.length === 0) return log;
 
+  // BUGFIX: agent output may contain <ace-process>...</ace-process> blocks
+  // representing internal tool calls (read/glob/bash/...). These are meant for
+  // live SSE rendering in the chat UI, not for the on-disk archive consumed by
+  // "查看完整日志" / GitCode webhook / report download. Strip them before
+  // writing to disk; keep memory copy untouched for streaming.
+  // Replacement uses a single newline so adjacent tool blocks don't merge and
+  // prose remains readable; collapse 3+ newlines afterwards to keep spacing
+  // tidy.
+  const sanitizedOutput = stripAceProcessBlocks(log.output, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimStart();
+
   const dir = stepLogOutputsDir(runId);
   if (!existsSync(dir)) await mkdir(dir, { recursive: true });
   const safeStep = safeStepFileName(log.stepName || 'step');
   const safeId = safeStepFileName(log.id || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const filename = `${safeStep}-${safeId}.md`;
-  await writeFile(resolve(dir, filename), log.output, 'utf-8');
+  await writeFile(resolve(dir, filename), sanitizedOutput, 'utf-8');
 
   return {
     ...log,
     output: '',
     outputRef: `outputs/step-logs/${filename}`,
-    outputBytes: Buffer.byteLength(log.output, 'utf-8'),
+    outputBytes: Buffer.byteLength(sanitizedOutput, 'utf-8'),
   };
 }
 
