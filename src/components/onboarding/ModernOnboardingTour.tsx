@@ -451,7 +451,16 @@ export function ModernOnboardingTour({
       },
       onStart: () => {
         completedIntentRef.current = false;
-        goToStepRoute(startIndex);
+        // 在 resume 模式下，只在当前 pathname 匹配某个 tour step 时才跳转
+        // 避免用户正在查看工作流等页面时被 tour 强制跳走
+        if (launchMode === 'current-route') {
+          goToStepRoute(startIndex);
+        } else {
+          const matchedIndex = steps.findIndex((step) => pathMatches(pathname, step.route));
+          if (matchedIndex >= 0) {
+            goToStepRoute(matchedIndex);
+          }
+        }
       },
       onEnd: () => {
         const completed = completedIntentRef.current;
@@ -464,7 +473,7 @@ export function ModernOnboardingTour({
         persistIndex(index, false);
       },
     }),
-    [goToStepRoute, loadingProgress, onClose, persistIndex, startIndex, steps],
+    [goToStepRoute, launchMode, loadingProgress, onClose, pathname, persistIndex, startIndex, steps],
   );
 
   if (steps.length === 0) return null;

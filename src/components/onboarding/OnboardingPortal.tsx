@@ -35,14 +35,22 @@ export default function OnboardingPortal() {
       if (data?.progress) {
         setProgress(data.progress);
         setLaunchMode('resume');
-        setOpen(!data.progress.done && !dismissedForSession && pathname !== '/' && pathname !== '/chat');
+        // 当 URL 中带有 route query 参数时（用户要打开特定工作流/页面），不自动启动 tour
+        // 否则 tour 的 onStart 会 router.push 到 step route，丢失用户原始 URL
+        const hasRouteParam = searchParams.get('route') !== null;
+        const shouldAutoOpen = !data.progress.done
+          && !dismissedForSession
+          && pathname !== '/'
+          && pathname !== '/chat'
+          && !hasRouteParam;
+        setOpen(shouldAutoOpen);
       }
     } catch {
       // ignore
     } finally {
       setLoadingProgress(false);
     }
-  }, [dismissedForSession, getAuthToken, pathname]);
+  }, [dismissedForSession, getAuthToken, pathname, searchParams]);
 
   useEffect(() => {
     const stored = localStorage.getItem('auth-user');
