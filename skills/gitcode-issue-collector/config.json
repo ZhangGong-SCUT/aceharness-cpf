@@ -1,6 +1,6 @@
 {
   "gitcode": {
-    "access_token": "FufFNq2vNvukUHzoYh39zq7n",
+    "access_token": "${GITCODE_ACCESS_TOKEN}",
     "api_base_url": "https://gitcode.com/api/v5",
     "request_interval_seconds": 0.3,
     "request_timeout_seconds": 30,

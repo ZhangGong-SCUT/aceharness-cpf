@@ -329,7 +329,7 @@ done
 # ACEHarness + Cloudflare Tunnel 一键重启脚本
 
 export PATH="/Applications/DevEco-Studio.app/Contents/tools/node/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
-cd /Users/hyh/Desktop/FlutterProject/ACEHarness
+cd "$(dirname "$0")/.."  # 假设脚本在 scripts/ 目录，自动定位仓库根
 
 PORT=3031
 TUNNEL_ID="769ef0ee-a101-4f38-b384-cb5642d47bf2"
@@ -404,7 +404,7 @@ ACEHarness (Next.js + server.js)
 
 | 平台 | Node 解释器 | cloudflared 路径 | 备注 |
 |------|------------|------------------|------|
-| macOS | `/Users/hyh/node22/bin/node` | `/opt/homebrew/bin/cloudflared` | 强制 Node 22（DevEco 自带 18 太老）|
+| macOS | `~/.nodebrew/current/bin/node`（可通过 `ACE_NODE_BIN` 环境变量覆盖） | `/opt/homebrew/bin/cloudflared` | 强制 Node 22（DevEco 自带 18 太老）|
 | Windows | `node`（系统 PATH） | `%USERPROFILE%\cloudflared.exe` | 用 `winget install Cloudflare.cloudflared` |
 
 **关键设计**：
@@ -443,7 +443,7 @@ ACEHarness (Next.js + server.js)
 
 ```bash
 # Mac 端
-cd /Users/hyh/Desktop/FlutterProject/ACEHarness
+cd /Users/<user>/Desktop/FlutterProject/ACEHarness
 npm run build
 pm2 start ecosystem.config.cjs
 pm2 save
@@ -497,7 +497,7 @@ cloudflared tunnel delete aceharness-mac
 
 ```bash
 pm2 startup
-# 会输出类似：sudo env PATH=... pm2 startup launchd -u hyh --hp /Users/hyh
+# 会输出类似：sudo env PATH=... pm2 startup launchd -u <user> --hp /Users/<user>
 # 把那行命令复制执行一次即可
 pm2 save
 ```

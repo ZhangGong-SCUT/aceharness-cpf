@@ -15,19 +15,23 @@
       "name": "default",
       "type": "HarmonyOS",
       "material": {
-        "certpath": "/Users/hyh/.ohos/config/default_ohos_TlQjvtNFBTpT6cGOrt3Dq1SFmzfvZjhqRq4lwxLMAz0=.cer",
+        "certpath": "${OHOS_CERT_PATH}",
         "keyAlias": "debugKey",
-        "keyPassword": "0000001A1EF733779ECF3BEE553F752C5D2ADA16070BBE1FC9B0F718BDBE6910BFA3F511F48EFE2E5A29",
-        "profile": "/Users/hyh/.ohos/config/default_ohos_TlQjvtNFBTpT6cGOrt3Dq1SFmzfvZjhqRq4lwxLMAz0=.p7b",
+        "keyPassword": "${OHOS_KEY_PASSWORD}",
+        "profile": "${OHOS_PROFILE_PATH}",
         "signAlg": "SHA256withECDSA",
-        "storeFile": "/Users/hyh/.ohos/config/default_ohos_TlQjvtNFBTpT6cGOrt3Dq1SFmzfvZjhqRq4lwxLMAz0=.p12",
-        "storePassword": "0000001A5953FB639CF00A9B9BF9EB90370D509FC6D3B47D94387438EF4DD075FD6D727154744C55BDD1"
+        "storeFile": "${OHOS_STORE_FILE_PATH}",
+        "storePassword": "${OHOS_STORE_PASSWORD}"
       }
     }
   ]
 }
-
 ```
+
+> ⚠️ **隐私安全约束（强制）**：
+> 1. **禁止**将 `certpath` / `profile` / `storeFile` 硬编码为任何用户级绝对路径（如 `~/.ohos/config/default_*.cer`），统一使用 `${OHOS_CERT_PATH}` 等环境变量占位符。
+> 2. **禁止**将 `keyPassword` / `storePassword` 任何明文写入仓库，CI / 流水线必须从环境变量注入。
+> 3. **禁止**在 commit diff、日志、Issue 评论中粘贴完整签名配置 JSON 块（一旦泄漏必须立即轮换签名证书）。
 
 ### 配置字段说明
 

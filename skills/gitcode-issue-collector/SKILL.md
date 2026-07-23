@@ -150,13 +150,16 @@ Token 从配置文件 `skills/gitcode-issue-collector/config.json` 的 `gitcode.
 **如果配置文件中 Token 为空或已过期**（API 返回 401），可通过以下方式获取新 Token：
 
 1. 从 CPF-Manager 数据库解密获取（备用方案）：
-   - 数据库路径：`/Users/hyh/Desktop/Ai-Skill/CPF-Manager/backend/data/cpf-manager.db`
+   - 数据库路径：通过环境变量 `CPF_MANAGER_DB_PATH` 指定（默认 `<你的工程>/backend/data/cpf-manager.db`）
    - 加密 Token 存储在 `settings` 表，key 为 `gitcode_access_token`
-   - 加密方式：AES-256-ECB，密钥为 `cpf-manager-secret-key-32-charss`
+   - 加密方式：AES-256-ECB，密钥为 CPF-Manager 启动密钥（**必须**通过环境变量 `CPF_MANAGER_SECRET_KEY` 传入，禁止硬编码到仓库）
    - 解密命令：
    ```bash
+   DB_PATH="${CPF_MANAGER_DB_PATH:-$(pwd)/cpf-manager.db}"
+   : "${CPF_MANAGER_SECRET_KEY:?必须设置环境变量 CPF_MANAGER_SECRET_KEY}"
+   SECRET="$CPF_MANAGER_SECRET_KEY"
    ENCRYPTED=$(sqlite3 "$DB_PATH" "SELECT value FROM settings WHERE key='gitcode_access_token'")
-   KEY_HEX=$(printf 'cpf-manager-secret-key-32-charss' | xxd -p -c 64)
+   KEY_HEX=$(printf '%s' "$SECRET" | xxd -p -c 64)
    echo "$ENCRYPTED" | openssl enc -aes-256-ecb -d -nosalt -K "$KEY_HEX" -base64
    ```
 2. 获取到新 Token 后，更新配置文件中的 `access_token` 字段。

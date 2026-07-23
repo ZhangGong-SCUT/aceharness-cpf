@@ -1,0 +1,26 @@
+{
+  "gitcode": {
+    "access_token": "${GITCODE_ACCESS_TOKEN}",
+    "api_base_url": "https://gitcode.com/api/v5",
+    "request_interval_seconds": 0.3,
+    "request_timeout_seconds": 30,
+    "max_retries": 3
+  },
+  "collection": {
+    "default_repo": {
+      "owner": "CPF-Flutter",
+      "repo": "flutter_flutter"
+    },
+    "pr_merge_time_range_months": 6,
+    "quality_score_threshold": 5,
+    "min_pr_number": 100,
+    "categories": ["stability", "memory-leak", "rendering", "performance", "functional"],
+    "max_issues": 0
+  },
+  "output": {
+    "format": "markdown",
+    "include_details": true,
+    "include_score_breakdown": true,
+    "include_collection_method": true
+  }
+}

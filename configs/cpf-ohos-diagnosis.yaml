@@ -357,8 +357,11 @@ context:
   # 诊断目标的工程目录：被诊断 Issue 所在的真实代码仓由 agent 在 cwd 内
   # `git clone ... repo/` 拉取。这里 projectRoot 仅作为 isolated-copy 的
   # 复制源（_template/），实际 agent 工作目录 = `<personalDir>/<runId>/`。
-  # personalDir 见 ~/.aceharness/data/users.json -> admin -> personalDir = /Users/hyh/FlutterOHOSDiag
-  projectRoot: "/Users/hyh/FlutterOHOSDiag/_template"
+  # personalDir 来自 `~/.aceharness/data/users.json` 当前用户，由 engine
+  # 启动时动态注入到 `_userPersonalDir`，本字段使用相对路径
+  # `path.resolve(_userPersonalDir, projectRoot)` 即可正确拼到用户目录。
+  # 不要在仓库内硬编码任何用户级绝对路径。
+  projectRoot: "_template"
   workspaceMode: isolated-copy
   requirements: |
     OHOS 跨平台框架（Flutter-OHOS / React Native-OHOS / KMP-CMP 等）鸿蒙化问题诊断与解决。

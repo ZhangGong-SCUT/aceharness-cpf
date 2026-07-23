@@ -148,7 +148,7 @@ Tunnel 创建成功: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ### 方式 B：在 Mac 上切
 
 ```bash
-cd /Users/hyh/Desktop/FlutterProject/ACEHarness
+cd /Users/<user>/Desktop/FlutterProject/ACEHarness
 ./scripts/switch-tunnel.sh xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 

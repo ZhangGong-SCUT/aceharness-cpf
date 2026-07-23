@@ -7,7 +7,7 @@
  *  - 配置完整 PATH，保证 opencode / hdc / adb 等子命令在 PM2 进程里可用
  *
  * 适用平台：
- *  - macOS（开发 / 临时验证）        ← interpreter 用 /Users/hyh/node22/bin/node
+ *  - macOS（开发 / 临时验证）        ← interpreter 优先用环境变量 ACE_NODE_BIN，回退 ~/.nodebrew/current/bin/node 或 nvm current
  *  - Windows（最终生产 / 正式部署）  ← interpreter 用 node（系统 PATH 里的 node）
  *    Windows 部署时请参考 README「Windows 部署」一节切换 interpreter 与 cwd 路径
  *
@@ -33,7 +33,9 @@ const home = os.homedir();
 // ────────────────────────────────────────────────────────────
 const nodeInterpreter = isWin
   ? 'node'                                  // Windows：用 PATH 里的 node（>= 20.9）
-  : '/Users/hyh/node22/bin/node';           // macOS：DevEco 自带 Node 18 太老，强制用 22
+  : (process.env.ACE_NODE_BIN
+      || path.join(home, '.nodebrew', 'current', 'bin', 'node')
+      || 'node');                            // macOS：DevEco 自带 Node 18 太老，强制用 22+；通过 ACE_NODE_BIN 注入
 
 const cloudflaredBin = isWin
   ? (process.env.PATH.split(';')
@@ -54,13 +56,14 @@ const extraPathSegments = isWin
       'C:\\Program Files\\nodejs',
     ]
   : [
-      '/Users/hyh/node22/bin',
-      '/Users/hyh/.opencode/bin',
-      '/Users/hyh/.npm-global/bin',
+      // 通过环境变量注入用户级路径，避免硬编码 /Users/<user>/...
+      process.env.ACE_NODE_BIN_DIR,
+      path.join(home, '.opencode', 'bin'),
+      path.join(home, '.npm-global', 'bin'),
       '/Applications/DevEco-Studio.app/Contents/tools/node/bin',
       '/usr/local/bin',
       '/opt/homebrew/bin',
-    ];
+    ].filter(Boolean);
 
 const fullPath = extraPathSegments
   .concat([process.env.PATH || ''])

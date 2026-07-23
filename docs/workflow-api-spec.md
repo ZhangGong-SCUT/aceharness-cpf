@@ -136,7 +136,7 @@ curl -X POST http://127.0.0.1:3031/api/workflow/start \
     { "name": "engine-available", "ok": true, "message": "..." },
     { "name": "project-root-exists", "ok": false, "message": "路径不存在: /tmp/xxx" }
   ],
-  "cwd": "/Users/hyh/project"
+  "cwd": "/Users/<user>/project"
 }
 ```
 

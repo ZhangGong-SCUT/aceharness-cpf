@@ -16,8 +16,17 @@ import argparse
 from datetime import datetime, timedelta
 
 # ============ 配置 ============
-CONFIG_PATH = "/Users/hyh/Desktop/FlutterProject/ACEHarness/skills/gitcode-issue-collector/config.json"
-DEFAULT_OUTPUT_PATH = "/Users/hyh/Desktop/FlutterProject/ACEHarness/tests/diagnosis-eval/test-issues.md"
+# 路径从环境变量读取，默认走相对路径，禁止硬编码用户级绝对路径
+import os
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONFIG_PATH = os.environ.get(
+    "GITCODE_COLLECTOR_CONFIG",
+    os.path.join(_REPO_ROOT, "skills/gitcode-issue-collector/config.json"),
+)
+DEFAULT_OUTPUT_PATH = os.environ.get(
+    "GITCODE_COLLECTOR_OUTPUT",
+    os.path.join(_REPO_ROOT, "tests/diagnosis-eval/test-issues.md"),
+)
 
 # 命令行参数：支持指定仓库和输出文件
 parser = argparse.ArgumentParser(description="GitCode Issue 收集器")
@@ -29,7 +38,20 @@ parser.add_argument("--threshold", type=int, help="质量评分阈值（覆盖�
 args = parser.parse_args()
 
 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-    config = json.load(f)
+    config_text = f.read()
+
+# 支持 ${ENV_VAR} 占位符：从环境变量注入真实值
+def _resolve_env(match: "re.Match[str]") -> str:
+    var_name = match.group(1)
+    value = os.environ.get(var_name, "")
+    if not value:
+        raise RuntimeError(
+            f"环境变量 {var_name} 未设置；请在 ~/.zshrc 或 .env 中 export 后重试。"
+        )
+    return value
+
+config_text = re.sub(r"\$\{([A-Z_][A-Z0-9_]*)\}", _resolve_env, config_text)
+config = json.loads(config_text)
 
 TOKEN = config["gitcode"]["access_token"]
 API_BASE = config["gitcode"]["api_base_url"]
@@ -47,7 +69,10 @@ if args.output:
     OUTPUT_PATH = args.output
 elif args.owner or args.repo:
     # 自动生成输出路径：tests/diagnosis-eval/test-issues-{repo}.md
-    OUTPUT_PATH = f"/Users/hyh/Desktop/FlutterProject/ACEHarness/tests/diagnosis-eval/test-issues-{REPO}.md"
+    OUTPUT_PATH = os.path.join(
+        os.path.dirname(DEFAULT_OUTPUT_PATH),
+        f"test-issues-{REPO}.md",
+    )
 else:
     OUTPUT_PATH = DEFAULT_OUTPUT_PATH
 

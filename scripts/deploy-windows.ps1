@@ -24,7 +24,7 @@ $ErrorActionPreference = 'Stop'
 # ────────────────────────────────────────────────────────────
 $RepoRoot       = (Resolve-Path "$PSScriptRoot\..").Path
 $ProjectDir     = $RepoRoot
-$NodeDir        = "$env:USERPROFILE\node22"           # 与 Mac 的 /Users/hyh/node22 对应
+$NodeDir        = "$env:USERPROFILE\node22"           # Windows 端 Node 22 安装目录；Mac 端通过 ACE_NODE_BIN_DIR 环境变量指定
 $Port           = 3031
 $Domain         = 'cpf-manager.xyz'
 $CloudflaredDir = "$env:USERPROFILE\.cloudflared"
