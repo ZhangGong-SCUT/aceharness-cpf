@@ -223,7 +223,7 @@ workflow:
     - name: 修复建议
       description: |
         基于确认的根因，提出修复方案。单步完成，无需裁决，无自循环——
-        修复方案质量在报告沉淀阶段自然体现，不需要自循环调整。
+        修复方案质量在修复验证阶段进行对抗检验。
       requireHumanApproval: false
       isInitial: false
       isFinal: false
@@ -240,21 +240,63 @@ workflow:
             3. 生成短期修复 + 根因修复 + 长期改进的完整建议
             4. 评估修复风险和影响范围
             5. 明确哪些修复依据已验证、哪些依赖运行时补充验证；未编译/未运行时不得声称修复已验证。
+            6. 【OHOS 独有问题修复优先级】如果根因是 OHOS 端独有问题（Android/iOS 不存在），优先通过修改 Native 端（C++/ArkTS）代码解决，而非 Dart 层补丁。在 JSON 中标注 fix_code_layer（native/framework/dart）和 is_ohos_specific（true/false）。如果选择 Dart 层修复，必须在 risk_assessment 中说明为何无法在 Native 层修复。
             输出结尾必须包含 verdict、summary、artifact_path、key_findings、fix_strategy、risk_level、verification_status、missing_evidence、upstream_status（只能为 unknown）。
             输出不超过 2000 字。
       transitions:
-        - to: 报告沉淀
+        - to: 修复验证
           condition: { verdict: pass }
           priority: 1
-          label: 修复方案完成，进入报告沉淀
-        - to: 报告沉淀
+          label: 修复方案完成，进入修复验证
+        - to: 修复验证
           condition: { verdict: conditional_pass }
           priority: 2
-          label: 修复方案有瑕疵，但仍进入报告沉淀
+          label: 修复方案有瑕疵，但仍进入修复验证
         - to: 报告沉淀
           condition: { verdict: fail }
           priority: 3
           label: 修复方案驳回，输出建议供人工执行
+
+    # ========== 状态4.5：修复验证（对抗验证，不通过回根因分析）==========
+    - name: 修复验证
+      description: |
+        以攻击者视角验证修复方案的有效性。验证修复是否真正解决根因、是否覆盖所有触发路径、是否引入回归风险。
+        验证不通过（fail）时回到根因分析重新定位；通过（pass/conditional_pass）时进入报告沉淀。
+        为防止无限循环，maxTransitions 已限制总流转次数；根因分析→修复建议→修复验证 最多循环 2 次。
+      requireHumanApproval: false
+      isInitial: false
+      isFinal: false
+      position: { x: 975, y: 200 }
+      steps:
+        - id: verify-fix
+          name: 修复方案对抗验证
+          agent: diagnosis-fix-verifier-advisor
+          role: defender
+          task: |
+            以攻击者视角验证修复方案的有效性（效率约束：最多读取 5 个文件，输出不超过 1500 字）：
+            1. 验证修复方案能否解决 Issue 中反馈的问题：修复后 Issue 描述的现象是否消失？Issue 中的复现步骤是否还能触发问题
+            2. 验证修复方案与根因的对应性：修复是否针对确认的根因，而非表面症状
+            3. 构造绕过场景：基于 Issue 的复现步骤和触发条件，构造修复未覆盖的场景
+            4. 副作用分析：修复是否会破坏现有功能？是否引入新的风险
+            5. 三端一致性检查：修复后的行为是否与 Android/iOS 基线一致
+            6. 回归风险评估：修复的影响范围是否可控
+            效率要求：根因分析和修复建议阶段已提供代码定位，优先引用已有结论；如需读取代码文件，最多读取 5 个文件，每个最多读取一次。
+            如果验证不通过（verdict=fail），必须在 feedback_to_root_cause 字段中说明回到根因分析时需要补充的方向。
+            输出结尾必须包含 <step-conclusion> 标签，内含 verdict、summary、issue_resolved、root_cause_coverage、regression_risk、feedback_to_root_cause、missing_scenarios。
+            输出不超过 1500 字。
+      transitions:
+        - to: 报告沉淀
+          condition: { verdict: pass }
+          priority: 1
+          label: 修复验证通过，进入报告沉淀
+        - to: 报告沉淀
+          condition: { verdict: conditional_pass }
+          priority: 2
+          label: 修复验证有条件通过，进入报告沉淀
+        - to: 根因分析
+          condition: { verdict: fail }
+          priority: 3
+          label: 修复验证未通过，回到根因分析重新定位
 
     # ========== 状态5：报告沉淀（1步，无裁决）==========
     - name: 报告沉淀

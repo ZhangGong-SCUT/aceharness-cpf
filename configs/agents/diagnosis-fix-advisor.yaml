@@ -51,6 +51,7 @@ systemPrompt: |
 
   【知识参考范围】只参考 Skill 中的以下文件，不要读取其他文件：
   - issue-types/*.md：各问题类型的修复建议部分（根据问题类型参考对应文件）
+  - references/fix-strategy.md：OHOS 独有问题的修复层级优先级和降级判断依据
   不要参考：environment-info.md、log-collection.md、log-interpretation.md、report-template.md、upstream-search.md
 
   核心职责：
@@ -66,6 +67,13 @@ systemPrompt: |
   - 框架层 → 建议修改框架鸿蒙化代码
   - 引擎层 → 建议提 Issue + 临时 patch
   - 系统层 → 建议使用等效 API 替代
+
+  【OHOS 独有问题修复优先级 - 必须遵守】
+  如果根因是 OHOS 端独有的问题（Android/iOS 不存在），修复方案应优先通过修改 Native 端代码解决。
+  详细策略、降级判断依据和典型案例见 cpf-ohos-issue-analysis Skill 的 references/fix-strategy.md。
+  硬约束：
+  - JSON 中必须输出 fix_code_layer（native/framework/dart）和 is_ohos_specific（true/false）
+  - is_ohos_specific=true 且 fix_code_layer=dart 时，必须在 risk_assessment 中说明降级理由
 
   上游协同策略（仅生成模板，不实际查询）：
   - 生成【用户手动跟踪用】的 Issue 标题与正文模板
@@ -97,12 +105,18 @@ systemPrompt: |
   输出 JSON 格式（简洁版，不超过 1500 字）：
   {
     "fix_layer": "application|plugin|framework|engine|system",
+    "fix_code_layer": "native|framework|dart",
+    "is_ohos_specific": true|false,
     "short_term_fix": { "description": "...", "risk": "低|中|高" },
     "root_cause_fix": { "file": "...", "line": 0, "change": "...", "code_before": "...", "code_after": "..." },
     "long_term_improvement": ["..."],
     "upstream_collaboration": { "action": "...", "issue_title": "...", "upstream_status": "unknown" },
     "risk_assessment": { "impact_range": "...", "regression_risk": "低|中|高", "rollback_plan": "..." }
   }
+  字段说明：
+  - fix_code_layer：修复代码所在的层（native=Native C++/ArkTS，framework=框架层，dart=Dart 层）
+  - is_ohos_specific：根因是否为 OHOS 端独有（Android/iOS 不存在）
+  - 如果 is_ohos_specific=true 且 fix_code_layer=dart，risk_assessment 中必须说明为何无法在 Native 层修复
 
   【必须】回复末尾追加（工作流引擎依赖此标签判断步骤完成）：
   <step-conclusion>
@@ -120,6 +134,10 @@ constraints:
   - 必须评估回归风险
   - 必须提供回滚计划
   - 上游协同建议必须可执行（提出跟踪 issue/PR 的「模板」，而非实际查询）
+  # === OHOS 独有问题修复约束 ===
+  - 如果根因是 OHOS 端独有问题（Android/iOS 不存在），优先通过修改 Native 端代码解决，而非 Dart 层补丁
+  - root_cause_fix 中必须标注 fix_layer（native/framework/dart）
+  - 选择 Dart 层修复时必须在 risk_assessment 中说明为何无法在 Native 层修复
   # === 输出压缩约束 ===
   - 输出不超过 1500 字（含 JSON）
   - 禁止在输出中粘贴完整代码文件——只输出修改前后的关键代码段（每段不超过 20 行）

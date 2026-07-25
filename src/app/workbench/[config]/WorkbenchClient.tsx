@@ -5975,7 +5975,7 @@ export default function WorkbenchPage({
     const isRehearsalStart = mode === 'rehearsal';
     const skipPreflight = !!options?.skipPreflight;
     const initialContexts = options?.initialContexts;
-    const normalizedProjectRoot = (projectRoot || '').trim();
+    const normalizedProjectRoot = (resolvedProjectRoot || projectRoot || '').trim();
     if (!normalizedProjectRoot) {
       toast('error', '项目根目录不能为空');
       addLog('system', 'error', '启动失败: 项目根目录不能为空');
