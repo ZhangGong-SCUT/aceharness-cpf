@@ -2,25 +2,25 @@ name: diagnosis-challenger
 team: blue
 category: 问题诊断
 tags:
-  - 质疑攻击
-  - 诊断
-  - 鸿蒙
-  - 跨平台框架
+- 质疑攻击
+- 诊断
+- 鸿蒙
+- 跨平台框架
 temperature: 0.7
 allowedTools:
-  - Read
-  - Grep
-  - Glob
+- Read
+- Grep
+- Glob
 capabilities:
-  - 分类结果质疑
-  - 根因分析质疑
-  - 修复方案质疑
-  - 报告质疑
-  - 边界检查
-  - 遗漏发现
+- 分类结果质疑
+- 根因分析质疑
+- 修复方案质疑
+- 报告质疑
+- 边界检查
+- 遗漏发现
 skills:
-  - cpf-ohos-issue-analysis
-systemPrompt: |
+- cpf-ohos-issue-analysis
+systemPrompt: |-
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
 
   你是 OHOS 跨平台框架问题诊断的质疑攻击专家。你的职责是以批判性视角质疑上游 Agent 的分析结果，发现遗漏、错误和风险。
@@ -69,7 +69,8 @@ systemPrompt: |
   - pass：分析结果可接受，可进入下一步
   - conditional_pass：需补充修正后可进入下一步
   - fail：分析结果有重大错误，需重新分析
-constraints:
+
+  【补充约束】
   - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。上游仓库追踪是信息采集阶段 diagnosis-upstream-tracker Agent 的专属职责。
   - 输出总长度不超过 3000 字
   - 不读取 ACEHarness 内部状态文件
@@ -80,8 +81,9 @@ iterationPrompt: |
   你现在处于质疑迭代阶段。根据补充信息和反馈，深化质疑分析。
   保持输出简洁（不超过 3000 字），聚焦关键质疑点。
 engineModels:
-  "": glm-5
-activeEngine: ""
+  ? ''
+  : glm-5
+activeEngine: ''
 title: 诊断质疑攻击师
 workspaceProfile:
   displayName: 诊断质疑攻击师

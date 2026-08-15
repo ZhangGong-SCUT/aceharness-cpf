@@ -2,25 +2,25 @@ name: diagnosis-fix-advisor
 team: red
 category: 设计
 tags:
-  - 修复方案
-  - 缺陷修复
-  - 诊断
-  - 鸿蒙
+- 修复方案
+- 缺陷修复
+- 诊断
+- 鸿蒙
 temperature: 0.5
 allowedTools:
-  - Read
-  - Glob
-  - Grep
+- Read
+- Glob
+- Grep
 capabilities:
-  - 修复方案设计
-  - 根因修复建议
-  - 短期 Workaround
-  - 长期改进建议
-  - 上游协同建议
-  - 影响范围评估
+- 修复方案设计
+- 根因修复建议
+- 短期 Workaround
+- 长期改进建议
+- 上游协同建议
+- 影响范围评估
 skills:
-  - cpf-ohos-issue-analysis
-systemPrompt: |
+- cpf-ohos-issue-analysis
+systemPrompt: |-
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
   【效率约束 - 必须遵守】
   1. 最多读取 8 个文件（含 Android/iOS 基线源码），每个文件最多读取一次。不要反复读取同一文件。
@@ -122,25 +122,20 @@ systemPrompt: |
   <step-conclusion>
   {"verdict":"pass","summary":"修复方案已生成"}
   </step-conclusion>
-constraints:
-  # === 上游仓库追踪约束（只禁止追踪 Issue 所在仓库的上游仓库） ===
+
+  【补充约束】
   - 【硬约束】不得追踪 Issue 所在仓库的上游仓库信息。例如 Issue 在 openharmony-tpc/flutter_flutter，不得去查 flutter/flutter 主仓库的 PR/Issue/代码。
   - 【硬约束】不得调用 GitCode/GitHub API 搜索上游仓库的 PR/Issue（即使本机有 token）。
   - 不确定的"上游是否有修复"信息，统一在 upstream_collaboration.upstream_status 字段写为 "unknown"，不进行实际查询。
   - 允许使用 webfetch 获取 Issue 正文、评论等非上游仓库信息（但本 Agent 通常不需要联网）。
-  # === 修复方案质量约束 ===
   - 必须提供短期修复和根因修复两层方案
   - 根因修复必须指明具体文件和行号（限于本地仓 repo/ 路径）
   - 必须评估回归风险
   - 必须提供回滚计划
   - 上游协同建议必须可执行（提出跟踪 issue/PR 的「模板」，而非实际查询）
-  # === OHOS 独有问题修复约束 ===
   - 如果根因是 OHOS 端独有问题（Android/iOS 不存在），优先通过修改 Native 端代码解决，而非 Dart 层补丁
   - root_cause_fix 中必须标注 fix_layer（native/framework/dart）
   - 选择 Dart 层修复时必须在 risk_assessment 中说明为何无法在 Native 层修复
-  # === 输出压缩约束 ===
-  - 输出不超过 1500 字（含 JSON）
-  - 禁止在输出中粘贴完整代码文件——只输出修改前后的关键代码段（每段不超过 20 行）
   - 未编译/未运行时 verification_status 必须为 needs_runtime_validation，不得声称已验证
 iterationPrompt: |
   你现在处于修复方案迭代阶段。根据审查反馈和质疑，优化修复方案。

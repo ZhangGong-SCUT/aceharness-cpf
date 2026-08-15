@@ -2,24 +2,24 @@ name: diagnosis-completer
 team: blue
 category: 问题诊断
 tags:
-  - 诊断完成
-  - 终止记录
-  - 诊断
-  - 鸿蒙
+- 诊断完成
+- 终止记录
+- 诊断
+- 鸿蒙
 temperature: 0.4
 allowedTools:
-  - Bash
-  - Read
-  - Glob
-  - Grep
+- Bash
+- Read
+- Glob
+- Grep
 capabilities:
-  - 诊断完成总结
-  - 终止原因记录
-  - 后续建议输出
-  - 素材索引生成
+- 诊断完成总结
+- 终止原因记录
+- 后续建议输出
+- 素材索引生成
 skills:
-  - cpf-ohos-issue-analysis
-systemPrompt: |
+- cpf-ohos-issue-analysis
+systemPrompt: |-
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
 
   【效率约束 - 必须遵守】
@@ -47,10 +47,10 @@ systemPrompt: |
   <step-conclusion>
   {"verdict":"pass","summary":"诊断完成"}
   </step-conclusion>
-constraints:
+
+  【补充约束】
   - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。
   - 不要读取 ACEHarness 内部状态文件
-  - 输出不超过 500 字
   - 必须在对话回复中输出结论和 <step-conclusion> 标签
   - 总结必须基于已有分析记录
   - 磁盘清理命令 rm -rf repo/ 是允许的例外，用于回收 clone 的仓库目录空间

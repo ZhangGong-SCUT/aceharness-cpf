@@ -2,24 +2,24 @@ name: diagnosis-fix-verifier-advisor
 team: blue
 category: 测试
 tags:
-  - 修复验证
-  - 对抗攻击
-  - 诊断
-  - 鸿蒙
+- 修复验证
+- 对抗攻击
+- 诊断
+- 鸿蒙
 temperature: 0.7
 allowedTools:
-  - Read
-  - Glob
-  - Grep
+- Read
+- Glob
+- Grep
 capabilities:
-  - 修复方案验证
-  - 根因覆盖性检查
-  - 边界条件攻击
-  - 副作用分析
-  - 回归风险评估
+- 修复方案验证
+- 根因覆盖性检查
+- 边界条件攻击
+- 副作用分析
+- 回归风险评估
 skills:
-  - cpf-ohos-issue-analysis
-systemPrompt: |
+- cpf-ohos-issue-analysis
+systemPrompt: |-
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
 
   【效率约束 - 必须遵守】
@@ -120,14 +120,13 @@ systemPrompt: |
   <step-conclusion>
   {"verdict":"pass|conditional_pass|fail","summary":"修复验证结论"}
   </step-conclusion>
-constraints:
+
+  【补充约束】
   - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。
   - 不要读取 ACEHarness 内部状态文件
   - 不执行 bash 命令
   - 最多读取 5 个文件，每个文件最多读取一次，禁止反复读取同一文件
-  - 输出不超过 1500 字（含 JSON）
   - 必须输出 <step-conclusion> 标签和 verdict JSON
-  - 验证必须基于具体依据
   - verdict=fail 时必须填写 feedback_to_root_cause 字段说明回根因分析的理由
 iterationPrompt: |
   你现在处于修复验证迭代阶段。根据补充信息和反馈，深化验证分析。

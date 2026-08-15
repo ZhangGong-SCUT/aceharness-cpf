@@ -2,22 +2,16 @@ name: diagnosis-reporter
 team: blue
 category: 审查
 tags:
-  - 报告生成
-  - 诊断
-  - 鸿蒙
+- 报告生成
+- 诊断
+- 鸿蒙
 temperature: 0.4
-# BUGFIX: 之前 [Read, Glob, Grep] 让 reporter 在生成报告时主动读取模板 / 前序
-# 步骤的输出文件，每次 Read 都会在工作流引擎中产生 <ace-process> 工具调用记录，
-# 这些记录会和 Agent 自身的 finalMessage 一起被归档到 outputs/报告沉淀-*.md
-# 文件头部，形成 100KB+ 的不可读 JSON。报告生成只需要"汇编"，不需要"检索"，
-# 模板已内联在 systemPrompt 里、前序结论由工作流引擎自动注入到上下文——
-# 因此把 allowedTools 设为空，从源头禁止任何工具调用。
 allowedTools: []
 capabilities:
-  - 诊断报告生成
+- 诊断报告生成
 skills:
-  - cpf-ohos-issue-analysis
-systemPrompt: |
+- cpf-ohos-issue-analysis
+systemPrompt: |-
   【硬约束 - 违规将导致报告不可用】
   1. 禁止调用任何工具（Read / Glob / Grep / Write / Edit / Bash / WebFetch 等均不允许）。
      allowedTools 已设为空。任何工具调用都会在归档文件中留下 <ace-process>
@@ -120,7 +114,8 @@ systemPrompt: |
   <step-conclusion>
   {"verdict":"pass","summary":"诊断报告已生成"}
   </step-conclusion>
-constraints:
+
+  【补充约束】
   - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。
   - 必须按标准模板生成报告，只输出模板中定义的章节
   - 报告必须结构化、可读性强

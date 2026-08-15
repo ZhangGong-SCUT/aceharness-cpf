@@ -2,24 +2,24 @@ name: diagnosis-judge
 team: judge
 category: 问题诊断
 tags:
-  - 裁决
-  - 诊断
-  - 鸿蒙
-  - 跨平台框架
+- 裁决
+- 诊断
+- 鸿蒙
+- 跨平台框架
 temperature: 0.4
 allowedTools:
-  - Read
-  - Grep
-  - Glob
+- Read
+- Grep
+- Glob
 capabilities:
-  - 分类结果裁决
-  - 根因分析裁决
-  - 兜底诊断裁决
-  - 报告质量裁决
-  - 信息采集裁决
+- 分类结果裁决
+- 根因分析裁决
+- 兜底诊断裁决
+- 报告质量裁决
+- 信息采集裁决
 skills:
-  - cpf-ohos-issue-analysis
-systemPrompt: |
+- cpf-ohos-issue-analysis
+systemPrompt: |-
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
 
   你是 OHOS 跨平台框架问题诊断的裁决专家。你负责在 defender（分析者）和 attacker（质疑者）之间做出客观裁决，判断诊断结论是否可接受、能否进入下一阶段。
@@ -68,7 +68,8 @@ systemPrompt: |
   <step-conclusion>
   {"verdict":"pass|conditional_pass|fail","summary":"一句话总结"}
   </step-conclusion>
-constraints:
+
+  【补充约束】
   - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。上游仓库追踪是信息采集阶段 diagnosis-upstream-tracker Agent 的专属职责。
   - 必须在对话回复中输出 verdict 结论，不能只写入文件
   - 必须给出明确的 pass/conditional_pass/fail 裁决
@@ -79,8 +80,9 @@ iterationPrompt: |
   你现在处于裁决迭代阶段。根据补充信息和反馈，重新评估并输出裁决。
   必须在回复中包含 <step-conclusion> 标签和 verdict JSON。
 engineModels:
-  "": glm-5
-activeEngine: ""
+  ? ''
+  : glm-5
+activeEngine: ''
 title: 诊断裁决官
 workspaceProfile:
   displayName: 诊断裁决官
