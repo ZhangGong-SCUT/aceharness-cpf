@@ -34,15 +34,20 @@ systemPrompt: |-
   2. 下载截图到 outputs/screenshots/，按模型能力降级解析（vision → OCR → 仅记录 URL）
   3. 提取结构化环境信息，未提取到的字段标记 missing，评估完整性 complete/partial/minimal
   4. 识别仓库 URL（Issue 所在仓库即诊断目标），从 Issue 标题/内容推断分支（版本号→分支映射见 Skill）
-  5. 完整 clone（不用 --depth=1）到 repo/ 子目录，切换到对应分支
+  5. 代码仓准备（智能复用本地已有仓库）：
+     - 检测 repo/ 目录是否已存在且为有效 git 仓库（repo/.git 存在）
+     - 【已存在】执行 git -C repo/ fetch --all --prune 更新远程分支引用（不重新 clone，节省时间和带宽）
+     - 【不存在】执行完整 clone（不用 --depth=1，需完整历史）到 repo/ 子目录
+     - fetch/clone 后切换到对应分支：git -C repo/ checkout <branch>
   6. 回退到 Issue 创建时间前最近的一个 merge commit：git -C repo/ log --merges --before="<created_at>" -1 → git -C repo/ reset --hard <hash>
   7. 验证 HEAD 状态，列出关键文件路径
 
   【行为约束】
   - clone 失败或超时（5分钟）：标记 clone_result=skipped、verdict=conditional_pass，不阻塞工作流
   - 回退失败（无 merge commit）：保持当前 HEAD，记录 warning，仍算 conditional_pass
-  - clone 最多重试 1 次
-  - repo/ 已存在且非空时跳过 clone
+  - clone/fetch 最多重试 1 次
+  - repo/ 已存在且为有效 git 仓库时：执行 git fetch --all --prune 更新远程引用，不重新 clone（节省时间和带宽）
+  - repo/ 不存在或非有效 git 仓库时：执行完整 clone
   - Issue body 只输出摘要（标题 + Bug 要点 + 环境信息），不粘贴全文
 
   【验收标准】
@@ -50,7 +55,7 @@ systemPrompt: |-
   - <step-conclusion> 中输出完整 JSON（模板见 Skill issue-content-collection.md 第 6 节），repo_url、branch、commit、issue_content_complete 字段必须填实际值
   - <step-conclusion> 标签存在且包含 verdict
 
-  输出要求：<step-conclusion> 标签内输出完整 JSON（模板见 Skill references/issue-content-collection.md 第 6 节），包含 clone_result、repo_url、branch、branch_source、local_path、key_files、commit、issue_created_at、reset_target_merge_commit、reset_status、issue_content_complete、issue_title、issue_body_summary、issue_comments_count、issue_comments_summary、screenshots、screenshot_analysis、screenshot_descriptions、screenshot_contexts、environment_info、environment_completeness、missing_evidence 等字段。
+  输出要求：<step-conclusion> 标签内输出完整 JSON（模板见 Skill references/issue-content-collection.md 第 6 节），包含 clone_result、repo_url、branch、branch_source、local_path、key_files、commit、issue_created_at、reset_target_merge_commit、reset_status、issue_content_complete、issue_title、issue_body_summary、issue_comments_count、issue_comments_summary、screenshots、screenshot_analysis、screenshot_descriptions、screenshot_contexts、environment_info、environment_completeness、missing_evidence、repo_preparation（fetched|cloned|skipped）等字段。
 
   <step-conclusion>
   {"verdict":"pass","summary":"代码仓拉取完成，本地路径: repo/"}

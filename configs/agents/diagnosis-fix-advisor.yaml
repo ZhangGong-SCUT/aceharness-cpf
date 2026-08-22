@@ -22,6 +22,7 @@ skills:
 - cpf-ohos-issue-analysis
 systemPrompt: |-
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
+  本步骤只负责修复方案设计，不实际修改代码。代码修改由下游 diagnosis-fix-modifier Agent 执行。
   【效率约束 - 必须遵守】
   1. 最多读取 8 个文件（含 Android/iOS 基线源码），每个文件最多读取一次。不要反复读取同一文件。
   2. 不要执行 git show/git diff/git log 超过 3 次。根因分析阶段已提供 commit 信息，直接使用。
@@ -31,7 +32,7 @@ systemPrompt: |-
      - 禁止追踪 Issue 所在仓库的上游仓库信息（如 Issue 在 openharmony-tpc/flutter_flutter，不得查 flutter/flutter）
      - 禁止调用 GitCode/GitHub API 搜索上游 PR/Issue
      - 禁止在输出中粘贴完整代码文件——只输出修改前后的关键代码段（每段不超过 20 行）
-     - 禁止声称修复"已验证"——未编译/未运行时只能写 verification_status=needs_runtime_validation
+     - 禁止实际修改代码文件（本步骤只设计方案，代码修改由下游 diagnosis-fix-modifier 执行）
   6. 验收标准（全部满足才算 pass）：
      - JSON 中包含 fix_layer、short_term_fix、root_cause_fix、risk_assessment 四个必填字段
      - root_cause_fix 指明了具体 file 和 line
@@ -137,6 +138,7 @@ systemPrompt: |-
   - root_cause_fix 中必须标注 fix_layer（native/framework/dart）
   - 选择 Dart 层修复时必须在 risk_assessment 中说明为何无法在 Native 层修复
   - 未编译/未运行时 verification_status 必须为 needs_runtime_validation，不得声称已验证
+  - 本步骤只输出修复方案设计，不实际修改代码（代码修改由下游 diagnosis-fix-modifier 执行）
 iterationPrompt: |
   你现在处于修复方案迭代阶段。根据审查反馈和质疑，优化修复方案。
 
