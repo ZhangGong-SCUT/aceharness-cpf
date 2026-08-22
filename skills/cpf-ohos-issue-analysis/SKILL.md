@@ -79,74 +79,40 @@ flowchart LR
 
 | 文件 | 内容 |
 |------|------|
+| [references/common-experience.md](./references/common-experience.md) | 通用经验 + NEVER 列表 + 通用工具约束 |
+| [references/issue-content-collection.md](./references/issue-content-collection.md) | Issue 内容采集 + 截图降级策略 |
 | [references/environment-info.md](./references/environment-info.md) | 环境信息采集清单 |
 | [references/log-collection.md](./references/log-collection.md) | 日志采集命令模板 |
 | [references/log-interpretation.md](./references/log-interpretation.md) | 日志解读方法 |
+| [references/fix-strategy.md](./references/fix-strategy.md) | OHOS 独有问题修复策略 |
 | [references/report-template.md](./references/report-template.md) | 诊断报告模板 |
 | [references/upstream-search.md](./references/upstream-search.md) | 上游社区搜索策略 |
+| [references/ohos-signing-config.md](./references/ohos-signing-config.md) | OHOS 签名配置 |
 
 ## Agent 与 Skill 知识映射
 
+> 映射表对齐当前工作流（cpf-ohos-diagnosis.yaml）实际引用的 8 个 Agent。分类定界已合并到根因分析 Agent，不再有独立的 classifier。
+
 | Agent | 使用的 Skill 知识 | 用途 |
 |-------|-----------------|------|
-| **diagnosis-classifier** | 问题类型识别表 + 层面定界参考 | 分类决策 |
-| **diagnosis-collector** | environment-info.md + log-collection.md | 采集清单 |
-| **diagnosis-root-cause-analyzer** | issue-types/*.md + log-interpretation.md | 根因匹配 + 置信度评估 |
-| **diagnosis-fix-advisor** | issue-types/*.md 修复建议 | 修复方案 |
-| **diagnosis-reporter** | report-template.md | 报告模板 |
-| **diagnosis-fallback** | 通用经验 + NEVER 列表 | 排查思路 |
+| **diagnosis-issue-collector** | references/issue-content-collection.md + references/environment-info.md | Issue 内容采集 + 环境信息采集 |
+| **diagnosis-root-cause-analyzer** | 问题类型识别表 + 层面定界参考 + issue-types/*.md + references/log-interpretation.md | 分类定界 + 根因匹配 + 置信度评估 |
+| **diagnosis-challenger** | SKILL.md（问题类型识别表）+ issue-types/*.md | 质疑根因假设、挑战证据链 |
+| **diagnosis-judge** | SKILL.md（问题类型识别表、层面定界参考）+ issue-types/*.md | 裁决 defender 与 attacker 的结论 |
+| **diagnosis-fix-advisor** | issue-types/*.md 修复建议 + references/fix-strategy.md | 修复方案设计 + OHOS Native 优先策略 |
+| **diagnosis-fix-verifier-advisor** | issue-types/*.md + references/fix-strategy.md | 对抗验证修复方案 + Native 优先策略检查 |
+| **diagnosis-reporter** | references/report-template.md | 诊断报告模板 |
+| **diagnosis-completer** | 通用经验 + NEVER 列表 | 最终总结 + 磁盘清理 |
 
-## 通用经验
+## 通用经验与约束
 
-1. **上游优先**：先查上游社区是否已有同类问题/修复，再深入自研代码
-2. **渐进式深入**：从快速分类到深度分析，分层投入精力
-3. **对比分析法（硬约束）**：鸿蒙特有问题，**必须先对比 Android 和 iOS 源码**，再下根因结论和修复建议。鸿蒙化问题绝大多数是"鸿蒙实现与 Android/iOS 基线不一致"导致的，不对比基线就无法定位根因。对比要求：
-   - 在 repo/ 中搜索 Android 实现（`*.kt` / `*.java`）和 iOS 实现（`*.swift` / `*.m`）
-   - 逐函数对比三端实现逻辑：Android vs iOS vs OHOS（ArkTS）
+跨 Agent 的通用经验、NEVER 列表和通用工具约束已提取到独立文件：[references/common-experience.md](./references/common-experience.md)
 
-   - 在证据链/修复建议中必须引用 Android/iOS 基线（标注文件路径和行号）
-   - 如果 repo/ 中找不到 Android/iOS 实现，在 missing_evidence 中明确记录
-4. **最小复现法**：构造最小复现 Demo，便于上游提 Issue
-5. **日志先行**：先采集完整日志，再分析代码
-6. **GitCode 获取锁定降级链**：GitCode Issue/PR 页面常是 SPA，页面抓取可能只返回空壳；必须依次尝试 API v5、comments API、带 Cookie/登录态请求、用户人工导出。页面抓取失败不得等同于 Issue 内容为空。
-7. **证据分级表达**：所有结论按 confirmed / inferred / unverified 分层。confirmed 只能来自 Issue/API、日志、源码、命令结果或上游记录；inferred 必须说明推理链；unverified 必须给出补充验证命令或样本需求。
-8. **报告保守表述**：Issue 未明确说明的具体现象（如崩溃、白屏、方向错误、镜像异常）只能写为“可能/推测”，不得写成已验证事实；未编译/未运行验证时，修复状态必须是 skipped 或 needs_runtime_validation。
-9. **步骤结论可传递**：每个阶段最终输出必须给下游一个结构化结论，至少包含 verdict、summary、artifact_path、key_findings、missing_evidence；不要只留下工具调用日志或零散 grep/ls 结果。
-10. **缺失证据要写影响**：正文、评论、截图、日志、样本、运行环境缺失时，必须说明影响的是分类、根因置信度、修复验证还是上游追踪，避免缺口一路隐身到报告。
+各 Agent 的 systemPrompt 不必重复声明这些内容，只需在需要时引用本文件。主要包含：
 
-## NEVER 列表
-
-- **NEVER** 在没有完整日志的情况下下根因结论
-- **NEVER** 忽略上游社区的已有分析
-- **NEVER** 只修复表面症状而不修复根因
-- **NEVER** 在未验证修复的情况下声称问题已解决
-- **NEVER** 把静态推断的症状表现写成已验证事实
-- **NEVER** 把 GitCode SPA 空页面当作 Issue 正文为空
-- **NEVER** 在 Issue 正文/评论缺失时输出高置信结论而不列 missing_evidence
-- **NEVER** 只输出 ls、grep、read 等过程日志而不输出阶段结论和 artifact_path
-- **NEVER** 跳过人工审查直接执行代码修改
-- **NEVER** 对偶现问题标记为"已修复"而不提供 trigger_pattern
-- **NEVER** 在兜底诊断中只说"不知道"而不提供排查思路
-
-## 问题归属判断（problem_ownership）
-
-分类时必须明确判断问题归属，输出 `problem_ownership` 字段：
-
-| 归属类型 | 含义 | 特征 | 排查方向 |
-|---|---|---|---|
-| **business_code**（上层业务代码） | 问题出在用户自己写的 Dart/ArkTS 业务代码中 | API 使用方式错误、状态管理逻辑错误、生命周期处理不当、参数传递错误 | 检查用户代码的 API 调用、参数、逻辑流程 |
-| **framework_library**（底层框架/库） | 问题出在 Flutter-OHOS 框架、插件鸿蒙化实现、引擎 Embedder、Pigeon 生成代码等 | 用户代码调用方式正确，但框架/库内部处理有 bug | 审查框架/库源码、对比 Android/iOS 实现、检查鸿蒙化适配代码 |
-| **mixed**（混合问题） | 上层业务代码触发了底层框架/库的 bug | 用户代码没问题，但框架内部处理有缺陷，两者协同才触发 | 先确认用户代码正确性，再深入框架/库源码定位 bug |
-
-### 判断依据
-
-1. Issue 中的代码片段是标准 API 用法 → 倾向 `framework_library`
-2. Issue 中的代码片段有明显的逻辑错误 → 倾向 `business_code`
-3. Issue 提到"Android/iOS 正常但鸿蒙异常" → 倾向 `framework_library`
-4. Issue 提到"升级版本后出现问题" → 倾向 `framework_library`
-5. Issue 只在特定业务场景下出现 → 需要进一步分析是 `business_code` 还是 `mixed`
-
----
+- **10 条通用经验**：上游优先、渐进式深入、对比分析法、最小复现法、日志先行、GitCode 获取锁定降级链、证据分级表达、报告保守表述、步骤结论可传递、缺失证据要写影响
+- **11 条 NEVER 列表**：避免常见诊断错误的硬禁止
+- **通用工具约束**：不要调用 write/edit、不要读取 ACEHarness 内部状态、不要搜索上游仓库、必须输出 step-conclusion 标签等
 
 ## 多框架扩展
 
@@ -169,5 +135,5 @@ kmp-cmp-issue-analysis/            # 可扩展（KMP-CMP）
 框架扩展流程：
 1. 在 `skills/` 下新增框架目录
 2. 编写该框架的 `issue-types/` 和 `references/`
-3. Classifier Agent 自动识别框架类型并加载对应知识
+3. 根因分析 Agent（含分类定界）自动识别框架类型并加载对应知识
 4. 其他 Agent 无需修改，自动使用新框架知识
