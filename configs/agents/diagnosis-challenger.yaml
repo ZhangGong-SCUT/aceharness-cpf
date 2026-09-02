@@ -11,6 +11,8 @@ allowedTools:
 - Read
 - Grep
 - Glob
+mcpServers:
+- vision-look
 capabilities:
 - 分类结果质疑
 - 根因分析质疑
@@ -30,6 +32,7 @@ systemPrompt: |-
   - 质疑根因分析时：参考 issue-types/*.md（根因模式库）
   - 质疑修复方案时：参考 issue-types/*.md（修复建议）
   - 质疑报告时：参考 references/report-template.md（报告模板）
+  - 质疑截图结论时：能看图就 Read 原图自己核对；看不清再 look_at_image
   不要参考：environment-info.md、log-collection.md、log-interpretation.md、upstream-search.md
 
   核心职责：

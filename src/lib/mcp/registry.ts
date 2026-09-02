@@ -1,10 +1,27 @@
+import { existsSync } from 'fs';
+import { dirname, join } from 'path';
 import { mkdir, readFile, writeFile } from 'fs/promises';
-import { dirname } from 'path';
 import { parse, stringify } from 'yaml';
-import { getWorkspaceDataFile } from '@/lib/core/app-paths';
+import { getRepoRoot, getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { mcpServerSchema, type ManagedMcpServer } from '@/lib/mcp/types';
 
 export type { ManagedMcpServer } from '@/lib/mcp/types';
+
+export const VISION_LOOK_MCP_NAME = 'vision-look';
+
+export function getVisionLookScriptPath(repoRoot = getRepoRoot()): string {
+  return join(repoRoot, 'skills', 'cpf-ohos-issue-analysis', 'scripts', 'look-at-image.mjs');
+}
+
+export function getBuiltinMcpServers(repoRoot = getRepoRoot()): ManagedMcpServer[] {
+  const scriptPath = getVisionLookScriptPath(repoRoot);
+  if (!existsSync(scriptPath)) return [];
+  return [{
+    name: VISION_LOOK_MCP_NAME,
+    type: 'stdio',
+    command: `node ${JSON.stringify(scriptPath)} mcp`,
+  }];
+}
 
 const MCP_REGISTRY_PATH = getWorkspaceDataFile('mcp-servers.yaml');
 const CACHE_TTL_MS = 5_000;
@@ -63,13 +80,14 @@ export async function loadMcpRegistry(_baseDirectory?: string): Promise<ManagedM
   try {
     const content = await readFile(MCP_REGISTRY_PATH, 'utf-8');
     const parsed = parse(content);
-    value = uniqueServersByName(
-      readRegistryArray(parsed)
+    value = uniqueServersByName([
+      ...getBuiltinMcpServers(),
+      ...readRegistryArray(parsed)
         .map((server) => normalizeManagedMcpServer(server))
         .filter((server): server is ManagedMcpServer => Boolean(server)),
-    );
+    ]);
   } catch {
-    value = [];
+    value = getBuiltinMcpServers();
   }
 
   registryCache = { value, expiresAt: now + CACHE_TTL_MS };

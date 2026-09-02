@@ -91,6 +91,47 @@ OHOS 独有问题的根因通常在：
 3. **Dart 层修复的长期计划**
    - `fix_code_layer=dart` 时，`upstream_collaboration` 中应有 Native 层修复的跟踪计划
 
+4. **embedding / Native ArkTS 修复是否进了 Demo 实际消费的 HAR**（见下一节）
+   - 黄金标志仍是修复前的值，先核对换的是哪个 HAR，再判断修复无效
+
+## 把 embedding 改动送进 Demo（验证必做）
+
+OHOS Flutter 工具链里同时有两套 HAR 文件名，**不能默认盖 `flutter.har`**：
+
+| 名字 | 工具链出处 | 含义 |
+|---|---|---|
+| `flutter.har` | `artifacts.dart` 把 `Artifact.flutterEngineHar` 映射成这个名字；`ohos_builder.dart` 注释「复制 flutter.har」 | 引擎 HAR 工件名之一 |
+| `flutter_embedding_${mode}.har` | `hvigor.dart` 从 SDK 缓存目录拷贝；`printHowToConsumeHar` 把 `@ohos/flutter_ohos` 写成这个文件 | 应用侧 embedding 常见消费名。debug 即 `flutter_embedding_debug.har` |
+
+Issue #2500 修复验证曾把新 HAR 盖到 `flutter.har`，第一轮真机黄金标志仍在（LOWER DOWN=2）。Demo 的 `oh_modules/.ohpm/lock.json5` 显示 `@ohos/flutter_ohos` 实际指向 SDK 缓存里的 `flutter_embedding_debug.har`。改盖该文件并删 `ohos/oh_modules` 重装后，黄金标志才消失。
+
+## SDK 与 repo 必须同套
+
+`repo/` 只是本次诊断 clone 的源码树（改 ets、出 `fix.patch`），完成步骤会删掉。编 hap / 上真机用的是本机 **按分支对号入座的** OHOS Flutter SDK（`bin/flutter` + `bin/cache/artifacts/engine/`）。
+
+本机清单在 `configs/ohos-flutter-sdks.yaml`。信息采集拿到 `repo/` 分支后，引擎写入 `outputs/ohos-flutter-sdk.json`，并注入步骤上下文「OHOS Flutter SDK」。
+
+- 只 `git checkout` 源码、或把 `repo/` 编出来的 HAR 盖到另一版 SDK 的缓存上，**都不算对齐**（3.41 HAR + 3.27 `libflutter.so` 会 SIGSEGV）。
+- 编 hap、换 HAR、装真机必须用 pin 里的 `flutterBin`，和 `repo/` **同一套引擎**（同一分支的 so + embedding HAR）。不要用 PATH 里的社区 flutter，也不要把 `repo/` 当 SDK。
+- HAR 只盖进选用 SDK 的 `bin/cache`，或本次 run 目录。禁止盖日常 SDK（`dailySdk`，常见 `D:\a_flutter\flutter_flutter`）的 `flutter_embedding_*.har`。
+- 本机没有匹配 SDK（`matched=false`）：补丁仍可出，运行验证写 `needs_runtime_validation` / `conditional_pass`，`issue_resolved=partial`，`engine_aligned=false`。禁止改用日常 SDK 凑真机。引擎见到清单未对上会把修复验证 `pass` 降为 `conditional_pass`。
+- 黄金标志跟 **Issue 正文的预期结果**，不跟本机旧 SDK 上碰巧更重的症状。
+
+Issue #2492：仓是 `oh-3.41.9-dev`，真机用本机 3.27.5 SDK；验证把同样补丁打进 3.27 HAR 后写了 `bug_fixed=true`，Issue 要的自定义 `code`/`details` 并未过。
+
+## 把 embedding 改动送进 Demo（验证必做）
+
+验证 embedding / `flutter_embedding` 目录下的 ArkTS 修复时：
+
+1. 读 Demo 的 `oh-package.json5` 和 `ohos/oh_modules/.ohpm/lock.json5`，看 `@ohos/flutter_ohos` **实际指向哪个文件**。
+2. 把新编出来的 embedding HAR **盖到 lock 指向的那个文件**。不要先搜到「复制 flutter.har」就盖 `flutter.har`。
+3. **`flutter build hap` 默认走 release**：lock / 实际消费经常是 `ohos-arm64-release/flutter_embedding_release.har`。只盖 debug 会白跑一轮。debug、release 以 lock 和本次 `flutter build hap` 的 product 为准，该盖哪份盖哪份。
+4. 删 Demo 的 `ohos/oh_modules`，并清 `~/.ohpm/cache`（ohpm 按路径键复用旧包，只删 `oh_modules` 不够），再 `flutter build hap` / 重装。
+5. 以安装后 `oh_modules` 里实际源码是否含本次修改为准（例如新出现的 `instanceof Error`），不要只看文件复制成功。
+6. 用 **Issue 原文** 的黄金标志复测。若仍是修复前的值，先核对第 1–5 步，再写 `bug_fixed=false`。
+
+debug 缓存常见路径（仍以 lock 为准）：`bin/cache/artifacts/engine/ohos-arm64/flutter_embedding_debug.har`。
+
 ## 典型案例
 
 ### 案例 1：Native 层修复（推荐）

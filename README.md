@@ -624,6 +624,9 @@ npm run dev
 | 变量 | 说明 | 默认值 / 优先级 |
 |------|------|-----------------|
 | `ACE_PUBLIC_ORIGIN` | 对外访问的绝对地址；用于 webhook、回调 URL、官方微信桥接等场景 | 优先级最高 |
+| `ACE_GITCODE_WEBHOOK_SECRET` | GitCode PR 自修流水线 Webhook 共享密钥；未配置则拒绝 `/api/gitcode/webhook` | 必填才能接收 Git 事件 |
+| `ACE_GITCODE_PR_AUTHOR` | 自己的 GitCode 用户名，只处理该账号提交的 PR | 必填，否则忽略全部 PR |
+| `ACE_GITCODE_WATCH_REPOS` | 可选仓库白名单，逗号分隔，如 `owner/repo` | 空则不限制仓库 |
 | `NEXT_PUBLIC_ACE_ORIGIN` | 对外地址回退值 | 次于 `ACE_PUBLIC_ORIGIN` |
 | `NEXT_PUBLIC_APP_ORIGIN` | 对外地址回退值 | 次于 `NEXT_PUBLIC_ACE_ORIGIN` |
 | `ACE_WECHAT_AUTO_RESTORE` | 是否在服务启动后自动恢复官方微信 bridge | 默认开启；设为 `0` / `false` 可关闭 |

@@ -11,6 +11,8 @@ allowedTools:
 - Read
 - Glob
 - Grep
+mcpServers:
+- vision-look
 capabilities:
 - 修复方案设计
 - 根因修复建议
@@ -24,13 +26,14 @@ systemPrompt: |-
   【重要】不要调用 write/edit 工具写文件。直接在回复中输出全部内容即可，工作流引擎会自动保存你的输出到 outputs/ 目录。
   本步骤只负责修复方案设计，不实际修改代码。代码修改由下游 diagnosis-fix-modifier Agent 执行。
   【效率约束 - 必须遵守】
-  1. 最多读取 8 个文件（含 Android/iOS 基线源码），每个文件最多读取一次。不要反复读取同一文件。
+  1. 不要写死可读文件个数。根因阶段已给出的定位直接引用；缺证据再读方案所需的源码和已挂载 Skill 相关 reference。同一文件不要反复通读；不要为了找一行扫全仓。
   2. 不要执行 git show/git diff/git log 超过 3 次。根因分析阶段已提供 commit 信息，直接使用。
   3. 输出不超过 1500 字（含 JSON）。简洁优先，避免冗长解释。
   4. 必须在回复末尾输出 <step-conclusion> 标签，内含 verdict JSON。这是工作流引擎判断步骤完成的唯一依据。缺少此标签会导致步骤被判定为未完成并反复重试，浪费大量时间。
   5. 禁止事项：
      - 禁止追踪 Issue 所在仓库的上游仓库信息（如 Issue 在 openharmony-tpc/flutter_flutter，不得查 flutter/flutter）
      - 禁止调用 GitCode/GitHub API 搜索上游 PR/Issue
+     - 禁止把采集摘要里的「对照该 PR / 官方修复 commit」当成方案；禁止建议 git apply / cherry-pick 官方修复
      - 禁止在输出中粘贴完整代码文件——只输出修改前后的关键代码段（每段不超过 20 行）
      - 禁止实际修改代码文件（本步骤只设计方案，代码修改由下游 diagnosis-fix-modifier 执行）
   6. 验收标准（全部满足才算 pass）：
@@ -53,6 +56,7 @@ systemPrompt: |-
   【知识参考范围】只参考 Skill 中的以下文件，不要读取其他文件：
   - issue-types/*.md：各问题类型的修复建议部分（根据问题类型参考对应文件）
   - references/fix-strategy.md：OHOS 独有问题的修复层级优先级和降级判断依据
+  - references/vision-look.md：依赖截图时，能看图就 Read 原图；看不清再 look_at_image
   不要参考：environment-info.md、log-collection.md、log-interpretation.md、report-template.md、upstream-search.md
 
   核心职责：
@@ -148,7 +152,7 @@ iterationPrompt: |
   - 补充长期改进建议
   - 优化上游协同方案
 engineModels:
-  opencode: minimax-cn/MiniMax-M3
+  opencode: 火山AI网关/glm-5.3
 activeEngine: opencode
 title: 诊断修复架构师
 workspaceProfile:

@@ -58,7 +58,7 @@ iterationPrompt: |
   你现在处于完成/终止记录迭代阶段。根据补充信息，完善总结记录。
   保持输出简洁（不超过 500 字）。
 engineModels:
-  opencode: minimax-cn/MiniMax-M3
+  opencode: 火山AI网关/glm-5.3
 activeEngine: opencode
 title: 诊断完成记录师
 workspaceProfile:

@@ -1,1 +1,20 @@
-{}
+{
+  "cpf-ohos-diagnosis.yaml": {
+    "createdBy": "3f03b26b-6416-49d6-a966-a2ef3a12641f",
+    "visibility": "public",
+    "createdAt": 1756182720000,
+    "specCodingEnabled": false
+  },
+  "flutter-ohos-diagnosis.yaml": {
+    "createdBy": "3f03b26b-6416-49d6-a966-a2ef3a12641f",
+    "visibility": "public",
+    "createdAt": 1756182720000,
+    "specCodingEnabled": false
+  },
+  "gitcode-pr-review.yaml": {
+    "createdBy": "3f03b26b-6416-49d6-a966-a2ef3a12641f",
+    "visibility": "public",
+    "createdAt": 1756700000000,
+    "specCodingEnabled": false
+  }
+}

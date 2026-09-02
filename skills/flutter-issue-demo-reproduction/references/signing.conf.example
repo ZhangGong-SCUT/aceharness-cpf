@@ -1,0 +1,37 @@
+// OHOS 调试签名配置模板（JSON5 格式，与 build-profile.json5 一致）
+//
+// ⚠️ 这是模板文件，不包含实际签名材料。使用前必须通过 DevEco Studio 生成调试签名：
+//   1. DevEco Studio → File → Project Structure → Signing Configs → 勾选 Automatically generate signature
+//   2. 生成后 DevEco 会将实际路径和密码写入 ohos/build-profile.json5
+//   3. 或手动将 DevEco 生成的值填入本模板对应字段
+//
+// 字段说明：
+//   certpath      — 证书文件路径（.cer），由 DevEco 生成
+//   keyAlias      — 密钥别名，通常为 debugKey
+//   keyPassword   — 密钥密码（DevEco 加密格式，非明文）
+//   profile       — 签名 Profile 文件路径（.p7b），绑定 bundleName
+//   signAlg       — 签名算法，OHOS 调试签名固定为 SHA256withECDSA
+//   storeFile     — 密钥库文件路径（.p12）
+//   storePassword — 密钥库密码（DevEco 加密格式，非明文）
+//
+// 路径约定：使用 ~/.ohos/config/ 相对路径，Python 脚本会自动展开为用户 home 目录
+// bundleName：必须与 AppScope/app.json5 的 bundleName 完全一致
+{
+  "bundleName": "com.example.<your_demo_name>",
+  "compatibleSdkVersion": "5.0.0(12)",
+  "signingConfigs": [
+    {
+      "name": "default",
+      "type": "HarmonyOS",
+      "material": {
+        "certpath": "~/.ohos/config/<your_signing_material>.cer",
+        "keyAlias": "debugKey",
+        "keyPassword": "<your_encrypted_key_password>",
+        "profile": "~/.ohos/config/<your_signing_material>.p7b",
+        "signAlg": "SHA256withECDSA",
+        "storeFile": "~/.ohos/config/<your_signing_material>.p12",
+        "storePassword": "<your_encrypted_store_password>"
+      }
+    }
+  ]
+}

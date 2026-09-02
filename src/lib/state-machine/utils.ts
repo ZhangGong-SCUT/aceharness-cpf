@@ -12,9 +12,55 @@ export function stripNonAiStreamArtifacts(text: string): string {
     .trim();
 }
 
+export function stripAceProcessEnvelopes(text: string): string {
+  return String(text || '').replace(/<ace-process\b[\s\S]*?<\/ace-process>/gi, '\n');
+}
+
 export function extractTaggedBlock(text: string, tag: string): string | null {
-  const pattern = new RegExp(`<${tag}>\\s*([\\s\\S]*?)\\s*</${tag}>`, 'i');
-  return text.match(pattern)?.[1]?.trim() || null;
+  const blocks = extractTaggedBlocks(text, tag);
+  return blocks[0] || null;
+}
+
+export function extractTaggedBlocks(text: string, tag: string): string[] {
+  const pattern = new RegExp(`<${tag}>\\s*([\\s\\S]*?)\\s*</${tag}>`, 'gi');
+  const blocks: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    const value = match[1]?.trim();
+    if (value) blocks.push(value);
+  }
+  return blocks;
+}
+
+/**
+ * Pair from the last opening tag that still has a close after it.
+ * An earlier unmatched `<step-conclusion>` (skill docs / tool dumps) must not
+ * swallow the agent's real closing tag.
+ */
+export function extractLastTaggedBlock(text: string, tag: string): string | null {
+  const source = String(text || '');
+  if (!source) return null;
+  const openTag = `<${tag}>`;
+  const closeTag = `</${tag}>`;
+  const lower = source.toLowerCase();
+  const openNeedle = openTag.toLowerCase();
+  const closeNeedle = closeTag.toLowerCase();
+  const opens: number[] = [];
+  let from = 0;
+  while (from < lower.length) {
+    const idx = lower.indexOf(openNeedle, from);
+    if (idx < 0) break;
+    opens.push(idx);
+    from = idx + openNeedle.length;
+  }
+  for (let i = opens.length - 1; i >= 0; i -= 1) {
+    const contentStart = opens[i] + openTag.length;
+    const closeIdx = lower.indexOf(closeNeedle, contentStart);
+    if (closeIdx < 0) continue;
+    const value = source.slice(contentStart, closeIdx).trim();
+    if (value) return value;
+  }
+  return null;
 }
 
 export function stripJsonFence(text: string): string {
@@ -25,13 +71,438 @@ export function stripJsonFence(text: string): string {
 }
 
 export function compactStepConclusion(raw: string): string {
-  const tagged = extractTaggedBlock(raw, 'step-conclusion');
+  const text = String(raw || '');
+  const stripped = stripAceProcessEnvelopes(text);
+  const tagged =
+    extractLastTaggedBlock(stripped, 'step-conclusion')
+    || extractLastTaggedBlock(text, 'step-conclusion');
   if (tagged) return tagged;
 
-  const text = stripNonAiStreamArtifacts(raw).trim();
-  const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
+  const tailSource = stripNonAiStreamArtifacts(stripped || text).trim();
+  const lines = tailSource.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
   const tail = lines.slice(-30).join('\n').trim();
   return tail.length > 4000 ? tail.slice(-4000).trim() : tail;
+}
+
+export type WorkflowVerdict = 'pass' | 'conditional_pass' | 'fail';
+
+const CONCLUSION_VERDICT_PATTERN =
+  /(?:verdict|裁定|裁决|结果|结论|判断)\s*(?:为|是|:|：|=)?\s*["'`*]*(conditional_pass|fail|pass|有条件通过|失败|不通过|通过|成功)/i;
+
+function findBalancedJsonObjectBounds(text: string): { start: number; end: number } | null {
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && inString) {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === '{') {
+      depth += 1;
+      continue;
+    }
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return { start, end: index + 1 };
+      }
+    }
+  }
+
+  return null;
+}
+
+function looksLikeToolEnvelope(json: string): boolean {
+  const head = json.slice(0, 280);
+  return /"toolName"\s*:/.test(head)
+    || /"kind"\s*:\s*"(?:tool-call|tool-result)"/.test(head);
+}
+
+function normalizeVerdictToken(raw: unknown): WorkflowVerdict | null {
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim().toLowerCase();
+  if (value === 'fail' || value === '失败' || value === '不通过') return 'fail';
+  if (value === 'conditional_pass' || value === '有条件通过') return 'conditional_pass';
+  if (value === 'pass' || value === '通过' || value === '成功') return 'pass';
+  return null;
+}
+
+export function parseVerdictFromConclusion(conclusion: string): WorkflowVerdict | null {
+  const text = conclusion.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const fromJson = parseVerdictFromJsonSlice(text) || parseVerdictFromJsonSlice(conclusion);
+  if (fromJson) return fromJson;
+  const match = text.match(CONCLUSION_VERDICT_PATTERN);
+  return match ? normalizeVerdictToken(match[1]) : null;
+}
+
+function parseVerdictFromJsonSlice(text: string): WorkflowVerdict | null {
+  const bounds = findBalancedJsonObjectBounds(text);
+  if (!bounds) return null;
+  try {
+    const parsed = JSON.parse(text.slice(bounds.start, bounds.end));
+    return normalizeVerdictToken(parsed?.verdict);
+  } catch {
+    return null;
+  }
+}
+
+function collectStructuredVerdictHits(output: string): Array<{ verdict: WorkflowVerdict; index: number; source: 'json' | 'conclusion' }> {
+  const hits: Array<{ verdict: WorkflowVerdict; index: number; source: 'json' | 'conclusion' }> = [];
+  let from = 0;
+  while (from < output.length) {
+    const start = output.indexOf('{', from);
+    if (start < 0) break;
+    const bounds = findBalancedJsonObjectBounds(output.slice(start));
+    if (!bounds) {
+      from = start + 1;
+      continue;
+    }
+    const json = output.slice(start, start + bounds.end);
+    if (!looksLikeToolEnvelope(json)) {
+      try {
+        const parsed = JSON.parse(json);
+        const verdict = normalizeVerdictToken(parsed?.verdict);
+        if (verdict) hits.push({ verdict, index: start, source: 'json' });
+      } catch {
+        // ignore non-JSON braces in prose/code
+      }
+    }
+    from = start + bounds.end;
+  }
+
+  const conclusionSource = stripAceProcessEnvelopes(output);
+  const lastConclusion =
+    extractLastTaggedBlock(conclusionSource, 'step-conclusion')
+    || extractLastTaggedBlock(output, 'step-conclusion');
+  if (lastConclusion) {
+    const verdict = parseVerdictFromConclusion(lastConclusion);
+    if (verdict) {
+      hits.push({
+        verdict,
+        index: Math.max(output.toLowerCase().lastIndexOf('<step-conclusion>'), 0),
+        source: 'conclusion',
+      });
+    }
+  }
+
+  hits.sort((left, right) => left.index - right.index);
+  return hits;
+}
+
+export function extractLastWorkflowVerdictJson(output: string): { verdict: WorkflowVerdict } | null {
+  const hits = collectStructuredVerdictHits(output).filter((hit) => hit.source === 'json');
+  if (hits.length === 0) return null;
+  return { verdict: hits[hits.length - 1].verdict };
+}
+
+export function parseWorkflowVerdict(output: string): WorkflowVerdict {
+  if (!output || !output.trim()) return 'fail';
+
+  const hits = collectStructuredVerdictHits(output);
+  if (hits.length > 0) {
+    return hits[hits.length - 1].verdict;
+  }
+
+  return keywordFallbackVerdict(output);
+}
+
+export type FixVerificationContext = {
+  stateName?: string;
+  stepId?: string;
+  stepName?: string;
+  /** 清单未对上 repo 分支时，即使 Agent 写 engine_aligned=true 也不能 pass */
+  sdkMatched?: boolean;
+};
+
+const FIX_VERIFY_STATE = /修复验证/;
+const FIX_VERIFY_STEP = /verify-fix|修复方案对抗验证/;
+const REVISED_GOLDEN_FLAG =
+  /修订后?黄金标志|黄金标志必须修订|按修订后.{0,20}黄金标志|原黄金标志[\s\S]{0,80}不可达/;
+
+export function isFixVerificationStep(context?: FixVerificationContext): boolean {
+  if (!context) return false;
+  return FIX_VERIFY_STATE.test(context.stateName || '')
+    || FIX_VERIFY_STEP.test(context.stepId || '')
+    || FIX_VERIFY_STEP.test(context.stepName || '');
+}
+
+export function extractIssueGoldenFlagMet(output: string): boolean | null {
+  let found: boolean | null = null;
+  walkNonToolJsonObjects(output, (parsed) => {
+    const nested = parsed?.run_verification?.issue_golden_flag_met;
+    const top = parsed?.issue_golden_flag_met;
+    if (typeof nested === 'boolean') found = nested;
+    if (typeof top === 'boolean') found = top;
+  });
+  return found;
+}
+
+export function extractEngineAligned(output: string): boolean | null {
+  let found: boolean | null = null;
+  walkNonToolJsonObjects(output, (parsed) => {
+    const nested = parsed?.run_verification?.engine_aligned;
+    const top = parsed?.engine_aligned;
+    if (typeof nested === 'boolean') found = nested;
+    if (typeof top === 'boolean') found = top;
+  });
+  return found;
+}
+
+/**
+ * 修复验证写 pass 时：Issue 黄金标志必须仍成立，且编 hap/真机引擎与 repo 同套。
+ * 改口径、缺字段或引擎未对齐，一律降为 conditional_pass。
+ */
+export function enforceFixVerificationGoldenFlag(
+  output: string,
+  verdict: WorkflowVerdict,
+  context?: FixVerificationContext,
+): WorkflowVerdict {
+  if (verdict !== 'pass' || !isFixVerificationStep(context)) return verdict;
+  if (REVISED_GOLDEN_FLAG.test(String(output || ''))) return 'conditional_pass';
+  if (extractIssueGoldenFlagMet(output) !== true) return 'conditional_pass';
+  if (context?.sdkMatched === false) return 'conditional_pass';
+  if (extractEngineAligned(output) !== true) return 'conditional_pass';
+  return 'pass';
+}
+
+const FIX_VERIFY_ROLLBACK_STATES = ['代码修复', '方案设计', '根因分析', '报告沉淀'] as const;
+
+export function mapFixVerificationFeedbackTarget(raw: string | null | undefined): string | null {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  if (/根因/.test(text)) return '根因分析';
+  if (/方案/.test(text)) return '方案设计';
+  if (/报告沉淀|报告/.test(text)) return '报告沉淀';
+  if (/代码修复|改代码/.test(text)) return '代码修复';
+  if ((FIX_VERIFY_ROLLBACK_STATES as readonly string[]).includes(text)) return text;
+  return null;
+}
+
+export function extractFixVerificationRollbackTarget(output: string): string | null {
+  let fromJson: string | null = null;
+  walkNonToolJsonObjects(output, (parsed) => {
+    const mappedFeedback = mapFixVerificationFeedbackTarget(
+      typeof parsed?.feedback_to_target === 'string' ? parsed.feedback_to_target : '',
+    );
+    if (mappedFeedback) {
+      fromJson = mappedFeedback;
+      return;
+    }
+    if (typeof parsed?.next_state === 'string') {
+      fromJson = mapFixVerificationFeedbackTarget(parsed.next_state) || parsed.next_state.trim() || fromJson;
+    }
+  });
+  if (fromJson) return fromJson;
+
+  const text = String(output || '');
+  if (REVISED_GOLDEN_FLAG.test(text)) return '方案设计';
+  if (/回退(到)?方案设计|回到方案设计|重新设计方案/.test(text)) return '方案设计';
+  if (/回退(到)?根因分析|回到根因分析/.test(text)) return '根因分析';
+  if (/分支\s*B/.test(text) || /ArkUI[\s\S]{0,40}覆盖/.test(text)) return '方案设计';
+  return null;
+}
+
+export function resolveFixVerificationNextState(input: {
+  stateName: string;
+  verdict: WorkflowVerdict;
+  output: string;
+  allowedStates: Iterable<string>;
+}): string | null {
+  if (!/修复验证/.test(input.stateName)) return null;
+  const allowed = new Set([...input.allowedStates]);
+  const pick = (name: string | null | undefined) => (name && allowed.has(name) ? name : null);
+
+  if (input.verdict === 'pass') return pick('报告沉淀');
+
+  const rollback = extractFixVerificationRollbackTarget(input.output);
+  if (rollback) return pick(rollback);
+
+  if (extractEngineAligned(input.output) !== true) return pick('报告沉淀');
+  return null;
+}
+
+function keywordFallbackVerdict(output: string): WorkflowVerdict {
+  const cleaned = output
+    .replace(/故不\s*fail/gi, ' ')
+    .replace(/不(?:要|得|能|应|该)?\s*fail/gi, ' ')
+    .replace(/未(?:达|到)?\s*fail/gi, ' ')
+    .replace(/非\s*fail/gi, ' ')
+    .replace(/\bnot\s+(?:a\s+)?fail(?:ure)?\b/gi, ' ');
+  if (/\b(fail|失败|不通过)\b/i.test(cleaned)) return 'fail';
+  if (/\b(pass|通过|成功)\b/i.test(cleaned)) return 'pass';
+  return 'conditional_pass';
+}
+
+function walkNonToolJsonObjects(output: string, onParsed: (parsed: any) => void): void {
+  if (!output?.trim()) return;
+  let from = 0;
+  while (from < output.length) {
+    const start = output.indexOf('{', from);
+    if (start < 0) break;
+    const bounds = findBalancedJsonObjectBounds(output.slice(start));
+    if (!bounds) {
+      from = start + 1;
+      continue;
+    }
+    const json = output.slice(start, start + bounds.end);
+    if (!looksLikeToolEnvelope(json)) {
+      try {
+        onParsed(JSON.parse(json));
+      } catch {
+        // ignore non-JSON braces in prose/code
+      }
+    }
+    from = start + bounds.end;
+  }
+}
+
+export function extractLastNonToolJson(output: string): any | null {
+  let chosen: any = null;
+  walkNonToolJsonObjects(output, (parsed) => {
+    chosen = parsed;
+  });
+  return chosen;
+}
+
+export function extractLastNextState(output: string, validStates?: Iterable<string>): string | null {
+  if (!output?.trim()) return null;
+  const allowed = validStates ? new Set([...validStates].filter(Boolean)) : null;
+  let chosen: string | null = null;
+  walkNonToolJsonObjects(output, (parsed) => {
+    const nextState = typeof parsed?.next_state === 'string' ? parsed.next_state.trim() : '';
+    if (nextState && (!allowed || allowed.has(nextState))) {
+      chosen = nextState;
+    }
+  });
+  return chosen;
+}
+
+export function extractLastIssuesArray(output: string): any[] {
+  let issues: any[] = [];
+  walkNonToolJsonObjects(output, (parsed) => {
+    if (Array.isArray(parsed?.issues)) {
+      issues = parsed.issues;
+    }
+  });
+  return issues;
+}
+
+export type CircuitBreakerTransition = {
+  to: string;
+  condition?: { verdict?: string };
+};
+
+export function pickCircuitBreakerEscape(
+  transitions: CircuitBreakerTransition[],
+  currentState: string,
+  verdict?: string | null,
+): CircuitBreakerTransition | undefined {
+  const exits = transitions.filter((item) => item.to && item.to !== currentState);
+  if (exits.length === 0) return undefined;
+
+  if (verdict) {
+    const matching = exits.find((item) => item.condition?.verdict === verdict);
+    if (matching) return matching;
+  }
+
+  // Explicit self-loop exhausted (根因分析 cpass → 根因分析): leave via fail,
+  // never the first YAML pass edge (方案设计).
+  const explicitSelfLoop = verdict
+    ? transitions.some((item) => item.condition?.verdict === verdict && item.to === currentState)
+    : false;
+  if (explicitSelfLoop) {
+    const failExit = exits.find((item) => item.condition?.verdict === 'fail');
+    if (failExit) return failExit;
+    const nonPass = exits.find((item) => item.condition?.verdict && item.condition.verdict !== 'pass');
+    if (nonPass) return nonPass;
+  }
+
+  return exits[0];
+}
+
+export function applySupervisorTransitionVeto(input: {
+  engineVerdict: WorkflowVerdict;
+  proposedNextState: string;
+  currentState: string;
+  supervisorNextState?: string | null;
+  supervisorVerdict?: WorkflowVerdict | null;
+  transitions: CircuitBreakerTransition[];
+}): string {
+  const proposed = input.proposedNextState;
+  const supervisorNext = input.supervisorNextState?.trim();
+  if (!supervisorNext || supervisorNext === proposed) return proposed;
+
+  const allowed = input.transitions.some((item) => item.to === supervisorNext);
+  if (!allowed && supervisorNext !== input.currentState) return proposed;
+
+  if (input.engineVerdict === 'conditional_pass') {
+    const failTargets = input.transitions
+      .filter((item) => item.condition?.verdict === 'fail')
+      .map((item) => item.to);
+    if (failTargets.includes(supervisorNext) && supervisorNext !== input.currentState) {
+      return proposed;
+    }
+    if (supervisorNext === input.currentState) return supervisorNext;
+  }
+
+  if (
+    input.engineVerdict === 'fail'
+    && input.supervisorVerdict === 'conditional_pass'
+    && supervisorNext === input.currentState
+  ) {
+    return supervisorNext;
+  }
+
+  return proposed;
+}
+
+export function modelHasNativeVision(model?: string | null): boolean | 'unknown' {
+  const id = String(model || '').toLowerCase();
+  if (!id.trim()) return 'unknown';
+  if (/(glm-5(\.\d+)?\b|glm5\b)/.test(id) && !/vl|vision/.test(id)) return false;
+  if (/(grok|gpt-4o|gpt-5|gpt-4\.1|claude|gemini|qwen3\.7|qwen.*vl)/.test(id)) return true;
+  return 'unknown';
+}
+
+export function buildVisionCapabilityPrompt(model?: string | null): string {
+  const capability = modelHasNativeVision(model);
+  const modelLabel = String(model || '').trim() || 'unknown';
+  if (capability === true) {
+    return [
+      `# 看图策略`,
+      `当前模型: ${modelLabel}`,
+      `本模型可以直接看图。截图请先用 Read 打开原图自己看，根据像素作答。`,
+      `只有 Read 看不到图、或看不清像素时，才调用 look_at_image（Qwen 子模型）。不要一上来就调 Qwen。`,
+    ].join('\n');
+  }
+  if (capability === false) {
+    return [
+      `# 看图策略`,
+      `当前模型: ${modelLabel}`,
+      `本模型不能看像素。只要结论依赖截图长什么样，就必须调用 look_at_image（Qwen），禁止只靠正文猜图。`,
+    ].join('\n');
+  }
+  return [
+    `# 看图策略`,
+    `当前模型: ${modelLabel}`,
+    `先用 Read 打开截图。如果能看到像素并描述细节，就自己看，不要调用 look_at_image。`,
+    `如果看不到图（空白、报错、明确说无法查看图片），再调用 look_at_image（Qwen）。`,
+  ].join('\n');
 }
 
 export type StepSegment =
@@ -80,10 +551,21 @@ function isStepToolFailure(message: string): boolean {
     || /permission denied/i.test(message);
 }
 
+/** HTTP 401/403 must have protocol or status context. Bare "401" matches source line numbers like "401: }". */
+function hasHttpAuthStatus(message: string): boolean {
+  return /\bHTTP(?:\/[\d.]+)?\s*(?:401|403)\b/i.test(message)
+    || /\b(?:status(?:\s*code)?|状态码)\s*[:：]?\s*(?:401|403)\b/i.test(message)
+    || /\b(?:401|403)\s+(?:Unauthorized|Forbidden|Unauthenticated)\b/i.test(message);
+}
+
 export function isEngineLevelFailure(message: string): boolean {
-  const normalized = String(message || '');
-  if (!normalized.trim()) return false;
-  if (/引擎连续失败|自动恢复\s*\d+\s*次后仍失败/.test(normalized)) return true;
+  const raw = String(message || '');
+  if (!raw.trim()) return false;
+  if (/引擎连续失败|自动恢复\s*\d+\s*次后仍失败/.test(raw)) return true;
+
+  // Agent 工具流 <ace-process> 里常有 GitCode 401 / skill 正文，不能当成引擎挂了。
+  const normalized = stripAceProcessEnvelopes(raw).trim();
+  if (!normalized) return false;
   if (isStepToolFailure(normalized)) return false;
 
   return /acp\s+connection\s+closed/i.test(normalized)
@@ -91,7 +573,7 @@ export function isEngineLevelFailure(message: string): boolean {
     || /模型调用失败(?:\s*\(\s*\d{3}\s*\))?\s*:/i.test(normalized)
     || /(?:unauthorized|invalid token|invalid api key|authentication failed|permission denied)/i.test(normalized)
     || /(?:无效的令牌|令牌无效|认证失败|鉴权失败|API\s*Key\s*无效)/i.test(normalized)
-    || /(?:HTTP\s*)?(?:401|403)\b/i.test(normalized)
+    || hasHttpAuthStatus(normalized)
     || /context window limit/i.test(normalized)
     || /reached (its |the )?context window limit/i.test(normalized)
     || /maximum context length/i.test(normalized)
@@ -100,5 +582,31 @@ export function isEngineLevelFailure(message: string): boolean {
     || /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE/i.test(normalized)
     || /engine (?:not initialized|unavailable|connection .*failed|process .*failed|session .*failed)/i.test(normalized)
     || /failed to create .*process streams/i.test(normalized)
-    || /引擎(?:未初始化|初始化失败|不可用|连接.*失败|连接.*断开|连续失败)/.test(normalized);
+    || /引擎(?:未初始化|初始化失败|不可用|连接.*失败|连接.*断开|连续失败)/.test(normalized)
+    || /ACP session\/load timeout/i.test(normalized)
+    || /ACP newSession timeout/i.test(normalized)
+    || /Model\s+"[^"]+"\s+not found/i.test(normalized)
+    || /模型不可用/.test(normalized);
+}
+
+export function shouldFinalizeDiagnosisAsCompleted(input: {
+  hasFixVerificationState: boolean;
+  lastFixVerificationVerdict: WorkflowVerdict | null;
+  finalStateName?: string | null;
+}): { complete: boolean; reason: string } {
+  if (!input.hasFixVerificationState) return { complete: true, reason: '' };
+  if (input.finalStateName && input.finalStateName !== '完成') {
+    return { complete: true, reason: '' };
+  }
+  if (input.lastFixVerificationVerdict === 'pass') return { complete: true, reason: '' };
+  if (input.lastFixVerificationVerdict == null) {
+    return {
+      complete: false,
+      reason: '诊断工作流未完成修复验证（需要 issue_golden_flag_met=true 且 engine_aligned=true），不得标 completed',
+    };
+  }
+  return {
+    complete: false,
+    reason: `修复验证未过黄金标志/引擎对齐（verdict=${input.lastFixVerificationVerdict}），不得标 completed`,
+  };
 }

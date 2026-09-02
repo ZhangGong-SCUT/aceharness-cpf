@@ -16,8 +16,8 @@ const IGNORABLE_OPENCODE_SDK_ERROR_PATTERNS = [
   /ECONNRESET/i,
   /child exited early code=1 signal=null; stderr tail:\s*<empty>/i,
 ];
-const DEFAULT_OPENCODE_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
-const DEFAULT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_OPENCODE_STREAM_TIMEOUT_MS = 60 * 60 * 1000;
+const DEFAULT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const MIN_OPENCODE_STREAM_TIMEOUT_MS = 1_000;
 const MAX_OPENCODE_STREAM_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
@@ -132,7 +132,11 @@ export type OpenCodeHttpClient = {
   };
   session: {
     create(options: {
-      body: Record<string, never>;
+      body?: {
+        title?: string;
+        agent?: string;
+        model?: { id: string; providerID: string; variant?: string };
+      };
       query?: { directory?: string };
     }): Promise<{ data?: OpenCodeSessionCreateResponse; error?: unknown }>;
     status?(options?: {
@@ -247,6 +251,8 @@ export function resolveOpenCodeModelId(
 export type OpenCodePromptBody = {
   model?: { providerID: string; modelID: string };
   variant?: string;
+  agent?: string;
+  system?: string;
   parts: Array<{ type: 'text'; text: string }>;
 };
 
@@ -289,6 +295,11 @@ class PromptAlreadyStartedError extends Error {
 export function buildFullPrompt(options: Pick<EngineOptions, 'prompt' | 'systemPrompt'>): string {
   if (!options.systemPrompt) return options.prompt;
   return `<system>\n${options.systemPrompt}\n</system>\n\n${options.prompt}`;
+}
+
+export function buildOpenCodeExecutePrompt(options: Pick<EngineOptions, 'prompt' | 'systemPrompt' | 'agent'>): string {
+  if (String(options.agent || '').trim()) return options.prompt;
+  return buildFullPrompt(options);
 }
 
 export function getSessionId(session: OpenCodeSessionCreateResponse | undefined): string | null {

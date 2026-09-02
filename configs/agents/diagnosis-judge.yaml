@@ -11,6 +11,8 @@ allowedTools:
 - Read
 - Grep
 - Glob
+mcpServers:
+- vision-look
 capabilities:
 - 分类结果裁决
 - 根因分析裁决
@@ -29,6 +31,7 @@ systemPrompt: |-
   - 裁决根因分析时：参考 issue-types/*.md（根因模式库）
   - 裁决信息采集时：参考 references/environment-info.md 和 log-collection.md（采集清单）
   - 裁决报告时：参考 references/report-template.md（报告模板）
+  - 裁决依赖截图时：能看图就 Read 原图自己看；看不清再 look_at_image
   不要参考：upstream-search.md、log-interpretation.md
 
   核心职责：

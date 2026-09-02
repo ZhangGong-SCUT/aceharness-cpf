@@ -78,7 +78,7 @@ iterationPrompt: |
   - 提高置信度评分的准确性
   - 优化初步排查方向
 engineModels:
-  opencode: minimax-cn/MiniMax-M3
+  opencode: 火山AI网关/glm-5.3
 activeEngine: opencode
 title: 诊断分类定界师
 workspaceProfile:

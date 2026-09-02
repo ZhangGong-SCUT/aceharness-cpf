@@ -7,7 +7,7 @@
  */
 
 import { EventEmitter } from 'events';
-import { ACPEngine, buildAcpProcessReuseKey, logAcpTiming } from './acp-engine';
+import { ACPEngine, buildAcpProcessReuseKey, isAcpDeadConnectionError, logAcpTiming } from './acp-engine';
 import type { ACPEngineConfig } from './acp-engine';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
@@ -127,11 +127,15 @@ class ACPSharedRunner {
   }
 
   dispose(): void {
+    this.discardEngine();
+    this.activeExecution = null;
+  }
+
+  private discardEngine(): void {
     const engine = this.engine;
     this.engine = null;
     this.currentSessionId = null;
     this.currentModelId = null;
-    this.activeExecution = null;
     if (engine) {
       try {
         engine.stop();
@@ -376,6 +380,10 @@ class ACPSharedRunner {
       const normalizedOutput = normalizeEngineOutput(executionContext.collectedOutput);
       const hasUsableOutput = normalizedOutput.length > 0;
       const isConnectionClosed = /connection\s+closed/i.test(errorMessage);
+
+      if (isAcpDeadConnectionError(error) || isConnectionClosed) {
+        this.discardEngine();
+      }
 
       if (isConnectionClosed && hasUsableOutput) {
         wrapper.emitDiagnosticLog(executionContext, {

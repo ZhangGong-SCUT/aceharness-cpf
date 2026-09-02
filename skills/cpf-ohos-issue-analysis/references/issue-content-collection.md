@@ -2,9 +2,46 @@
 
 > 用于 diagnosis-issue-collector Agent 的 Issue 内容采集指导。本文件提供领域经验，不定义执行步骤。
 
+## 0. 先判断输入：Issue 链接或纯文本
+
+`globalContext` 可以是 Issue 链接，也可以是没有 Issue 号的问题正文。步骤上下文里的「诊断输入形态」为准。
+
+### 0A. 没有 Issue 链接（freeform）
+
+禁止 curl GitCode/GitHub 的 Issue/comments API，禁止编造 Issue 号，禁止改去诊断工作副本或模板里残留的旧 Issue（例如 `#2490` 截图）。
+
+- 把 `globalContext` 全文当作本轮唯一问题：`issue_title` 取首行或第一句，`issue_body_summary` 概括全文
+- `issue_comments_count=0`，`input_source=freeform_text`
+- 没有 `created_at`：不要 `git log --before` 回退，`reset_status=skipped_no_issue_date`
+- 仓地址：正文里的 gitcode/github 仓；否则 `https://gitcode.com/CPF-Flutter/flutter_flutter.git`
+
+### 0B. 有 Issue 链接
+
+GitCode / AtomGit 的 Issue 页是 SPA，抓 HTML 经常只有站点壳，没有标题和正文。**正文只认 API JSON，不认页面。**
+
+从 `globalContext` 链接拆 `{owner}/{repo}/{number}`：
+
+`https://gitcode.com/CPF-Flutter/flutter_flutter/issues/2492` → `CPF-Flutter` / `flutter_flutter` / `2492`
+
+| 取什么 | GitCode | GitHub |
+|---|---|---|
+| **正文**（先打这条） | `https://gitcode.com/api/v5/repos/{owner}/{repo}/issues/{number}` | `https://api.github.com/repos/{owner}/{repo}/issues/{number}` |
+| 评论 | `…/issues/{number}/comments` | 同左结构 |
+
+Windows 必须用 **`curl.exe`**，不要用 PowerShell 的 `curl`（那是 `Invoke-WebRequest`，中文常乱码）：
+
+```bash
+curl.exe -sS "https://gitcode.com/api/v5/repos/{owner}/{repo}/issues/{number}"
+curl.exe -sS "https://gitcode.com/api/v5/repos/{owner}/{repo}/issues/{number}/comments"
+```
+
+从 JSON 取 `title`、`body`、`created_at`、`html_url`、`labels`。返回是 `è§¦æ` 这类乱码时，先当 **UTF-8 被错解**，用 UTF-8 重解或改 `curl.exe`；**禁止靠猜乱码编标题/正文**。页面抓取失败或空壳，不得写成 Issue 内容为空。
+
 ## 1. Issue 评论获取策略
 
 ### API 调用
+
+先打第 0 节的正文 API，再打评论：
 
 - GitCode: `https://gitcode.com/api/v5/repos/{owner}/{repo}/issues/{number}/comments`
 - GitHub: `https://api.github.com/repos/{owner}/{repo}/issues/{number}/comments`
@@ -18,16 +55,17 @@
 | **补充复现步骤** | "需要先 xxx 再 yyy 才能复现" | 完善复现条件 |
 | **环境补充** | "我的系统是 HarmonyOS 5.0.1" | 补充环境信息 |
 | **日志/堆栈** | "hilog 报错：E Flutter: ..." | 提供运行时证据 |
-| **维护者回复** | "已在 PR #xxx 修复" / "不是 bug，是 xxx" | 判断问题状态 |
+| **维护者回复** | "已在后续版本修复" / "不是 bug，是 xxx" | 判断问题状态（**禁止写出 PR 号 / PR URL / 官方修复 commit**） |
 | **用户反馈** | "升级到 xxx 版本后好了" | 辅助定位引入版本 |
-| **关联 PR/Issue** | "和 #123 是同一个问题" | 关联问题识别 |
+| **关联 Issue** | "和当前仓库另一个 Issue 是同一个问题" | 关联问题识别（可保留当前 Issue 号，禁止写出官方修复 PR） |
 
 ### 评论处理原则
 
 1. **按时间排序**：评论按时间顺序阅读，理解问题演进
 2. **区分角色**：reporter（报告者）vs maintainer（维护者）vs 其他用户
-3. **提取结论**：是否有解决方案、是否已修复、是否需要更多信息
+3. **提取结论**：是否有解决方案、是否已修复、是否需要更多信息。维护者说「已合入 / 已在 PR 修复」时，只写「维护者称后续有修复」这类模糊状态，**禁止**写出 PR 号、PR URL、官方修复 commit，禁止写「对照该 PR」「套官方 commit」。当前 Issue 号和回退用的 reset merge commit 必须保留。
 4. **记录缺失**：如果评论中有人提问但 reporter 未回答，记录为 missing_evidence
+5. **禁止漏题**：不得把官方修复 PR 递给下游当答案。引擎会屏蔽采集输出里的 PR URL / `PR #` / `git apply` 官方修复。
 
 ## 2. 截图分析要点
 
@@ -39,7 +77,7 @@ Issue body 中的图片 URL 格式：
 
 下载命令：
 ```bash
-curl -sS -o screenshot_{n}.png "<image_url>"
+curl.exe -sS -o screenshot_{n}.png "<image_url>"
 ```
 
 ### 截图内容解析策略（按模型能力降级）
@@ -197,7 +235,7 @@ Issue body 或评论中明确提到分支名（如 `br_pigeon-v26.1.5_ohos`）�
 
 ## 6. 输出 JSON 模板
 
-信息采集完成后，在 `<step-conclusion>` 标签内输出以下结构化 JSON（供下游 Agent 直接提取关键字段）：
+信息采集完成后，在 step-conclusion 标签内输出以下结构化 JSON（供下游 Agent 直接提取关键字段）：
 
 ```json
 {
@@ -210,12 +248,13 @@ Issue body 或评论中明确提到分支名（如 `br_pigeon-v26.1.5_ohos`）�
   "commit": "d2530f60c0554637971e62e516a27cf06ca06b43",
   "issue_created_at": "2026-07-08T19:46:17+08:00",
   "reset_target_merge_commit": "d2530f60c... 或 null",
-  "reset_status": "success|skipped|failed",
+  "reset_status": "success|skipped|skipped_no_issue_date|failed",
+  "input_source": "issue_url|freeform_text",
   "issue_content_complete": true,
   "issue_title": "【pigeon】需要兼容1.0浮点数的传递",
   "issue_body_summary": "ArkTS 端 1.0 经 Number.isInteger 误判为 INT32...",
   "issue_comments_count": 1,
-  "issue_comments_summary": "维护者已认领，正在分析",
+  "issue_comments_summary": "维护者已认领，正在分析（若称已修复：只写「维护者称后续有修复」，禁止写 PR 号）",
   "screenshots": [{"url": "https://raw.gitcode.com/...", "path": "outputs/screenshots/screenshot_1.png", "download_status": "success|failed"}],
   "screenshot_analysis": "vision|ocr|skipped_no_vision|failed",
   "screenshot_descriptions": ["错误界面：显示 Number.isInteger 启发式", "..."],
@@ -235,4 +274,4 @@ Issue body 或评论中明确提到分支名（如 `br_pigeon-v26.1.5_ohos`）�
 }
 ```
 
-> **重要**：`repo_url`、`branch`、`commit` 是下游报告 Agent 必须读取的字段，务必填写实际值，不要写"待核实"。
+> **重要**：`repo_url`、`branch`、`commit` 是下游报告 Agent 必须读取的字段，务必填写实际值，不要写"待核实"。`branch` 还会被引擎用来写入 `outputs/ohos-flutter-sdk.json`，按本机 `configs/ohos-flutter-sdks.yaml` 对号入座。

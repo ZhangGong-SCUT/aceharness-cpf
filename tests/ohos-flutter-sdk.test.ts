@@ -1,0 +1,87 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { describe, expect, test } from 'vitest';
+import {
+  extractRepoBranch,
+  extractVersionHint,
+  parseOhosFlutterSdkInventory,
+  readRepoBranchFromDisk,
+  resolveOhosFlutterSdk,
+} from '@/lib/workflow/ohos-flutter-sdk';
+import { enforceFixVerificationGoldenFlag } from '@/lib/state-machine/utils';
+
+function fakeSdk(name: string): string {
+  const root = mkdtempSync(join(tmpdir(), `ohos-sdk-${name}-`));
+  mkdirSync(join(root, 'bin', 'cache', 'artifacts', 'engine', 'ohos-arm64'), { recursive: true });
+  writeFileSync(join(root, 'bin', 'flutter.bat'), '@echo off\n');
+  writeFileSync(join(root, 'bin', 'cache', 'artifacts', 'engine', 'ohos-arm64', 'libflutter.so'), '');
+  return root;
+}
+
+describe('ohos flutter sdk inventory', () => {
+  test('extracts branch from collector JSON and markdown', () => {
+    expect(extractRepoBranch('{"branch":"oh-3.35.7-release","commit":"abc"}')).toBe('oh-3.35.7-release');
+    expect(extractRepoBranch('branch: `oh-3.41.9-dev`')).toBe('oh-3.41.9-dev');
+    expect(extractRepoBranch('{"branch":"missing"}')).toBeNull();
+    expect(extractVersionHint('oh-3.35.7-release')).toBe('3.35.7');
+  });
+
+  test('reads attached HEAD from repo/.git', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'ohos-repo-'));
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    writeFileSync(join(repo, '.git', 'HEAD'), 'ref: refs/heads/oh-3.35.7-release\n');
+    expect(readRepoBranchFromDisk(repo)).toBe('oh-3.35.7-release');
+  });
+
+  test('matches branch alias to a usable SDK and never falls back to daily', () => {
+    const sdk335 = fakeSdk('335');
+    const daily = fakeSdk('327');
+    const inventory = parseOhosFlutterSdkInventory(`
+dailySdk: ${daily.replace(/\\/g, '/')}
+sdks:
+  - id: 3.27.5-ohos
+    version: 3.27.5
+    aliases: [oh-3.27]
+    path: ${daily.replace(/\\/g, '/')}
+  - id: 3.35.7-ohos
+    version: 3.35.7
+    aliases: [oh-3.35.7-release, oh-3.35.7]
+    path: ${sdk335.replace(/\\/g, '/')}
+`);
+    const resolved = resolveOhosFlutterSdk({
+      branch: 'oh-3.35.7-release',
+      inventory,
+    });
+    expect(resolved.matched).toBe(true);
+    expect(resolved.sdkId).toBe('3.35.7-ohos');
+    expect(resolved.flutterBin).toContain('flutter');
+    expect(resolved.dailySdk).toBeTruthy();
+    expect(resolved.sdkRoot).not.toBe(resolved.dailySdk);
+  });
+
+  test('unmatched branch stays unmatched instead of using daily SDK', () => {
+    const daily = fakeSdk('327');
+    const inventory = parseOhosFlutterSdkInventory(`
+dailySdk: ${daily.replace(/\\/g, '/')}
+sdks:
+  - id: 3.27.5-ohos
+    version: 3.27.5
+    aliases: [oh-3.27]
+    path: ${daily.replace(/\\/g, '/')}
+`);
+    const resolved = resolveOhosFlutterSdk({
+      branch: 'oh-3.41.9-dev',
+      inventory,
+    });
+    expect(resolved.matched).toBe(false);
+    expect(resolved.flutterBin).toBeNull();
+    expect(resolved.reason).toContain('禁止改用日常 SDK');
+  });
+
+  test('fix verification cannot pass when inventory did not match', () => {
+    const output = '{"verdict":"pass","run_verification":{"issue_golden_flag_met":true,"engine_aligned":true}}';
+    const ctx = { stateName: '修复验证', stepId: 'verify-fix', sdkMatched: false };
+    expect(enforceFixVerificationGoldenFlag(output, 'pass', ctx)).toBe('conditional_pass');
+  });
+});

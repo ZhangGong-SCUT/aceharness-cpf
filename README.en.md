@@ -219,6 +219,9 @@ Public-origin and channel-recovery variables:
 | Variable | Description | Default / precedence |
 |------|-------------|----------------------|
 | `ACE_PUBLIC_ORIGIN` | Absolute public origin used for webhook URLs, callbacks, and the official WeChat bridge | Highest priority |
+| `ACE_GITCODE_WEBHOOK_SECRET` | Shared secret for the GitCode self-PR fix pipeline webhook; `/api/gitcode/webhook` rejects requests without it | Required to receive Git events |
+| `ACE_GITCODE_PR_AUTHOR` | Your GitCode username; only PRs from this author are accepted | Required, otherwise all PRs are ignored |
+| `ACE_GITCODE_WATCH_REPOS` | Optional comma-separated repo allowlist, e.g. `owner/repo` | Empty means no repo filter |
 | `NEXT_PUBLIC_ACE_ORIGIN` | Public-origin fallback | Lower priority than `ACE_PUBLIC_ORIGIN` |
 | `NEXT_PUBLIC_APP_ORIGIN` | Public-origin fallback | Lower priority than `NEXT_PUBLIC_ACE_ORIGIN` |
 | `ACE_WECHAT_AUTO_RESTORE` | Auto-restore official WeChat bridges after the service starts | Enabled by default; disable with `0` / `false` |

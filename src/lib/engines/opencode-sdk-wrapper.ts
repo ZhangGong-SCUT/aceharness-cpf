@@ -19,7 +19,7 @@ import { buildConfiguredProcessEnvSync, getConfiguredCliSearchPaths } from '@/li
 import { buildOpenCodeRawCommandPrompt, isOpenCodeSlashCommandPrompt, parseOpenCodeSlashCommand } from './opencode-command';
 import { mergeOpenCodeCommandsWithFileFallback } from './opencode-command-files';
 import {
-  buildFullPrompt,
+  buildOpenCodeExecutePrompt,
   discoverOpenCodeCommandsFromHttpClient,
   discoverOpenCodeModelsFromHttpClient,
   executeCommandWithOpenCodeHttp,
@@ -31,6 +31,7 @@ import {
   sendPromptWithOpenCodeHttp,
   ZERO_USAGE_METADATA,
 } from './opencode-http-adapter';
+import { registerOpenCodeNativeAgent, registerOpenCodeVisionInspector } from './opencode-native-agent';
 
 /** Singleton server instance shared across all sessions */
 let serverInstance: { url: string; close: () => void } | null = null;
@@ -273,47 +274,6 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
       });
       await ensureOpenCodeCompatibleMcpServers(client as any, options.workingDirectory, options.mcpServers as any);
 
-      // Create or resume session
-      if (options.sessionId) {
-        this.currentSessionId = options.sessionId;
-        console.log(`[opencode-sdk] resuming session: ${this.currentSessionId}`);
-        this.emitDiagnosticLog({
-          message: 'Resuming OpenCode session',
-          detail: this.currentSessionId,
-          verbose: true,
-        });
-      } else {
-        this.currentSessionId = null;
-        console.log('[opencode-sdk] creating new session...');
-        this.emitDiagnosticLog({
-          message: 'Creating OpenCode session',
-          detail: options.workingDirectory,
-          verbose: true,
-        });
-        const sessionResult = await client.session.create({
-          body: {},
-          query: options.workingDirectory ? { directory: options.workingDirectory } : undefined,
-        });
-        if (sessionResult.error) {
-          throw new Error(`Failed to create session: ${JSON.stringify(sessionResult.error)}`);
-        }
-        this.currentSessionId = getSessionId(sessionResult.data);
-        console.log(`[opencode-sdk] session created: ${this.currentSessionId}`);
-        this.emitDiagnosticLog({
-          message: 'OpenCode session created',
-          detail: this.currentSessionId || '',
-          verbose: true,
-        });
-      }
-
-      if (!this.currentSessionId) {
-        throw new Error('[opencode-sdk] no session ID');
-      }
-      this.emit('stream', {
-        type: 'session',
-        content: this.currentSessionId,
-      } as EngineStreamEvent);
-
       let resolvedModelId = String(options.model || '').trim();
       if (resolvedModelId && !resolvedModelId.includes('/')) {
         const availableModels = await discoverOpenCodeModelsFromHttpClient(client);
@@ -326,6 +286,74 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         });
       }
       const model = parseProviderModel(resolvedModelId);
+      const nativeAgentName = String(options.agent || '').trim()
+        ? await registerOpenCodeNativeAgent({
+          client,
+          agent: options.agent,
+          systemPrompt: options.systemPrompt,
+          model: resolvedModelId || options.model,
+          workingDirectory: options.workingDirectory,
+          userId: options.userId,
+        })
+        : '';
+      await registerOpenCodeVisionInspector({
+        client,
+        workingDirectory: options.workingDirectory,
+        userId: options.userId,
+      }).catch((error) => {
+        this.emitDiagnosticLog({
+          message: 'OpenCode vision inspector registration skipped',
+          detail: error instanceof Error ? error.message : String(error),
+          verbose: true,
+        });
+      });
+      const sessionQuery = options.workingDirectory ? { directory: options.workingDirectory } : undefined;
+
+      // Create or resume a session bound to the OpenCode native agent.
+      if (options.sessionId) {
+        this.currentSessionId = options.sessionId;
+        console.log(`[opencode-sdk] resuming session: ${this.currentSessionId}`);
+        this.emitDiagnosticLog({
+          message: 'Resuming OpenCode session',
+          detail: this.currentSessionId,
+          verbose: true,
+        });
+      } else {
+        this.currentSessionId = null;
+        console.log('[opencode-sdk] creating new session...');
+        this.emitDiagnosticLog({
+          message: 'Creating OpenCode native agent session',
+          detail: nativeAgentName || options.workingDirectory,
+          verbose: true,
+        });
+        const sessionResult = await client.session.create({
+          body: {
+            ...(nativeAgentName ? { agent: nativeAgentName, title: `${nativeAgentName} / ${options.step}` } : {}),
+            ...(model ? { model: { id: model.model.modelID, providerID: model.model.providerID, ...(model.variant ? { variant: model.variant } : {}) } } : {}),
+          },
+          query: sessionQuery,
+        });
+        if (sessionResult.error) {
+          throw new Error(`Failed to create session: ${JSON.stringify(sessionResult.error)}`);
+        }
+        this.currentSessionId = getSessionId(sessionResult.data);
+        console.log(`[opencode-sdk] session created: ${this.currentSessionId}${nativeAgentName ? `, agent=${nativeAgentName}` : ''}`);
+        this.emitDiagnosticLog({
+          message: 'OpenCode session created',
+          detail: this.currentSessionId || '',
+          metadata: nativeAgentName ? { agent: nativeAgentName } : undefined,
+          verbose: true,
+        });
+      }
+
+      if (!this.currentSessionId) {
+        throw new Error('[opencode-sdk] no session ID');
+      }
+      this.emit('stream', {
+        type: 'session',
+        content: this.currentSessionId,
+      } as EngineStreamEvent);
+
       const isSlashCommand = Boolean(options.rawPrompt) && isOpenCodeSlashCommandPrompt(options.prompt);
 
       if (isSlashCommand) {
@@ -353,6 +381,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
             command: parsedCommand.command,
             arguments: parsedCommand.arguments,
             model: resolvedModelId || options.model,
+            ...(nativeAgentName ? { agent: nativeAgentName } : {}),
           },
           workingDirectory: options.workingDirectory,
           emit: (event) => {
@@ -378,7 +407,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
 
       const fullPrompt = isSlashCommand
         ? buildOpenCodeRawCommandPrompt(options.prompt)
-        : buildFullPrompt(options);
+        : buildOpenCodeExecutePrompt(options);
       if (isSlashCommand) {
         this.emitDiagnosticLog({
           message: 'OpenCode SDK raw slash command prompt fallback',
@@ -402,6 +431,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         promptBodyExtras: {
           ...(model ? { model: model.model } : {}),
           ...(model?.variant ? { variant: model.variant } : {}),
+          ...(nativeAgentName ? { agent: nativeAgentName } : {}),
         },
         workingDirectory: options.workingDirectory,
         timeoutMs: options.timeoutMs,

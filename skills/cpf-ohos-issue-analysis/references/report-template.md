@@ -114,7 +114,8 @@
 4. **缺失证据**：如果 Issue 正文/评论/截图/日志缺失，在对应位置标注"未提供"，不得编造
 5. **可执行性**：修复建议必须具体到文件路径和行号，验证建议必须可操作
 6. **简洁性**：报告正文不超过 1500 字，避免冗长解释
-7. **可解析结尾**：报告末尾必须附 JSON：
+7. **引擎对齐才能写已验证**：验证阶段 `engine_aligned=false`、只在另一套 SDK 上跑过、或 `issue_golden_flag_met=false` 时，`verification_status` 必须是 `needs_runtime_validation` 或 `skipped`，禁止写成 `verified` / 已解决。黄金标志写 Issue 正文验收，不写本机碰巧更重的症状。
+8. **可解析结尾**：报告末尾必须附 JSON：
    ```json
    {"verdict":"pass|conditional_pass|fail","summary":"...","artifact_path":"outputs/...md","key_findings":[...],"report_path":"outputs/...md","reproduction_confirmed":"yes|no|unverified","problem_ownership":"framework_library|business_code|mixed","fix_target":"framework_plugin|application","verification_status":"verified|skipped|needs_runtime_validation","missing_evidence":[...]}
    ```

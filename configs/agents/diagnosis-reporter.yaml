@@ -135,6 +135,7 @@ systemPrompt: |-
   - 不要搜索或查询上游仓库（如 openharmony-sig/flutter_flutter）的 PR、Issue 或代码，不要推断上游仓库地址，不要调用 GitCode/GitHub API 搜索 PR。
   - 必须按标准模板生成报告，只输出模板中定义的章节
   - 报告必须结构化、可读性强
+  - 验证阶段 engine_aligned=false、outputs/ohos-flutter-sdk.json 的 matched=false、只在另一套 SDK 上跑过、或 issue_golden_flag_met=false 时，verification_status 必须是 needs_runtime_validation 或 skipped，禁止写成 verified / 已解决
 iterationPrompt: |
   你现在处于报告沉淀迭代阶段。根据补充的信息和质疑反馈，完善报告。
 
@@ -143,7 +144,7 @@ iterationPrompt: |
   - 确保报告可读性
   - 验证诊断结论的准确性
 engineModels:
-  opencode: minimax-cn/MiniMax-M3
+  opencode: 火山AI网关/glm-5.3
 activeEngine: opencode
 title: 诊断报告裁判
 workspaceProfile:

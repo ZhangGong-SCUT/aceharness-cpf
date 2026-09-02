@@ -49,6 +49,24 @@ import type {
   Issue, WorkflowStep, RoleConfig, TransitionCondition, SpecCodingDocument,
 } from '@/lib/core/schemas';
 import { formatTimestamp } from '@/lib/core/utils';
+import {
+  applySupervisorTransitionVeto,
+  buildVisionCapabilityPrompt,
+  compactStepConclusion,
+  extractLastIssuesArray,
+  extractLastNextState,
+  extractLastWorkflowVerdictJson,
+  parseWorkflowVerdict,
+  pickCircuitBreakerEscape,
+  enforceFixVerificationGoldenFlag,
+  isEngineLevelFailure,
+  isFixVerificationStep,
+  resolveFixVerificationNextState,
+  shouldFinalizeDiagnosisAsCompleted,
+  type WorkflowVerdict,
+} from '@/lib/state-machine/utils';
+import { redactOfficialFixLeak, shouldRedactOfficialFixForStep } from '@/lib/workflow/official-fix-redact';
+import { formatGlobalContextPrompt } from '@/lib/workflow/global-context-prompt';
 import { createEngine, getConfiguredEngine, getLogicalEngineId, resolveRequestedEngineType, type Engine, type EngineType } from '@/lib/engines';
 import { getEngineSkillsSubdir } from '@/lib/engines/engine-config';
 import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
@@ -56,6 +74,7 @@ import { compactEngineContextManually, executeEngineWithContextRecovery, resolve
 import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { getWorkspaceRoot, getWorkspaceRunsDir } from '@/lib/core/app-paths';
+import { appendRunDiagnostic, summarizeGlobalContext } from '@/lib/workflow/run-diagnostics';
 import {
   buildDatabaseCapabilityPrompt,
   buildRuntimeDatabaseEnv,
@@ -98,6 +117,15 @@ import {
   type ChecklistQuestion,
 } from '@/lib/spec/persistence';
 import { importWorkspaceArtifactsIntoRunSpecCoding } from '@/lib/run/runtime-spec-import';
+import {
+  OHOS_FLUTTER_SDK_PIN_FILE,
+  buildOhosFlutterSdkPrompt,
+  extractRepoBranch,
+  loadOhosFlutterSdkPinFile,
+  readRepoBranchFromDisk,
+  resolveOhosFlutterSdk,
+  type ResolvedOhosFlutterSdk,
+} from '@/lib/workflow/ohos-flutter-sdk';
 import { appendMemoryEntries } from '@/lib/workflow/memory-store';
 import { upsertRelationshipSignal } from '@/lib/agent/relationship-store';
 import {
@@ -122,6 +150,8 @@ import {
   readWorkflowConfigSnapshot,
 } from '@/lib/workflow/subworkflow-config';
 
+export { isEngineLevelFailure };
+
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
@@ -136,9 +166,9 @@ const ZERO_ENGINE_USAGE: EngineTokenUsage = {
   cache_read_input_tokens: 0,
 };
 
-const STREAM_IDLE_INTERRUPT_MS = 3 * 60 * 1000;
+const STREAM_IDLE_INTERRUPT_MS = 10 * 60 * 1000;
 const STREAM_IDLE_CHECK_MS = 30 * 1000;
-const AUTO_CONTINUE_FEEDBACK = '系统检测到当前步骤已连续 3 分钟没有新的流式输出。请立即输出最终结论，并在回复末尾包含 <step-conclusion> 标签。如果无法继续，请明确说明原因并输出 verdict=fail。';
+const AUTO_CONTINUE_FEEDBACK = '系统检测到当前步骤已连续 10 分钟没有新的流式输出。请继续当前任务，并在无法继续时明确说明当前阻塞点。';
 const STEP_AUTO_RECOVERY_MAX_ATTEMPTS = 3;
 const TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS = 2;
 const MAX_ACTIVE_SUBWORKFLOW_RUNS_PER_PARENT = 8;
@@ -320,16 +350,6 @@ function extractTaggedBlocks(text: string, tag: string): string[] {
     if (value) blocks.push(value);
   }
   return blocks;
-}
-
-export function compactStepConclusion(raw: string): string {
-  const tagged = extractTaggedBlock(raw, 'step-conclusion');
-  if (tagged) return tagged;
-
-  const text = stripNonAiStreamArtifacts(raw).trim();
-  const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
-  const tail = lines.slice(-30).join('\n').trim();
-  return tail.length > 4000 ? tail.slice(-4000).trim() : tail;
 }
 
 function createEmptySpecRevisionTally(): Record<WorkflowSpecRevisionVoteChoice, number> {
@@ -520,39 +540,11 @@ function isStepToolFailure(message: string): boolean {
     || /permission denied/i.test(message);
 }
 
-export function isEngineLevelFailure(message: string): boolean {
-  const normalized = String(message || '');
-  if (!normalized.trim()) return false;
-  // If the message contains ACEHarness internal artifacts (ace-process tags,
-  // stateReason, statusReason), it means the agent read internal state files
-  // and the error text is quoted content — not a real engine failure.
-  if (/<ace-process>/.test(normalized) || /statusReason|stateReason/.test(normalized)) {
-    return false;
-  }
-  // If the message looks like agent output (contains JSON code blocks or
-  // step-conclusion tags), it's not an engine failure — it's agent content
-  // that happens to contain keywords like "401" in descriptive text.
-  if (/```json|```dart|```typescript|```arkts|<step-conclusion>/.test(normalized)) {
-    return false;
-  }
-  if (/引擎连续失败|自动恢复\s*\d+\s*次后仍失败/.test(normalized)) return true;
-  if (isStepToolFailure(normalized)) return false;
-
-  return /acp\s+connection\s+closed/i.test(normalized)
-    || /apierror/i.test(normalized)
-    || /模型调用失败(?:\s*\(\s*\d{3}\s*\))?\s*:/i.test(normalized)
-    || /(?:unauthorized|invalid token|invalid api key|authentication failed|permission denied)/i.test(normalized)
-    || /(?:无效的令牌|令牌无效|认证失败|鉴权失败|API\s*Key\s*无效)/i.test(normalized)
-    || /(?:HTTP\s*)?(?:401|403)\b/i.test(normalized)
-    || /context window limit/i.test(normalized)
-    || /reached (its |the )?context window limit/i.test(normalized)
-    || /maximum context length/i.test(normalized)
-    || /prompt is too long/i.test(normalized)
-    || /SDK API retry limit/i.test(normalized)
-    || /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE/i.test(normalized)
-    || /engine (?:not initialized|unavailable|connection .*failed|process .*failed|session .*failed)/i.test(normalized)
-    || /failed to create .*process streams/i.test(normalized)
-    || /引擎(?:未初始化|初始化失败|不可用|连接.*失败|连接.*断开|连续失败)/.test(normalized);
+/** HTTP 401/403 must have protocol or status context. Bare "401" matches source line numbers like "401: }". */
+function hasHttpAuthStatus(message: string): boolean {
+  return /\bHTTP(?:\/[\d.]+)?\s*(?:401|403)\b/i.test(message)
+    || /\b(?:status(?:\s*code)?|状态码)\s*[:：]?\s*(?:401|403)\b/i.test(message)
+    || /\b(?:401|403)\s+(?:Unauthorized|Forbidden|Unauthenticated)\b/i.test(message);
 }
 
 function isTransientEngineFailure(message: string): boolean {
@@ -560,7 +552,7 @@ function isTransientEngineFailure(message: string): boolean {
   if (!normalized.trim()) return false;
   if (/(?:unauthorized|invalid token|invalid api key|authentication failed)/i.test(normalized)) return false;
   if (/(?:无效的令牌|令牌无效|认证失败|鉴权失败|API\s*Key\s*无效)/.test(normalized)) return false;
-  if (/(?:HTTP\s*)?(?:401|403)\b/i.test(normalized)) return false;
+  if (hasHttpAuthStatus(normalized)) return false;
   if (/context window limit|maximum context length|prompt is too long/i.test(normalized)) return false;
 
   return /acp\s+connection\s+closed/i.test(normalized)
@@ -695,6 +687,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private specRevisionVoteTail: Promise<void> = Promise.resolve();
   private currentRunSpecCoding: SpecCodingDocument | null = null;
   private currentWorkflowConfig: StateMachineWorkflowConfig | null = null;
+  private lastFixVerificationVerdict: WorkflowVerdict | null = null;
   private currentSpecRootDir: string | null = null;
   private deltaSpecMerged: boolean = false;
   private deltaMergeState: DeltaMergeState | undefined;
@@ -768,6 +761,29 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.promptMemos.set(key, memo);
     }
     return memo;
+  }
+
+  /** Prompt memos are per-run. New/resumed runs use new engine sessions, so previously injected globalContext must be sent again. */
+  private resetPromptInjectionState(): void {
+    this.promptMemos.clear();
+  }
+
+  private logRunDiagnostic(
+    event: string,
+    details?: Record<string, unknown>,
+    level: 'info' | 'warn' | 'error' = 'info',
+  ): void {
+    const summary = details
+      ? Object.entries(details)
+        .filter(([, value]) => value !== undefined && value !== null && value !== '')
+        .slice(0, 6)
+        .map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`)
+        .join(' ')
+      : '';
+    const message = `[诊断日志] ${event}${summary ? ` ${summary}` : ''}`.slice(0, 800);
+    console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log'](`[WorkflowDiagnostics] ${message}`);
+    this.emit('log', { level, message });
+    void appendRunDiagnostic(this.currentRunId, { event, level, details });
   }
 
   private isStateLastStep(step: WorkflowStep, state: StateMachineState): boolean {
@@ -1470,6 +1486,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
         ? requirementsOrChecks
         : (maybePreflightChecks || []);
       this.status = 'preparing';
+      this.statusReason = null;
+      this.lastFixVerificationVerdict = null;
+      this.runEndTime = null;
+      this.resetPromptInjectionState();
       this.shouldStop = false;
       this.stateHistory = [];
       this.issueTracker = [];
@@ -1521,6 +1541,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.embeddedContextOverrides = null;
       this.isolatedDir = null;
       this.currentProjectRoot = null;
+      this.ohosFlutterSdk = null;
 
       // Clear stale in-memory flags from previous run
       this.pendingForceTransition = null;
@@ -1684,6 +1705,12 @@ export class StateMachineWorkflowManager extends EventEmitter {
       });
       this.currentStep = '初始化运行上下文';
       await this.persistState();
+      this.logRunDiagnostic('run.start', {
+        configFile,
+        workingDirectory: this.currentProjectRoot || undefined,
+        ...summarizeGlobalContext(this.globalContext),
+        promptMemosCleared: true,
+      });
 
       const creationSession = this._creationSessionId
         ? await loadCreationSession(this._creationSessionId).catch(() => null)
@@ -1866,25 +1893,20 @@ export class StateMachineWorkflowManager extends EventEmitter {
       await this.specRevisionVoteTail.catch(() => {});
 
       if (!this.shouldStop) {
-        this.status = 'completed';
-        this.clearRuntimeActivity();
-        this.completeRunSpecCoding('工作流执行完成。');
-        this.emit('status', {
-          status: 'completed',
-          message: '工作流执行完成',
+        await this.finalizeWorkflowByDiagnosisGate({
           runId,
-          startTime: this.runStartTime,
-          endTime: this.runEndTime,
-          currentConfigFile: this.currentConfigFile,
-          workflowFrontendSessionId: this._frontendSessionId || null,
-          ...this.buildRunSpecCodingStatusPayload(),
+          includeSpecCoding: true,
         });
-        await this.finalizeRun('completed');
       }
     } catch (error: any) {
       if (!this.shouldStop) {
         this.status = 'failed';
         this.statusReason = error.message || String(error);
+        this.logRunDiagnostic('run.fail', {
+          error: this.statusReason,
+          currentState: this.currentState,
+          currentStep: this.currentStep,
+        }, 'error');
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
@@ -1904,6 +1926,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
   async stop(): Promise<void> {
     this.shouldStop = true;
     this.status = 'stopped';
+    this.logRunDiagnostic('run.stop', {
+      currentState: this.currentState,
+      currentStep: this.currentStep,
+      statusReason: this.statusReason,
+    }, 'warn');
     const childRunId = this.activeSubworkflowRunId;
     if (childRunId) {
       const runtime = this.getActiveSubworkflowRuntime(childRunId);
@@ -2657,6 +2684,12 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private async finalizeRun(status: 'completed' | 'failed' | 'stopped') {
     if (!this.currentRunId) return;
     this.runEndTime = new Date().toISOString();
+    this.logRunDiagnostic(`run.${status}`, {
+      currentState: this.currentState,
+      currentStep: this.currentStep,
+      statusReason: this.statusReason,
+      ...summarizeGlobalContext(this.globalContext),
+    }, status === 'completed' ? 'info' : status === 'failed' ? 'error' : 'warn');
     this.clearRuntimeActivity();
 
     try {
@@ -2823,7 +2856,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     if (!log?.output) return null;
     stepOutputs.push(log.output);
     issues.push(...this.parseIssuesFromOutput(log.output, step, stateName));
-    if (useVerdict) return this.parseVerdict(log.output);
+    if (useVerdict) return this.parseVerdict(log.output, { stateName, stepId: step.id, stepName: step.name });
     return null;
   }
 
@@ -3004,89 +3037,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
   private extractJsonObject(raw: string): any | null {
     return extractStructuredJsonObject(raw);
-  }
-
-  private extractJsonObjectCandidates(raw: string): string[] {
-    const text = String(raw || '');
-    const candidates: string[] = [];
-    const aceProcessRanges: Array<[number, number]> = [];
-    const aceProcessRegex = /<ace-process\b[\s\S]*?<\/ace-process>/gi;
-    let aceProcessMatch: RegExpExecArray | null;
-    while ((aceProcessMatch = aceProcessRegex.exec(text)) !== null) {
-      aceProcessRanges.push([aceProcessMatch.index, aceProcessMatch.index + aceProcessMatch[0].length]);
-    }
-    const isInRange = (index: number, ranges: Array<[number, number]>): boolean =>
-      ranges.some(([start, end]) => index >= start && index < end);
-
-    const fenceRegex = /(?:^|\n)[ \t]{0,3}(```|~~~)([^\r\n]*)\r?\n([\s\S]*?)(?:\r?\n[ \t]{0,3}\1[ \t]*(?=\r?\n|$))/g;
-    const fenceRanges: Array<[number, number]> = [];
-    let fenceMatch: RegExpExecArray | null;
-    while ((fenceMatch = fenceRegex.exec(text)) !== null) {
-      fenceRanges.push([fenceMatch.index, fenceMatch.index + fenceMatch[0].length]);
-      if (isInRange(fenceMatch.index, aceProcessRanges)) continue;
-      const info = (fenceMatch[2] || '').trim().toLowerCase();
-      if (!info || info === 'json' || info.startsWith('json ')) {
-        candidates.push(fenceMatch[3]);
-      }
-    }
-
-    for (let start = 0; start < text.length; start += 1) {
-      if (text[start] !== '{') continue;
-      if (isInRange(start, aceProcessRanges) || isInRange(start, fenceRanges)) continue;
-
-      let depth = 0;
-      let inString = false;
-      let escaped = false;
-      for (let index = start; index < text.length; index += 1) {
-        const char = text[index];
-        if (escaped) {
-          escaped = false;
-          continue;
-        }
-        if (char === '\\' && inString) {
-          escaped = true;
-          continue;
-        }
-        if (char === '"') {
-          inString = !inString;
-          continue;
-        }
-        if (inString) continue;
-
-        if (char === '{') {
-          depth += 1;
-          continue;
-        }
-        if (char === '}') {
-          depth -= 1;
-          if (depth === 0) {
-            candidates.push(text.slice(start, index + 1));
-            start = index;
-            break;
-          }
-        }
-      }
-    }
-
-    return candidates;
-  }
-
-  private normalizeVerdict(value: unknown): 'pass' | 'conditional_pass' | 'fail' | null {
-    if (typeof value !== 'string') return null;
-    const raw = value.trim().toLowerCase();
-    if (raw === 'pass' || raw === '通过' || raw === '成功') return 'pass';
-    if (raw === 'conditional_pass' || raw === '有条件通过') return 'conditional_pass';
-    if (raw === 'fail' || raw === '失败' || raw === '不通过') return 'fail';
-    return null;
-  }
-
-  private parseStructuredVerdict(output: string): 'pass' | 'conditional_pass' | 'fail' | null {
-    for (const candidate of this.extractJsonObjectCandidates(output).reverse()) {
-      const parsed = this.extractJsonObject(candidate);
-      const verdict = this.normalizeVerdict(parsed?.verdict);
-      if (verdict) return verdict;
-    }
-    return null;
   }
 
   private buildSpecRevisionVoteContext(input: SpecRevisionVoteTriggerInput): string {
@@ -4184,8 +4134,8 @@ try {
       : '- 无';
     const stepSummary = result.stepOutputs
       .map((output, index) => {
-        const snippet = output.replace(/\s+/g, ' ').trim().slice(0, 300);
         const step = state.steps[index];
+        const snippet = compactStepConclusion(output).replace(/\s+/g, ' ').trim().slice(0, 1600);
         return `- ${step?.name || `步骤${index + 1}`}: ${snippet || '[无输出]'}`;
       })
       .join('\n');
@@ -4238,21 +4188,28 @@ try {
         ? `请对状态阶段 "${state.name}" 做一次阶段审阅。`
         : `请在人工检查点前，对状态阶段 "${state.name}" 给出检查点建议。`,
       '',
-      `当前 verdict: ${result.verdict}`,
-      nextState ? `建议下一状态: ${nextState}` : '',
+      `当前引擎 verdict: ${result.verdict}`,
+      nextState ? `引擎建议下一状态: ${nextState}` : '',
       verdictTransitionContext,
       '',
       '问题摘要：',
       issueSummary,
       '',
-      '步骤输出摘要：',
+      '步骤输出摘要（每步取最后一份结论，不是工具日志开头）：',
       stepSummary || '- 无',
       experienceBlock,
       specCodingGuardrail ? `\n${specCodingGuardrail}` : '',
       checklistBlock ? `\n${checklistBlock}` : '',
       '',
       type === 'state-review'
-        ? '请输出：1. 当前阶段结论 2. 是否建议继续迭代 3. 下一步指导意见'
+        ? [
+          '请输出：1. 当前阶段结论 2. 是否建议继续迭代 3. 下一步指导意见',
+          '必须先输出 JSON（用 ```json 包裹）：',
+          '{"verdict":"pass|conditional_pass|fail","next_state":"与转移规则一致的状态名","override":false}',
+          '规则：引擎已经给出 verdict 时，优先沿用引擎流转。',
+          'conditional_pass 禁止改成进入报告沉淀。',
+          '只有引擎明显判错时才 override=true，且 next_state 必须能从当前状态转移到达。',
+        ].join('\n')
         : '请输出：1. 是否建议人工放行 2. 若不建议放行，需重点检查的风险 3. 给操作者的简短建议',
     ].filter(Boolean).join('\n');
 
@@ -4401,11 +4358,42 @@ try {
       // Evaluate transitions
       // Remember whether this transition was forced by the user so we can skip human approval
       const wasForced = !!this.pendingForceTransition;
-      const nextState = await this.evaluateTransitions(
+      let nextState = await this.evaluateTransitions(
         stateConfig.transitions,
         result,
         config
       );
+
+      const supervisorEnabled = config.workflow.supervisor?.enabled !== false
+        && config.workflow.supervisor?.stageReviewEnabled !== false;
+      const supervisorBeforeTransition = supervisorEnabled
+        && config.workflow.supervisor?.stageReviewAsync === false;
+      if (supervisorBeforeTransition && !wasForced && nextState !== '__human_approval__') {
+        try {
+          const review = await this.collectSupervisorReview('state-review', stateConfig, result, config, nextState);
+          const validStates = config.workflow.states.map((item) => item.name);
+          const vetoed = applySupervisorTransitionVeto({
+            engineVerdict: result.verdict,
+            proposedNextState: nextState,
+            currentState: stateConfig.name,
+            supervisorNextState: review ? extractLastNextState(review, validStates) : null,
+            supervisorVerdict: review ? parseWorkflowVerdict(review) : null,
+            transitions: stateConfig.transitions,
+          });
+          if (vetoed !== nextState) {
+            this.emit('log', {
+              message: `Supervisor 否决流转: ${stateConfig.name} ${nextState} -> ${vetoed}`,
+            });
+            nextState = vetoed;
+          }
+        } catch (error: any) {
+          this.emit('log', {
+            level: 'warning',
+            message: `Supervisor 审阅失败，沿用引擎流转: ${error?.message || error}`,
+          });
+        }
+      }
+
       if (!wasForced && nextState !== '__human_approval__') {
         this.queueSpecRevisionVote({
           trigger: 'state-complete',
@@ -4428,9 +4416,7 @@ try {
         await this.persistState();
       }
 
-      if (config.workflow.supervisor?.stageReviewAsync === false) {
-        await this.collectSupervisorReview('state-review', stateConfig, result, config, nextState);
-      } else {
+      if (supervisorEnabled && !supervisorBeforeTransition) {
         this.runSupervisorReviewInBackground('state-review', stateConfig, result, config, nextState);
       }
 
@@ -4439,20 +4425,23 @@ try {
         const currentSelfCount = this.selfTransitionCounts.get(this.currentState!) || 0;
         const maxSelfTransitions = stateConfig.maxSelfTransitions || 3;
         if (currentSelfCount >= maxSelfTransitions) {
-          // Circuit breaker triggered - force transition to a different state or fail
           this.emit('circuit-breaker', {
             state: this.currentState,
             selfTransitionCount: currentSelfCount,
             maxSelfTransitions,
             message: `状态 "${this.currentState}" 自我转换次数超过限制 (${maxSelfTransitions})，自动熔断`,
           });
-          // Find an alternative transition target
-          const alternativeTransition = stateConfig.transitions.find(t => t.to !== this.currentState);
+          const alternativeTransition = pickCircuitBreakerEscape(
+            stateConfig.transitions,
+            this.currentState!,
+            result.verdict,
+          );
           if (alternativeTransition) {
+            const fromState = this.currentState!;
             this.stateHistory.push({
-              from: this.currentState!,
+              from: fromState,
               to: alternativeTransition.to,
-              reason: `熔断：自我转换超过限制，强制转向 ${alternativeTransition.to}`,
+              reason: `熔断：自我转换超过限制，按 ${alternativeTransition.condition?.verdict || '可用出口'} 转向 ${alternativeTransition.to}`,
               issues: result.issues,
               timestamp: new Date().toISOString(),
             });
@@ -4460,7 +4449,7 @@ try {
             this.currentState = alternativeTransition.to;
             this.selfTransitionCounts.set(this.currentState, 0);
             this.emit('transition', {
-              from: this.currentState,
+              from: fromState,
               to: alternativeTransition.to,
               transitionCount: this.transitionCount,
               issues: result.issues,
@@ -4700,10 +4689,7 @@ try {
   }
 
   private getParallelBranchJoinSuccess(result: ParallelBranchResult): boolean {
-    if (result.status !== 'fulfilled') return false;
-    // Defender/attacker branches often do not output verdict JSON. Treat missing
-    // verdicts as successful completion, but honor an explicit structured fail.
-    return !(result.verdict === 'fail' && this.hasExplicitVerdict(result.output || ''));
+    return result.status === 'fulfilled' && result.verdict !== 'fail';
   }
 
   private evaluateParallelJoin(
@@ -4820,7 +4806,7 @@ try {
             step,
             status: 'fulfilled' as const,
             output,
-            verdict: this.parseVerdict(output),
+            verdict: this.parseVerdict(output, { stateName: state.name, stepId: step.id, stepName: step.name }),
             issues: this.parseIssuesFromOutput(output, step, state.name),
             childRunId: typeof parsed?.childRunId === 'string' ? parsed.childRunId : undefined,
             childConfigFile: typeof parsed?.childConfigFile === 'string' ? parsed.childConfigFile : undefined,
@@ -5051,16 +5037,11 @@ try {
 
     let verdict: 'pass' | 'conditional_pass' | 'fail' = joinResult.passed ? 'pass' : 'fail';
     if (joinResult.passed && useVerdict) {
-      // Only aggregate verdicts from branches that explicitly output one.
-      // Defender/attacker branches typically don't output a verdict — their
-      // "verdict" from parseVerdict is a fallback guess and should not override
-      // the join result. Only honor explicit pass/conditional_pass from branches
-      // that actually produced a structured verdict.
-      const explicitVerdicts = results
-        .filter((item) => this.getParallelBranchJoinSuccess(item) && this.hasExplicitVerdict(item.output || ''))
+      const successfulVerdicts = results
+        .filter((item) => this.getParallelBranchJoinSuccess(item))
         .map((item) => item.verdict)
         .filter(Boolean);
-      if (explicitVerdicts.includes('conditional_pass')) {
+      if (successfulVerdicts.includes('conditional_pass')) {
         verdict = 'conditional_pass';
       }
     }
@@ -5139,7 +5120,11 @@ try {
                 issues.push(...this.parseIssuesFromOutput(log.output, skippedStep, state.name));
                 skippedResults.push({ step: skippedStep, status: 'fulfilled', output: log.output });
                 if (useSegmentVerdict) {
-                  const stepVerdict = this.parseVerdict(log.output);
+                  const stepVerdict = this.parseVerdict(log.output, {
+                    stateName: state.name,
+                    stepId: skippedStep.id,
+                    stepName: skippedStep.name,
+                  });
                   if (stepVerdict === 'fail') verdict = 'fail';
                   else if (stepVerdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
                 }
@@ -5181,11 +5166,7 @@ try {
         previousParallelSummary = parallelResult.summary;
         if (parallelResult.verdict === 'fail') verdict = 'fail';
         else if (parallelResult.verdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
-        // Only break if there are no more segments after this parallel group.
-        // If a judge step follows, it should still execute to produce the real
-        // verdict — the parallel group's "failed" status may just mean defender
-        // branches didn't output a verdict, not that the work actually failed.
-        if (parallelResult.failed && i === segments.length - 1) break;
+        if (parallelResult.failed) break;
         continue;
       }
 
@@ -5210,14 +5191,13 @@ try {
 
         // Update verdict based on step role
         if (useSegmentVerdict) {
-          const stepVerdict = this.parseVerdict(output);
-          // Judge steps produce the authoritative verdict — their verdict
-          // overrides any preliminary verdict from parallel defender branches.
-          if (step.role === 'judge') {
-            verdict = stepVerdict;
-          } else if (stepVerdict === 'fail') {
-            verdict = 'fail';
-          } else if (stepVerdict === 'conditional_pass' && verdict === 'pass') {
+          const stepVerdict = this.parseVerdict(output, {
+            stateName: state.name,
+            stepId: step.id,
+            stepName: step.name,
+          });
+          if (stepVerdict === 'fail') verdict = 'fail';
+          else if (stepVerdict === 'conditional_pass' && verdict === 'pass') {
             verdict = 'conditional_pass';
           }
         }
@@ -6081,15 +6061,12 @@ try {
       beforeSnapshotId,
     });
     const compactLogOutput = compactRuntimeOutputPreview(output);
-    // BUGFIX: keep full output in stepLogs.output (SSE side truncates via
-    // compactStepLog→truncateLiveText). Previously the truncated preview was
-    // written to outputs/step-logs/{step}-{id}.md, breaking "查看完整日志".
     this.stepLogs.push({
       id: stepId,
       stepName: stepKey,
       agent: 'subworkflow',
       status: completed ? 'completed' : 'failed',
-      output: completed ? output : '',
+      output: completed ? compactLogOutput.output : '',
       outputBytes: completed ? compactLogOutput.outputBytes : undefined,
       error: completed ? '' : (errorMsg || finalSummary || finalStatus),
       costUsd: childCostUsd,
@@ -6291,6 +6268,14 @@ try {
 
       // Build context (now async)
       const context = await this.buildStepContext(step, state, config, requirements, extraContext);
+      this.logRunDiagnostic('step.prompt', {
+        agent: runtimeAgentName,
+        state: state.name,
+        step: step.name,
+        promptLength: context.length,
+        hasGlobalContextSection: context.includes('# 全局上下文'),
+        hasIssueUrl: summarizeGlobalContext(context).hasIssueUrl,
+      }, context.includes('# 全局上下文') ? 'info' : 'warn');
 
       // Execute step (reuse existing process manager logic)
       let stepResult = await this.runAgentStep(step, context, config, stepId);
@@ -6327,7 +6312,9 @@ try {
       addTokenUsage(agent, stepResult.tokenUsage);
       agent.costUsd += stepResult.costUsd;
       agent.lastOutput = output;
-      agent.summary = conclusion;
+      agent.summary = shouldRedactOfficialFixForStep(state.name, step.name)
+        ? redactOfficialFixLeak(conclusion).text
+        : conclusion;
       // Store or clear session ID for reuse across iterations of the same runtime agent
       replaceAgentStateSessionId(agent, stepResult.sessionId);
       this.markStepInactive(stepKey);
@@ -6353,16 +6340,13 @@ try {
         beforeSnapshotId,
       });
       const compactLogOutput = compactRuntimeOutputPreview(output);
-      // BUGFIX: keep full output in stepLogs.output (SSE side truncates via
-      // compactStepLog→truncateLiveText). Previously the truncated preview was
-      // written to outputs/step-logs/{step}-{id}.md, breaking "查看完整日志".
       // Record step log for persistence
       this.stepLogs.push({
         id: stepId,
         stepName: stepKey,
         agent: runtimeAgentName,
         status: 'completed',
-        output: output,
+        output: compactLogOutput.output,
         outputBytes: compactLogOutput.outputBytes,
         error: '',
         costUsd: stepResult.costUsd,
@@ -6426,8 +6410,12 @@ try {
       // Save output to file system
       if (this.currentRunId) {
         const stepFileName = stepKey;
-        await saveProcessOutput(this.currentRunId, stepFileName, conclusion || output).catch(() => {});
+        const archived = shouldRedactOfficialFixForStep(state.name, step.name)
+          ? redactOfficialFixLeak(conclusion || output).text
+          : (conclusion || output);
+        await saveProcessOutput(this.currentRunId, stepFileName, archived).catch(() => {});
       }
+      await this.refreshOhosFlutterSdkPin(state.name, `${conclusion}\n${output}`).catch(() => {});
 
       if (step.channelIds?.length) {
         const entry: ChannelOutputEntry = {
@@ -6460,6 +6448,12 @@ try {
 
       // Record failed step log
       const errorMsg = error.message || String(error);
+      this.logRunDiagnostic('step.fail', {
+        agent: runtimeAgentName,
+        state: state.name,
+        step: step.name,
+        error: errorMsg,
+      }, 'error');
       this.addFailedStep(stepKey);
       this.completedSteps = this.completedSteps.filter((item) => item !== stepKey);
       this.markBoundSpecTasksForStep({
@@ -6589,7 +6583,7 @@ try {
   }
 
   private hasRequiredVerdictJson(output: string): boolean {
-    return Boolean(this.parseStructuredVerdict(output));
+    return extractLastWorkflowVerdictJson(output) != null;
   }
 
   private buildMissingFinalVerdictPrompt(
@@ -6712,6 +6706,23 @@ try {
 
     parts.push(`\n# 当前任务: ${step.name}`);
     parts.push(`任务描述: ${step.task}`);
+    if (config.workflow.states.some((item) => item.name === '修复验证')) {
+      parts.push([
+        '',
+        '# 官方修复线索（硬禁止）',
+        '评论/摘要里的「已合入 / PR # / 对照该 PR / 官方修复 commit」不得作为修法。禁止打开、git apply、cherry-pick 官方修复 PR 或把官方 commit 当唯一基线。只根据回退后的源码和复现证据改。当前 Issue 号和 reset merge commit 可以保留。',
+      ].join('\n'));
+    }
+    const runtimeAgent = this.agents.find((item) => item.name === runtimeAgentName);
+    let visionModel = runtimeAgent?.model || '';
+    try {
+      const roleConfig = this.agentConfigs.find((item) => item.name === step.agent)
+        || config.roles?.find((item) => item.name === step.agent);
+      visionModel = resolveAgentEngineSelection(roleConfig, config.context).model;
+    } catch {
+      // 测试或未配置引擎时，沿用 agent.model / engineType
+    }
+    parts.push(`\n${buildVisionCapabilityPrompt(visionModel || this.engineType)}`);
     if (requiresFinalVerdict) {
       parts.push(this.buildStateVerdictTransitionContext(state));
     }
@@ -6808,13 +6819,28 @@ try {
       }
     }
 
-    // Add global context
+    // Always inject Issue URL / global context on each new step prompt.
+    // Skipping after the first send left rollback rounds (and new ACP sessions)
+    // without the Issue link, which is required for diagnosis agents.
     if (this.globalContext) {
       const globalContextKey = promptContentKey(this.globalContext);
-      if (memo.globalContextKey !== globalContextKey) {
-        parts.push(`\n# 全局上下文\n${this.globalContext}`);
-        memo.globalContextKey = globalContextKey;
-      }
+      parts.push(`\n# 全局上下文\n${this.globalContext}`);
+      parts.push(`\n${formatGlobalContextPrompt(this.globalContext)}`);
+      memo.globalContextKey = globalContextKey;
+      this.logRunDiagnostic('prompt.globalContext', {
+        action: 'injected',
+        agent: runtimeAgentName || step.agent,
+        state: state.name,
+        step: step.name,
+        ...summarizeGlobalContext(this.globalContext),
+      });
+    } else {
+      this.logRunDiagnostic('prompt.globalContext', {
+        action: 'empty',
+        agent: runtimeAgentName || step.agent,
+        state: state.name,
+        step: step.name,
+      }, 'warn');
     }
 
     if (this.humanAnswersContext.length > 0) {
@@ -6860,6 +6886,15 @@ try {
     // Add project path
     if (config.context?.projectRoot) {
       parts.push(`\n# 项目路径\n${config.context.projectRoot}`);
+    }
+
+    try {
+      parts.push(`\n${buildOhosFlutterSdkPrompt(this.getOhosFlutterSdkPin() || resolveOhosFlutterSdk({
+        branch: extractRepoBranch(this.globalContext) || this.readWorkspaceRepoBranch(),
+      }))}`);
+    } catch {
+      const pin = this.getOhosFlutterSdkPin();
+      if (pin) parts.push(`\n${buildOhosFlutterSdkPrompt(pin)}`);
     }
 
     const conclusionScope = isLastStepInState
@@ -7248,8 +7283,6 @@ try {
     let accumulatedDuration = 0;
     let autoRecoveryAttempts = 0;
     let transientEngineRetryAttempts = 0;
-    let idleFeedbackRetryCount = 0;
-    const MAX_IDLE_FEEDBACK_RETRIES = 3;
     const accumulatedTokenUsage: TokenUsage = toPersistedTokenUsage(ZERO_ENGINE_USAGE);
 
     // Use state-prefixed step name so frontend stream polling matches persisted stream files
@@ -7391,22 +7424,6 @@ try {
           const isFeedbackOnly = this.feedbackInterrupt;
           this.interruptFlag = false;
           this.feedbackInterrupt = false;
-
-          // Circuit breaker: if idle-feedback retries exceed limit, force-accept current output
-          if (isFeedbackOnly) {
-            idleFeedbackRetryCount += 1;
-            if (idleFeedbackRetryCount > MAX_IDLE_FEEDBACK_RETRIES) {
-              this.emit('log', {
-                agent: runtimeAgentName,
-                level: 'warning',
-                message: `步骤 "${streamStepName}" 空闲反馈重试 ${idleFeedbackRetryCount - 1}/${MAX_IDLE_FEEDBACK_RETRIES} 次后仍未输出结论，强制接受当前输出`,
-              });
-              // Clear remaining feedback and break out of loop
-              this.liveFeedback = [];
-              break;
-            }
-          }
-
           const proc = processManager.getProcess(currentProcessId);
           if (proc?.streamContent) {
             flushProcessStream(proc.streamContent);
@@ -7557,9 +7574,6 @@ try {
       if (transientEngineRetryAttempts > 0) {
         transientEngineRetryAttempts = 0;
       }
-      if (idleFeedbackRetryCount > 0) {
-        idleFeedbackRetryCount = 0;
-      }
       const roundOutput = result.result || '';
       const humanHelpRequests = this.parseHumanHelpRequests(roundOutput, config);
       if (humanHelpRequests.length === 0) {
@@ -7690,6 +7704,16 @@ try {
       return target;
     }
 
+    const routedFixVerify = resolveFixVerificationNextState({
+      stateName: result.stateName,
+      verdict: result.verdict,
+      output: result.stepOutputs.join('\n'),
+      allowedStates: config.workflow.states.map((state) => state.name),
+    });
+    if (routedFixVerify) {
+      return routedFixVerify;
+    }
+
     // AI-suggested next_state is only accepted when it is one of the configured
     // fallback targets for the emitted verdict.
     const aiSuggestedState = this.parseNextStateFromOutputs(result.stepOutputs, config);
@@ -7818,12 +7842,9 @@ try {
     config: StateMachineWorkflowConfig
   ): string | null {
     const validStates = new Set(config.workflow.states.map(s => s.name));
-    // Check outputs in reverse order (last judge output takes precedence)
     for (const output of [...stepOutputs].reverse()) {
-      const parsed = this.extractJsonObject(output);
-      if (parsed?.next_state && validStates.has(parsed.next_state)) {
-        return parsed.next_state;
-      }
+      const nextState = extractLastNextState(output, validStates);
+      if (nextState) return nextState;
     }
     return null;
   }
@@ -7841,12 +7862,10 @@ try {
 
       const extras = transitions.filter((transition) => !requiredVerdicts.includes(transition.condition?.verdict as any));
       const missing = requiredVerdicts.filter((verdict) => !verdicts.includes(verdict));
-      const duplicated = requiredVerdicts.filter((verdict) => verdicts.filter((item) => item === verdict).length > 1);
 
-      if (extras.length > 0 || missing.length > 0 || duplicated.length > 0) {
+      if (extras.length > 0 || missing.length > 0) {
         const parts: string[] = [];
         if (missing.length > 0) parts.push(`缺少 ${missing.join(', ')}`);
-        if (duplicated.length > 0) parts.push(`${duplicated.join(', ')} 重复`);
         if (extras.length > 0) parts.push('存在未绑定 verdict 的额外转移');
         invalidStates.push(`${state.name}（${parts.join('；')}）`);
       }
@@ -7863,79 +7882,110 @@ try {
     stateName: string
   ): Issue[] {
     const issues: Issue[] = [];
-
-    // Try to parse JSON block
-    const parsed = this.extractJsonObject(output);
-    if (parsed?.issues && Array.isArray(parsed.issues)) {
-      for (const issue of parsed.issues) {
-        if (!issue.description?.trim()) continue;
-        issues.push({
-          type: issue.type || 'implementation',
-          severity: issue.severity || 'minor',
-          description: issue.description.trim(),
-          foundInState: stateName,
-          foundByAgent: step.agent,
-        });
-      }
+    for (const issue of extractLastIssuesArray(output)) {
+      if (!issue?.description?.trim()) continue;
+      issues.push({
+        type: issue.type || 'implementation',
+        severity: issue.severity || 'minor',
+        description: issue.description.trim(),
+        foundInState: stateName,
+        foundByAgent: step.agent,
+      });
     }
-
     return issues;
   }
 
-  /**
-   * Check whether the output contains an explicit, structured verdict
-   * (JSON with verdict field, or a step-conclusion block with verdict).
-   * Used to distinguish real verdicts from parseVerdict's fallback guesses.
-   */
-  private hasExplicitVerdict(output: string): boolean {
-    if (!output || !output.trim()) return false;
-    if (this.parseStructuredVerdict(output)) {
-      return true;
+  private parseVerdict(
+    output: string,
+    context?: { stateName?: string; stepId?: string; stepName?: string },
+  ): 'pass' | 'conditional_pass' | 'fail' {
+    const pin = this.getOhosFlutterSdkPin();
+    const verdict = enforceFixVerificationGoldenFlag(output, parseWorkflowVerdict(output), {
+      ...context,
+      sdkMatched: pin?.matched,
+    });
+    if (isFixVerificationStep(context)) {
+      this.lastFixVerificationVerdict = verdict;
     }
-    const conclusion = extractTaggedBlock(output, 'step-conclusion');
-    if (conclusion && this.parseVerdictFromConclusion(conclusion)) {
-      return true;
-    }
-    return false;
+    return verdict;
   }
 
-  private parseVerdict(output: string): 'pass' | 'conditional_pass' | 'fail' {
-    // Empty judge output is invalid for transition decisions.
-    // Treat as fail to prevent conditional_pass self-loop token burn.
-    if (!output || !output.trim()) {
-      return 'fail';
+  private hydrateLastFixVerificationVerdict(): void {
+    if (this.lastFixVerificationVerdict) return;
+    for (let i = this.stepLogs.length - 1; i >= 0; i -= 1) {
+      const log = this.stepLogs[i];
+      if (!isFixVerificationStep({
+        stateName: /修复验证|verify-fix|修复方案对抗验证/.test(log.stepName || '') ? '修复验证' : '',
+        stepName: log.stepName,
+      })) continue;
+      this.lastFixVerificationVerdict = this.parseVerdict(log.output || '', {
+        stateName: '修复验证',
+        stepName: log.stepName,
+      });
+      return;
     }
-
-    const structuredVerdict = this.parseStructuredVerdict(output);
-    if (structuredVerdict) {
-      return structuredVerdict;
-    }
-
-    const conclusion = extractTaggedBlock(output, 'step-conclusion');
-    const conclusionVerdict = conclusion ? this.parseVerdictFromConclusion(conclusion) : null;
-    if (conclusionVerdict) {
-      return conclusionVerdict;
-    }
-
-    // Fallback: check for keywords
-    if (/\b(fail|失败|不通过)\b/i.test(output)) return 'fail';
-    if (/\b(pass|通过|成功)\b/i.test(output)) return 'pass';
-    return 'conditional_pass';
   }
 
-  private parseVerdictFromConclusion(conclusion: string): 'pass' | 'conditional_pass' | 'fail' | null {
-    const text = conclusion.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    const verdictPattern = /(?:verdict|裁定|裁决|结果|结论|判断)\s*(?:为|是|:|：|=)?\s*`?\s*(conditional_pass|fail|pass|有条件通过|失败|不通过|通过|成功)\s*`?/i;
-    const match = text.match(verdictPattern);
-    if (!match) return null;
-    const raw = match[1].toLowerCase();
-    return this.normalizeVerdict(raw);
+  private async finalizeWorkflowByDiagnosisGate(options?: {
+    runId?: string | null;
+    includeSpecCoding?: boolean;
+  }): Promise<void> {
+    this.hydrateLastFixVerificationVerdict();
+    const gate = shouldFinalizeDiagnosisAsCompleted({
+      hasFixVerificationState: Boolean(
+        this.currentWorkflowConfig?.workflow.states.some((state) => state.name === '修复验证'),
+      ),
+      lastFixVerificationVerdict: this.lastFixVerificationVerdict,
+      finalStateName: this.currentState,
+    });
+    const runId = options?.runId || this.currentRunId;
+    if (!gate.complete) {
+      this.status = 'failed';
+      this.statusReason = gate.reason;
+      this.logRunDiagnostic('run.fail', {
+        error: this.statusReason,
+        currentState: this.currentState,
+        currentStep: this.currentStep,
+      }, 'error');
+      this.clearRuntimeActivity();
+      this.emit('status', {
+        status: 'failed',
+        message: gate.reason,
+        runId,
+        startTime: this.runStartTime,
+        endTime: this.runEndTime,
+        currentConfigFile: this.currentConfigFile,
+        workflowFrontendSessionId: this._frontendSessionId || null,
+      });
+      await this.finalizeRun('failed');
+      return;
+    }
+    this.status = 'completed';
+    this.clearRuntimeActivity();
+    if (options?.includeSpecCoding) {
+      this.completeRunSpecCoding('工作流执行完成。');
+    }
+    this.emit('status', {
+      status: 'completed',
+      message: '工作流执行完成',
+      runId,
+      startTime: this.runStartTime,
+      endTime: this.runEndTime,
+      currentConfigFile: this.currentConfigFile,
+      workflowFrontendSessionId: this._frontendSessionId || null,
+      ...(options?.includeSpecCoding ? this.buildRunSpecCodingStatusPayload() : {}),
+    });
+    await this.finalizeRun('completed');
   }
 
   private getTransitionReason(result: StateExecutionResult): string {
     if (result.verdict === 'pass') {
       return '所有检查通过';
-    } else if (result.issues.length > 0) {
+    }
+    if (result.verdict === 'fail') {
+      return '检查失败';
+    }
+    if (result.issues.length > 0) {
       const criticalCount = result.issues.filter(i => i.severity === 'critical').length;
       const majorCount = result.issues.filter(i => i.severity === 'major').length;
       return `发现 ${criticalCount} 个严重问题, ${majorCount} 个主要问题`;
@@ -8166,18 +8216,9 @@ try {
       await this.executeStateMachine(workflowConfig, runState.requirements);
 
       if (!this.shouldStop) {
-        this.status = 'completed';
-        this.clearRuntimeActivity();
-        this.emit('status', {
-          status: 'completed',
-          message: '工作流执行完成',
+        await this.finalizeWorkflowByDiagnosisGate({
           runId: this.currentRunId,
-          startTime: this.runStartTime,
-          endTime: this.runEndTime,
-          currentConfigFile: this.currentConfigFile,
-          workflowFrontendSessionId: this._frontendSessionId || null,
         });
-        await this.finalizeRun('completed');
       }
     } catch (error: any) {
       if (!this.shouldStop) {
@@ -8241,6 +8282,8 @@ try {
     this.activeStepKeys.clear();
     this.activeConcurrencyGroups = [];
     this.stepLogs = runState.stepLogs || [];
+    this.lastFixVerificationVerdict = null;
+    this.hydrateLastFixVerificationVerdict();
     this.qualityChecks = runState.qualityChecks || [];
     this.runStartTime = runState.startTime || null;
     this.runEndTime = null;
@@ -8292,6 +8335,7 @@ try {
 
     this.status = 'running';
     this.statusReason = null;
+    this.resetPromptInjectionState();
     this.shouldStop = false;
     this.pendingForceTransition = null;
     this.pendingForceInstruction = null;
@@ -8337,6 +8381,8 @@ try {
   private iterationFeedback: string = '';
   /** 最近一次预执行命令（preCommands）的输出，会注入到对应步骤上下文中 */
   private lastPreCommandOutput: string | null = null;
+  /** 按 repo 分支对号入座的 OHOS Flutter SDK，信息采集后写入 outputs/ohos-flutter-sdk.json */
+  private ohosFlutterSdk: ResolvedOhosFlutterSdk | null = null;
   /** Multi-user: createdBy userId, set by workflow start route */
   public _createdBy?: string;
   public _createdByName?: string;
@@ -8348,6 +8394,60 @@ try {
   private currentProjectRoot: string | null = null;
   private getWorkingDirectory(): string | null {
     return this.isolatedDir || this.currentProjectRoot || null;
+  }
+
+  private getOhosFlutterSdkPinPaths(): string[] {
+    const paths: string[] = [];
+    if (this.currentRunId) {
+      paths.push(join(getWorkspaceRunsDir(), this.currentRunId, 'outputs', OHOS_FLUTTER_SDK_PIN_FILE));
+    }
+    const workingDir = this.getWorkingDirectory();
+    if (workingDir) {
+      paths.push(join(workingDir, 'outputs', OHOS_FLUTTER_SDK_PIN_FILE));
+    }
+    return [...new Set(paths)];
+  }
+
+  private getOhosFlutterSdkPin(): ResolvedOhosFlutterSdk | null {
+    if (this.ohosFlutterSdk) return this.ohosFlutterSdk;
+    for (const filePath of this.getOhosFlutterSdkPinPaths()) {
+      const pin = loadOhosFlutterSdkPinFile(filePath);
+      if (pin) {
+        this.ohosFlutterSdk = pin;
+        return pin;
+      }
+    }
+    return null;
+  }
+
+  private readWorkspaceRepoBranch(): string | null {
+    const workingDir = this.getWorkingDirectory();
+    return workingDir ? readRepoBranchFromDisk(join(workingDir, 'repo')) : null;
+  }
+
+  private async persistOhosFlutterSdkPin(resolved: ResolvedOhosFlutterSdk): Promise<void> {
+    this.ohosFlutterSdk = resolved;
+    const payload = `${JSON.stringify(resolved, null, 2)}\n`;
+    for (const filePath of this.getOhosFlutterSdkPinPaths()) {
+      await mkdir(dirname(filePath), { recursive: true });
+      await writeFile(filePath, payload, 'utf-8');
+    }
+    this.logRunDiagnostic('ohos.flutter.sdk', {
+      matched: resolved.matched,
+      branch: resolved.branch,
+      sdkId: resolved.sdkId,
+      flutterBin: resolved.flutterBin,
+      reason: resolved.reason,
+    }, resolved.matched ? 'info' : 'warn');
+  }
+
+  private async refreshOhosFlutterSdkPin(stateName: string, output: string): Promise<void> {
+    const branch = extractRepoBranch(output) || this.readWorkspaceRepoBranch() || this.ohosFlutterSdk?.branch;
+    const shouldRefresh = /信息采集|Issue信息采集/.test(stateName)
+      || Boolean(extractRepoBranch(output))
+      || Boolean(branch && !this.ohosFlutterSdk?.matched);
+    if (!shouldRefresh && this.ohosFlutterSdk) return;
+    await this.persistOhosFlutterSdkPin(resolveOhosFlutterSdk({ branch }));
   }
 
   setQueuedApprovalAction(action: 'approve' | 'iterate'): void {
@@ -8432,6 +8532,10 @@ try {
       entries,
       prompt: entries.map((entry) => entry.message).join('\n\n'),
     };
+  }
+
+  enqueueLiveFeedback(message: string, options: LiveFeedbackOptions = {}): void {
+    this.queueLiveFeedback(message, { ...options, interrupt: false });
   }
 
   injectLiveFeedback(message: string, options: LiveFeedbackOptions = {}): boolean {
@@ -8622,16 +8726,7 @@ try {
       await this.executeStateMachine(workflowConfig, runState.requirements);
 
       if (!this.shouldStop) {
-        this.status = 'completed';
-        this.clearRuntimeActivity();
-        this.emit('status', {
-          status: 'completed',
-          message: '工作流执行完成',
-          startTime: this.runStartTime,
-          endTime: this.runEndTime,
-          currentConfigFile: this.currentConfigFile
-        });
-        await this.finalizeRun('completed');
+        await this.finalizeWorkflowByDiagnosisGate();
       }
     } catch (error: any) {
       if (!this.shouldStop) {
@@ -8748,18 +8843,9 @@ try {
       await this.executeStateMachine(workflowConfig, runState.requirements);
 
       if (!this.shouldStop) {
-        this.status = 'completed';
-        this.clearRuntimeActivity();
-        this.emit('status', {
-          status: 'completed',
-          message: '工作流执行完成',
+        await this.finalizeWorkflowByDiagnosisGate({
           runId: this.currentRunId,
-          startTime: this.runStartTime,
-          endTime: this.runEndTime,
-          currentConfigFile: this.currentConfigFile,
-          workflowFrontendSessionId: this._frontendSessionId || null,
         });
-        await this.finalizeRun('completed');
       }
     } catch (error: any) {
       if (!this.shouldStop) {

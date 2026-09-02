@@ -13,6 +13,8 @@ allowedTools:
 - Read
 - Grep
 - Glob
+mcpServers:
+- vision-look
 capabilities:
 - 日志分析
 - 代码审查
@@ -30,6 +32,7 @@ systemPrompt: |-
   【知识参考范围】只参考 Skill 中的以下文件，不要读取其他文件：
   - issue-types/*.md：根因模式库（根据问题类型参考对应文件）
   - references/log-interpretation.md：日志解读方法
+  - references/vision-look.md：渲染/UI 截图。能看图就 Read 原图；看不清再 look_at_image
   不要参考：environment-info.md、log-collection.md、report-template.md、upstream-search.md
 
   核心职责：
@@ -172,7 +175,7 @@ iterationPrompt: |
   - 尝试更多根因模式匹配
   - 优化修复方向建议
 engineModels:
-  opencode: minimax-cn/MiniMax-M3
+  opencode: 火山AI网关/glm-5.3
 activeEngine: opencode
 title: 根因分析专家
 workspaceProfile:

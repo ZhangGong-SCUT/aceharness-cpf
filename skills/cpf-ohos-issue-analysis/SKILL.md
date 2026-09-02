@@ -80,11 +80,11 @@ flowchart LR
 | 文件 | 内容 |
 |------|------|
 | [references/common-experience.md](./references/common-experience.md) | 通用经验 + NEVER 列表 + 通用工具约束 |
-| [references/issue-content-collection.md](./references/issue-content-collection.md) | Issue 内容采集 + 截图降级策略 |
+| [references/issue-content-collection.md](./references/issue-content-collection.md) | Issue 正文 API（先于网页）+ 评论 + 截图降级 |
 | [references/environment-info.md](./references/environment-info.md) | 环境信息采集清单 |
 | [references/log-collection.md](./references/log-collection.md) | 日志采集命令模板 |
 | [references/log-interpretation.md](./references/log-interpretation.md) | 日志解读方法 |
-| [references/fix-strategy.md](./references/fix-strategy.md) | OHOS 独有问题修复策略 |
+| [references/fix-strategy.md](./references/fix-strategy.md) | OHOS 独有问题修复策略 + SDK/repo 必须同套 + embedding HAR 如何进 Demo |
 | [references/report-template.md](./references/report-template.md) | 诊断报告模板 |
 | [references/upstream-search.md](./references/upstream-search.md) | 上游社区搜索策略 |
 | [references/ohos-signing-config.md](./references/ohos-signing-config.md) | OHOS 签名配置 |
@@ -100,7 +100,7 @@ flowchart LR
 | **diagnosis-challenger** | SKILL.md（问题类型识别表）+ issue-types/*.md | 质疑根因假设、挑战证据链 |
 | **diagnosis-judge** | SKILL.md（问题类型识别表、层面定界参考）+ issue-types/*.md | 裁决 defender 与 attacker 的结论 |
 | **diagnosis-fix-advisor** | issue-types/*.md 修复建议 + references/fix-strategy.md | 修复方案设计 + OHOS Native 优先策略 |
-| **diagnosis-fix-verifier-advisor** | issue-types/*.md + references/fix-strategy.md | 对抗验证修复方案 + Native 优先策略检查 |
+| **diagnosis-fix-verifier-advisor** | issue-types/*.md + references/fix-strategy.md（含 SDK/repo 同套 + embedding HAR）+ 本 Skill 的 SKILL.md | 对抗验证修复方案 + Native 优先策略检查 + 引擎对齐 + 换对 Demo 实际消费的 HAR |
 | **diagnosis-reporter** | references/report-template.md | 诊断报告模板 |
 | **diagnosis-completer** | 通用经验 + NEVER 列表 | 最终总结 + 磁盘清理 |
 
@@ -111,7 +111,7 @@ flowchart LR
 各 Agent 的 systemPrompt 不必重复声明这些内容，只需在需要时引用本文件。主要包含：
 
 - **10 条通用经验**：上游优先、渐进式深入、对比分析法、最小复现法、日志先行、GitCode 获取锁定降级链、证据分级表达、报告保守表述、步骤结论可传递、缺失证据要写影响
-- **11 条 NEVER 列表**：避免常见诊断错误的硬禁止
+- **16 条 NEVER 列表**：避免常见诊断错误的硬禁止（含 embedding 勿默认盖 `flutter.har`、SDK/repo 必须同套、禁止修订黄金标志再 pass、GitCode 禁止抓页/猜乱码）
 - **通用工具约束**：不要调用 write/edit、不要读取 ACEHarness 内部状态、不要搜索上游仓库、必须输出 step-conclusion 标签等
 
 ## 多框架扩展

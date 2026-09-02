@@ -12,7 +12,7 @@ import { homedir } from 'os';
 import { Writable, Readable } from 'node:stream';
 import { EventEmitter } from 'events';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
-import { buildConfiguredProcessEnvSync } from '@/lib/core/configured-env';
+import { buildConfiguredProcessEnvSync, getConfiguredEnvValueSync } from '@/lib/core/configured-env';
 import { toAcpMcpServers, type ManagedMcpServer } from '@/lib/mcp/registry';
 import { isWindows } from '@/lib/core/runtime-platform';
 import {
@@ -98,8 +98,10 @@ export function logAcpTiming(engineType: string, phase: string, startedAt: numbe
 }
 
 const DEFAULT_ACP_PHASE_MS = 30_000;
-/** Default for `newSession` only (NGA memory sync can exceed 30s). */
-const DEFAULT_ACP_NEW_SESSION_MS = 60_000;
+/** Default for `newSession` (large repos / NGA memory sync often exceed 30s). */
+const DEFAULT_ACP_NEW_SESSION_MS = 180_000;
+/** Bound for `authenticate` (cursor_login). Observed success is 10–55s; a hang is a wedged login, not a slow index. */
+const DEFAULT_ACP_AUTH_MS = 90_000;
 const MIN_ACP_PHASE_MS = 1_000;
 const MAX_ACP_PHASE_MS = 900_000;
 
@@ -115,9 +117,69 @@ export function getAcpInitTimeoutMs(): number {
   return parseAcpPhaseTimeoutMs(process.env.ACE_ACP_INIT_TIMEOUT_MS, DEFAULT_ACP_PHASE_MS);
 }
 
-/** Timeout for `connection.newSession` (ms). Env: `ACE_ACP_NEW_SESSION_TIMEOUT_MS`, default 60000. */
-export function getAcpNewSessionTimeoutMs(): number {
-  return parseAcpPhaseTimeoutMs(process.env.ACE_ACP_NEW_SESSION_TIMEOUT_MS, DEFAULT_ACP_NEW_SESSION_MS);
+/** Timeout for `connection.newSession` (ms). Env: `ACE_ACP_NEW_SESSION_TIMEOUT_MS`. */
+export function getAcpNewSessionTimeoutMs(_engineType?: string): number {
+  return parseAcpPhaseTimeoutMs(
+    getConfiguredEnvValueSync('ACE_ACP_NEW_SESSION_TIMEOUT_MS') || process.env.ACE_ACP_NEW_SESSION_TIMEOUT_MS,
+    DEFAULT_ACP_NEW_SESSION_MS,
+  );
+}
+
+/** Timeout for Cursor `authenticate` / cursor_login (ms). Env: `ACE_ACP_AUTH_TIMEOUT_MS`. */
+export function getAcpAuthTimeoutMs(): number {
+  return parseAcpPhaseTimeoutMs(
+    getConfiguredEnvValueSync('ACE_ACP_AUTH_TIMEOUT_MS') || process.env.ACE_ACP_AUTH_TIMEOUT_MS,
+    DEFAULT_ACP_AUTH_MS,
+  );
+}
+
+export function acpErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * cursor_login failed. Continuing on the same ACP connection wedges `session/new`
+ * (observed: "Internal error" then newSession never returns, child stays alive).
+ */
+export function isCursorAuthenticateFailure(error: unknown): boolean {
+  const message = acpErrorMessage(error);
+  return (
+    /phase=authenticate/i.test(message)
+    || /ACP authenticate timeout/i.test(message)
+    || /cursor_login/i.test(message)
+    || /failed to open browser/i.test(message)
+    || /internal error/i.test(message)
+  );
+}
+
+/** ACP child / JSON-RPC is no longer usable; callers must stop and respawn. */
+export function isAcpDeadConnectionError(error: unknown): boolean {
+  const message = acpErrorMessage(error);
+  return (
+    /ACP newSession timeout/i.test(message)
+    || /ACP connection\.initialize timeout/i.test(message)
+    || /ACP authenticate timeout/i.test(message)
+    || /phase=authenticate/i.test(message)
+    || /poisoned ACP connection/i.test(message)
+  );
+}
+
+async function raceWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutError: () => Error,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(timeoutError()), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /** Timeout for `session/load` when resuming (ms). Env: `ACE_ACP_LOAD_SESSION_TIMEOUT_MS`, default 30000. */
@@ -496,6 +558,8 @@ export class ACPEngine extends EventEmitter {
   private lastStderrChunk = '';
   private lastExitInfo = '';
   private historyReplayCollector: ACPHistoryReplayCollector | null = null;
+  /** After cursor_login poisons the ACP connection, respawn and skip authenticate. */
+  private skipCursorAuthenticate = false;
 
   constructor(private config: ACPEngineConfig) {
     super();
@@ -589,6 +653,7 @@ export class ACPEngine extends EventEmitter {
       cwd: this.config.workingDirectory,
       env: childEnv,
     });
+    const child = this.process;
     logAcpTiming(this.config.engineType, 'acp.1_spawn_call_wall', tSpawn);
 
     if (!this.process.stdin || !this.process.stdout || !this.process.stderr) {
@@ -596,6 +661,7 @@ export class ACPEngine extends EventEmitter {
     }
 
     this.process.stderr.on('data', (data: Buffer) => {
+      if (this.process !== child) return;
       const msg = data.toString();
       this.lastStderrChunk = msg.trim();
       console.error(`[${this.config.engineType} stderr] ${msg.trim()}`);
@@ -609,6 +675,7 @@ export class ACPEngine extends EventEmitter {
     });
 
     this.process.on('exit', (code, signal) => {
+      if (this.process !== child) return;
       this.lastExitInfo = `code=${code}, signal=${signal}`;
       this.emitDiagnosticLog({
         level: code === 0 && !signal ? 'info' : 'error',
@@ -631,6 +698,7 @@ export class ACPEngine extends EventEmitter {
     });
 
     this.process.on('error', (error) => {
+      if (this.process !== child) return;
       this.emitDiagnosticLog({
         level: 'error',
         message: 'ACP child process error',
@@ -716,7 +784,26 @@ export class ACPEngine extends EventEmitter {
       verbose: true,
     });
     const tInit = Date.now();
-    await this.initialize();
+    try {
+      await this.initialize();
+    } catch (error) {
+      if (this.shouldRetryCursorWithoutAuthenticate(error)) {
+        const detail = acpErrorMessage(error);
+        console.warn(
+          `[${this.config.engineType}] authenticate poisoned ACP connection; respawning without cursor_login. ${detail}`,
+        );
+        this.emitDiagnosticLog({
+          level: 'warning',
+          message: 'cursor authenticate poisoned connection; respawning without cursor_login',
+          detail,
+        });
+        this.skipCursorAuthenticate = true;
+        this.stop();
+        await this.start();
+        return;
+      }
+      throw error;
+    }
     logAcpTiming(this.config.engineType, 'acp.3_initialize_including_rpc', tInit);
     logAcpTiming(this.config.engineType, 'acp.0_start_process_to_initialized', tStartTotal);
     console.log(`[${this.config.engineType}] ACP client initialized`);
@@ -757,50 +844,70 @@ export class ACPEngine extends EventEmitter {
     let result;
     const tInitRpc = Date.now();
     try {
-      result = await Promise.race([
+      result = await raceWithTimeout(
         initPromise,
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error(
-                  `ACP connection.initialize timeout after ${initTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set ACE_ACP_INIT_TIMEOUT_MS to increase)`
-                )
-              ),
-            initTimeoutMs
-          )
-        ),
-      ]);
+        initTimeoutMs,
+        () =>
+          new Error(
+            `ACP connection.initialize timeout after ${initTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set ACE_ACP_INIT_TIMEOUT_MS to increase)`,
+          ),
+      );
     } catch (error) {
       throw this.withAcpDiagnostics('connection.initialize', error);
     }
     logAcpTiming(this.config.engineType, 'acp.3a_connection.initialize_rpc', tInitRpc);
     this.initialized = true;
-    console.log(`[${this.config.engineType}] connection.initialize() done`);
+    const authMethodIds = Array.isArray(result.authMethods)
+      ? result.authMethods.map((method: { id?: string }) => method?.id).filter(Boolean)
+      : [];
+    console.log(`[${this.config.engineType}] connection.initialize() done authMethods=${JSON.stringify(authMethodIds)}`);
     this.emitDiagnosticLog({
       message: 'connection.initialize done',
-      detail: `engineType=${this.config.engineType}`,
+      detail: `engineType=${this.config.engineType} authMethods=${JSON.stringify(authMethodIds)}`,
       verbose: true,
     });
 
-    // Cursor ACP requires authenticate after initialize
-    if (this.config.engineType === 'cursor') {
+    if (this.config.engineType === 'cursor' && this.skipCursorAuthenticate) {
+      console.log(`[${this.config.engineType}] skipping cursor_login after previous authenticate poisoned the ACP connection`);
+      this.emitDiagnosticLog({
+        message: 'cursor_login skipped',
+        detail: 'previous authenticate poisoned ACP connection',
+        verbose: true,
+      });
+    } else if (this.config.engineType === 'cursor') {
       const tAuth = Date.now();
+      const authTimeoutMs = getAcpAuthTimeoutMs();
       try {
-        await this.connection.authenticate({ methodId: 'cursor_login' });
-      } catch (e) {
-        console.log(`[${this.config.engineType}] authenticate: ${e instanceof Error ? e.message : e}`);
+        await raceWithTimeout(
+          this.connection.authenticate({ methodId: 'cursor_login' }),
+          authTimeoutMs,
+          () =>
+            new Error(
+              `ACP authenticate timeout after ${authTimeoutMs}ms. methodId=cursor_login. lastStderr=${this.lastStderrChunk || '<empty>'}`,
+            ),
+        );
+        console.log(`[${this.config.engineType}] authenticate ok`);
+      } catch (error) {
+        const detail = acpErrorMessage(error);
+        console.warn(`[${this.config.engineType}] authenticate: ${detail}`);
         this.emitDiagnosticLog({
           level: 'warning',
-          message: 'cursor authenticate warning',
-          detail: e instanceof Error ? e.message : String(e),
-          verbose: true,
+          message: 'cursor authenticate failed',
+          detail,
         });
+        throw this.withAcpDiagnostics('authenticate', error);
+      } finally {
+        logAcpTiming(this.config.engineType, 'acp.3b_cursor_authenticate', tAuth);
       }
-      logAcpTiming(this.config.engineType, 'acp.3b_cursor_authenticate', tAuth);
     }
 
     this.emit('initialized', result);
+  }
+
+  private shouldRetryCursorWithoutAuthenticate(error: unknown): boolean {
+    return this.config.engineType === 'cursor'
+      && !this.skipCursorAuthenticate
+      && isCursorAuthenticateFailure(error);
   }
 
   /**
@@ -808,36 +915,37 @@ export class ACPEngine extends EventEmitter {
    */
   async createSession(): Promise<string> {
     if (!this.initialized || !this.connection) throw new Error(`${this.config.engineType} not initialized`);
-    console.log(`[${this.config.engineType}] createSession() start`);
+    const mcpServers = toAcpMcpServers(this.mcpServers);
+    console.log(`[${this.config.engineType}] createSession() start mcpServers=${mcpServers.length}`);
     this.emitDiagnosticLog({
       message: 'newSession start',
       detail: this.config.workingDirectory,
+      metadata: {
+        mcpServerCount: mcpServers.length,
+        mcpServerNames: mcpServers.map((server) => server.name).filter(Boolean),
+      },
       verbose: true,
     });
     const newSessionPromise = this.connection.newSession({
       cwd: this.config.workingDirectory,
-      mcpServers: toAcpMcpServers(this.mcpServers),
+      mcpServers,
     });
 
-    const sessionTimeoutMs = getAcpNewSessionTimeoutMs();
+    const sessionTimeoutMs = getAcpNewSessionTimeoutMs(this.config.engineType);
     let result;
     const tNewSess = Date.now();
     try {
-      result = await Promise.race([
+      result = await raceWithTimeout(
         newSessionPromise,
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error(
-                  `ACP newSession timeout after ${sessionTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set ACE_ACP_NEW_SESSION_TIMEOUT_MS to increase)`
-                )
-              ),
-            sessionTimeoutMs
-          )
-        ),
-      ]);
+        sessionTimeoutMs,
+        () =>
+          new Error(
+            `ACP newSession timeout after ${sessionTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set ACE_ACP_NEW_SESSION_TIMEOUT_MS to increase)`,
+          ),
+      );
     } catch (error) {
+      // Timeout must kill the child. Leaving it alive reuses a hung JSON-RPC connection on retry.
+      this.stop();
       throw this.withAcpDiagnostics('newSession', error);
     }
     logAcpTiming(this.config.engineType, 'acp.4_newSession_rpc', tNewSess);
