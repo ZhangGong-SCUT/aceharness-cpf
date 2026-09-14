@@ -636,6 +636,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private transitionCount = 0;
   /** Track self-transitions per state for circuit breaking */
   private selfTransitionCounts: Map<string, number> = new Map();
+  /** Track total visits per state (including self-loop re-entries) for maxVisits loop control */
+  private stateVisitCounts: Map<string, number> = new Map();
   private runStartTime: string | null = null;
   private runEndTime: string | null = null;
   /** 累计等待（停摆）时长（毫秒），不计入实际执行时间。 */
@@ -1495,6 +1497,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.issueTracker = [];
       this.transitionCount = 0;
       this.selfTransitionCounts = new Map();
+      this.stateVisitCounts = new Map();
       this.completedSteps = [];
       this.failedSteps = [];
       this.resumeStateName = null;
@@ -4322,6 +4325,15 @@ try {
       const stateConfig = config.workflow.states.find(s => s.name === this.currentState);
       if (!stateConfig) {
         throw new Error(`找不到状态配置: ${this.currentState}`);
+      }
+
+      // Track per-state visit counts (including self-loop re-entries) for maxVisits loop control
+      if (!stateConfig.isFinal) {
+        const visitCount = (this.stateVisitCounts.get(stateConfig.name) || 0) + 1;
+        this.stateVisitCounts.set(stateConfig.name, visitCount);
+        if (stateConfig.maxVisits && visitCount > stateConfig.maxVisits) {
+          throw new Error(`状态 "${stateConfig.name}" 进入次数超过限制 (maxVisits=${stateConfig.maxVisits}，当前第 ${visitCount} 次)，判定为跨状态循环失控，工作流终止`);
+        }
       }
 
       // Check if final state
@@ -7931,12 +7943,15 @@ try {
     includeSpecCoding?: boolean;
   }): Promise<void> {
     this.hydrateLastFixVerificationVerdict();
+    const fixVerificationReached = this.stepLogs.some((log) =>
+      /修复验证/.test(String(log.stepName || '')));
     const gate = shouldFinalizeDiagnosisAsCompleted({
       hasFixVerificationState: Boolean(
         this.currentWorkflowConfig?.workflow.states.some((state) => state.name === '修复验证'),
       ),
       lastFixVerificationVerdict: this.lastFixVerificationVerdict,
       finalStateName: this.currentState,
+      fixVerificationReached,
     });
     const runId = options?.runId || this.currentRunId;
     if (!gate.complete) {
@@ -8326,10 +8341,15 @@ try {
 
     this.humanQuestionWaiters.clear();
     this.selfTransitionCounts = new Map();
+    this.stateVisitCounts = new Map();
     for (const record of this.stateHistory) {
       if (record.from === record.to) {
         const currentCount = this.selfTransitionCounts.get(record.from) || 0;
         this.selfTransitionCounts.set(record.from, currentCount + 1);
+      }
+      if (record.to && record.to !== '__human_approval__') {
+        const visitCount = this.stateVisitCounts.get(record.to) || 0;
+        this.stateVisitCounts.set(record.to, visitCount + 1);
       }
     }
 

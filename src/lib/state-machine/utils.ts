@@ -280,11 +280,12 @@ export function enforceFixVerificationGoldenFlag(
   return 'pass';
 }
 
-const FIX_VERIFY_ROLLBACK_STATES = ['代码修复', '方案设计', '根因分析', '报告沉淀'] as const;
+const FIX_VERIFY_ROLLBACK_STATES = ['代码修复', '方案设计', '根因分析', '报告沉淀', '问题复现'] as const;
 
 export function mapFixVerificationFeedbackTarget(raw: string | null | undefined): string | null {
   const text = String(raw || '').trim();
   if (!text) return null;
+  if (/问题复现|复现验证|重新(构造)?复现/.test(text)) return '问题复现';
   if (/根因/.test(text)) return '根因分析';
   if (/方案/.test(text)) return '方案设计';
   if (/报告沉淀|报告/.test(text)) return '报告沉淀';
@@ -314,6 +315,7 @@ export function extractFixVerificationRollbackTarget(output: string): string | n
   if (/回退(到)?方案设计|回到方案设计|重新设计方案/.test(text)) return '方案设计';
   if (/回退(到)?根因分析|回到根因分析/.test(text)) return '根因分析';
   if (/分支\s*B/.test(text) || /ArkUI[\s\S]{0,40}覆盖/.test(text)) return '方案设计';
+  if (/回退(到)?问题复现|回到问题复现|重新构造.{0,8}([Dd]emo|复现)|Demo\s*(本身)?\s*(构造|实现)?有误/.test(text)) return '问题复现';
   return null;
 }
 
@@ -415,13 +417,9 @@ export function pickCircuitBreakerEscape(
   const exits = transitions.filter((item) => item.to && item.to !== currentState);
   if (exits.length === 0) return undefined;
 
-  if (verdict) {
-    const matching = exits.find((item) => item.condition?.verdict === verdict);
-    if (matching) return matching;
-  }
-
   // Explicit self-loop exhausted (根因分析 cpass → 根因分析): leave via fail,
-  // never the first YAML pass edge (方案设计).
+  // never the first YAML pass edge nor a same-verdict non-self exit
+  // (e.g. cpass → 问题复现), which is a deliberate reroute, not a breaker escape.
   const explicitSelfLoop = verdict
     ? transitions.some((item) => item.condition?.verdict === verdict && item.to === currentState)
     : false;
@@ -430,6 +428,11 @@ export function pickCircuitBreakerEscape(
     if (failExit) return failExit;
     const nonPass = exits.find((item) => item.condition?.verdict && item.condition.verdict !== 'pass');
     if (nonPass) return nonPass;
+  }
+
+  if (verdict) {
+    const matching = exits.find((item) => item.condition?.verdict === verdict);
+    if (matching) return matching;
   }
 
   return exits[0];
@@ -593,6 +596,8 @@ export function shouldFinalizeDiagnosisAsCompleted(input: {
   hasFixVerificationState: boolean;
   lastFixVerificationVerdict: WorkflowVerdict | null;
   finalStateName?: string | null;
+  /** 修复验证状态是否真正执行过（false = 走的是设计内兜底/建议出口，未进入修复环节） */
+  fixVerificationReached?: boolean;
 }): { complete: boolean; reason: string } {
   if (!input.hasFixVerificationState) return { complete: true, reason: '' };
   if (input.finalStateName && input.finalStateName !== '完成') {
@@ -600,6 +605,12 @@ export function shouldFinalizeDiagnosisAsCompleted(input: {
   }
   if (input.lastFixVerificationVerdict === 'pass') return { complete: true, reason: '' };
   if (input.lastFixVerificationVerdict == null) {
+    if (input.fixVerificationReached === false) {
+      return {
+        complete: true,
+        reason: '修复验证未执行（设计内兜底/建议出口，如根因 fail 或应用层问题分流），按 completed 收尾',
+      };
+    }
     return {
       complete: false,
       reason: '诊断工作流未完成修复验证（需要 issue_golden_flag_met=true 且 engine_aligned=true），不得标 completed',

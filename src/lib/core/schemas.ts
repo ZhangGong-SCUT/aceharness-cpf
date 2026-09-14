@@ -744,6 +744,7 @@ export const stateMachineStateSchema = z.object({
   isInitial: z.boolean().default(false), // 是否为初始状态
   isFinal: z.boolean().default(false), // 是否为终止状态
   maxSelfTransitions: z.number().min(1).max(100).default(3).optional(), // 最大自我转换次数，超出后自动熔断
+  maxVisits: z.number().min(1).max(100).optional(), // 状态在整个 run 内的最大进入次数（含自环重入），超出后终止，用于限制跨状态循环
   executionMode: z.enum(['sequential', 'parallel']).optional(), // 并发设计元数据；当前执行器不保证真实并发
   joinPolicy: joinPolicySchema.optional(),
   channels: z.array(z.string()).optional(),

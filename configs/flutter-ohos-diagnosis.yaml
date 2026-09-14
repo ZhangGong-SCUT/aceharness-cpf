@@ -7,6 +7,11 @@ workflow:
     - pass：当前状态目标完全达成，可前进到下一状态。
     - conditional_pass：已有方向但需打磨，应优先回退继续补充（信息采集/问题复现/根因分析/报告沉淀的 cpass 仍前进；复现验证/代码修复/修复验证的 cpass 回退）。
     - fail：当前状态无法完成，回退或终止。
+    设计内提前出口（不算流程失败，报告照常产出）：
+    - Issue 不可访问（正文 API 404 且确认 API 可用）→ 信息采集 fail → 终止，不空跑后续阶段。
+    - 根因无法确定 → 根因分析 fail → 报告沉淀（兜底报告）。
+    - 应用层问题（problem_ownership=business_code/mixed）→ 方案设计 fail → 报告沉淀（只出修改建议，不 patch 框架仓）。
+    循环上限（引擎强制）：问题复现/复现验证 maxVisits=3（复现环最多 2 次）；修复验证 maxVisits=4（修复环最多 3 次）；根因分析自环熔断 maxSelfTransitions=3；全局 maxTransitions=30。
   mode: state-machine
   maxTransitions: 30
   supervisor:
@@ -34,9 +39,10 @@ workflow:
           role: defender
           task: |
             从 globalContext 获取问题全文：可以是 Issue 链接，也可以是没有 Issue 号的文字描述。识别代码仓库 URL 和分支，准备本地代码仓；有创建时间才回退。
-            1. 先看「诊断输入形态」。有 Issue 链接：按 issue-content-collection.md 第 0 节 curl.exe 打正文 API 再打 comments API。禁止先抓 Issue HTML；乱码先按 UTF-8 重解。没有 Issue 链接：禁止 curl Issue API，禁止编造 Issue 号，把 globalContext 全文当本轮唯一问题，不要改去诊断残留的旧 Issue。
+            1. 先看「诊断输入形态」。有 Issue 链接：按 issue-content-collection.md 第 0 节用 curl（Windows 用 curl.exe）打正文 API 再打 comments API。禁止先抓 Issue HTML；乱码先按 UTF-8 重解。没有 Issue 链接：禁止 curl Issue API，禁止编造 Issue 号，把 globalContext 全文当本轮唯一问题，不要改去诊断残留的旧 Issue。
+               【快速终止】正文 API 返回 404 时：先用同仓另一个 Issue 号对照确认 API 本身可用；确认可用而正文仍 404（Issue 不存在/私有/已删除）→ verdict=fail、summary 注明 issue_not_accessible，走终止，禁止带空正文继续后续阶段。仅 comments 拿不到而正文正常 → 继续，verdict 最高 conditional_pass。
             2. 下载截图到 outputs/screenshots/。能看图就 Read 原图自己看；看不清或看不到再调用 look_at_image。freeform 无图片 URL 时不要使用残留截图。
-            3. 提取结构化环境信息（设备/系统/API/框架/引擎版本、分支、复现概率），评估完整性
+            3. 提取结构化环境信息（设备/系统/API/框架/引擎版本、分支、复现概率），评估完整性；同时给出问题类型初判 problem_type_preliminary（稳定性/内存泄漏/功能/性能/渲染，无法判断填 unknown），供问题复现阶段决定插桩/埋点策略
             4. 识别代码仓库 URL 和分支（正文仓地址或默认 flutter_flutter；版本号推断分支，无法推断则用默认分支）
             5. 代码仓准备（智能复用本地已有仓库）：
                - 检测 repo/ 目录是否已存在且为有效 git 仓库（repo/.git 存在）
@@ -47,7 +53,7 @@ workflow:
             7. 验证当前 HEAD，列出关键文件路径。branch 必须是真实分支名，引擎会据此写入 outputs/ohos-flutter-sdk.json。JSON 填 input_source=issue_url 或 freeform_text
             8. 评论里若出现「已合入 / 已在 PR #xx 修复」，只记「维护者称后续有修复」；禁止写出 PR 号、PR URL、官方修复 commit。有 Issue 号时保留号和 reset merge commit。
             API URL、截图解析、环境信息字段等详细指导见 cpf-ohos-issue-analysis Skill 的 references/issue-content-collection.md。
-            输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、repo_path、branch、commit、issue_created_at、reset_target_merge_commit、issue_content_complete、issue_comments_count、screenshots、environment_info、environment_completeness、missing_evidence、repo_preparation（fetched|cloned|skipped）。
+            输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、repo_path、branch、commit、issue_created_at、reset_target_merge_commit、issue_content_complete、issue_comments_count、screenshots、environment_info、environment_completeness、missing_evidence、repo_preparation（fetched|cloned|skipped）、problem_type_preliminary（稳定性|内存泄漏|功能|性能|渲染|unknown）。
       transitions:
         # 信息采集 → 问题复现（构造 Demo 复现 Issue 问题）
         - to: 问题复现
@@ -73,6 +79,7 @@ workflow:
       requireHumanApproval: false
       isInitial: false
       isFinal: false
+      maxVisits: 3
       position: { x: 225, y: 200 }
       steps:
         - id: reproduce-issue
@@ -81,7 +88,7 @@ workflow:
           role: defender
           task: |
             根据 Issue 描述和代码仓中的相关代码，按 flutter-issue-demo-reproduction Skill 构造最小复现 Demo。
-            1. 从信息采集阶段的输出获取：Issue 正文、复现步骤、环境信息、截图描述、代码仓本地路径（repo/）
+            1. 从信息采集阶段的输出获取：Issue 正文、复现步骤、环境信息、截图描述、问题类型初判（problem_type_preliminary）、代码仓本地路径（repo/）
             2. 判断 Issue 中是否直接提供了 Demo 代码：
                - 检查 Issue body 和评论中是否有代码块（```dart、```typescript、```arkts 等）
                - 检查是否有完整的可运行示例
@@ -90,17 +97,19 @@ workflow:
                - 【策略 B】Issue 提供了部分代码片段：基于片段 + 代码仓相关代码补全为完整可运行 Demo
                - 【策略 C】Issue 只有文字描述：根据描述 + 代码仓相关代码从零构造最小复现 Demo
                - 【策略 D】无法构造 Demo：说明原因，输出理论复现路径
-            4. 按 Skill 的工程结构生成三平台工程（ohos/android/ios），配置 OHOS 签名
-            5. 按 Skill 的编译验证清单验证 Demo 能编译通过（flutter analyze / build hap / build apk）
-            6. 检测是否有连接的鸿蒙设备（hdc list targets），有设备时实际运行 Demo 验证复现效果
-            7. 如果是 OHOS 独有 bug，在 Android/iOS 上运行同样 scenario 验证 bug 不复现（跨平台对照验证）
-            8. 记录复现稳定性（verified/stable/intermittent/unstable/not_reproducible/theoretical）
-            9. 如果复现不了，必须给出明确说明：
+            4. 按问题类型为 Demo 配置观测手段：内存泄漏→内存插桩/泄漏观测点；性能→trace/耗时埋点；渲染→截图对比点；稳定性→崩溃日志捕获（hilog）；功能→断言/输出检查点
+            5. 锁定 Issue 黄金标志（issue_golden_flag）：从 Issue 正文复现步骤/预期行为中选定唯一可观测判据（如「点击 X 后页面白屏」），写入 JSON。修复验证阶段必须沿用此判据，禁止修订/改写/放宽
+            6. 按 Skill 的工程结构生成三平台工程（ohos/android/ios），配置 OHOS 签名
+            7. 按 Skill 的编译验证清单验证 Demo 能编译通过（flutter analyze / build hap / build apk）
+            8. 检测是否有连接的鸿蒙设备（hdc list targets），有设备时实际运行 Demo 验证复现效果
+            9. 如果是 OHOS 独有 bug，在 Android/iOS 上运行同样 scenario 验证 bug 不复现（跨平台对照验证）
+            10. 记录复现稳定性（verified/stable/intermittent/unstable/not_reproducible/theoretical）
+            11. 如果复现不了，必须给出明确说明：
                - 原因分析（为什么复现不了：缺设备/缺环境/触发条件不对/Demo 代码有误）
                - 理论复现路径（基于代码分析推断的复现路径）
                - 缺失条件清单（需要什么才能复现）
             参考 flutter-issue-demo-reproduction Skill 的 SKILL.md 和 references/ 目录获取完整指导。
-            输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、reproduction_status、demo_source、demo_code、demo_usage、expected_behavior、actual_behavior、verification_method、reproduction_not_possible_reason（复现不了时必填）、missing_evidence。
+            输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、reproduction_status、issue_golden_flag（从 Issue 正文锁定的唯一可观测判据）、demo_source、demo_code、demo_usage、expected_behavior、actual_behavior、verification_method、reproduction_not_possible_reason（复现不了时必填）、missing_evidence。
             输出不超过 5000 字。
       transitions:
         # 问题复现 → 复现验证（对抗验证复现效果和 Demo 质量）
@@ -122,10 +131,11 @@ workflow:
       description: |
         以批判性视角验证问题复现阶段的 Demo 质量和复现效果。验证复现结论是否可靠、Demo 是否覆盖 Issue 全部场景、跨平台对照是否充分。
         验证不通过（conditional_pass/fail）时回到问题复现重新构造或补充；通过（pass）时进入根因分析。
-        为防止无限循环，maxTransitions=30 限制总流转次数；问题复现→复现验证 最多循环 2 次。
+        为防止无限循环：问题复现/复现验证 maxVisits=3（复现环最多循环 2 次，引擎强制），全局 maxTransitions=30 兜底。
       requireHumanApproval: false
       isInitial: false
       isFinal: false
+      maxVisits: 3
       position: { x: 288, y: 200 }
       steps:
         - id: verify-reproduction
@@ -167,9 +177,11 @@ workflow:
         支持多轮迭代收敛——judge 输出 conditional_pass 时回退到 defender 继续打磨，
         每轮聚焦补充 missing_evidence 中列出的缺口，逐步收敛到精确根因。
         如果置信度<0.3 且无法继续迭代，judge 输出 fail 进入兜底报告。
+        judge 也可指定 next_state=问题复现 回退重新构造 Demo（仅当复现 Demo 没踩到相关代码路径/Demo 本身有误时）。
       requireHumanApproval: false
       isInitial: false
       isFinal: false
+      maxSelfTransitions: 3
       position: { x: 350, y: 200 }
       steps:
         - id: analyze-root-cause
@@ -182,6 +194,7 @@ workflow:
                - problem_type（稳定性/内存泄漏/功能/性能/渲染）
                - layer（应用层/插件层/框架层/引擎层/系统层）
                - priority（P0-P3）
+               - problem_ownership（framework_library=框架/插件代码缺陷，应修改框架/插件代码；business_code=应用开发者用法问题，应修改应用代码；mixed=两者兼有。判定依据写进 key_findings）
             2. 执行日志分析、代码审查、差异对比
             3. 匹配已知根因模式
             4. 输出根因假设 + 证据链 + 置信度
@@ -195,7 +208,7 @@ workflow:
             8. 【硬约束】不要搜索 Issue 所在仓库的其他 PR 和 Issue（如列出仓库所有 PR、搜索相关 PR/Issue 等）。但允许获取当前 Issue 本身的信息（标题、body、评论、创建时间等），可通过 GitCode/GitHub API 的 issues/{number} 端点获取。所有代码分析只在本地代码仓（repo/ 目录）中进行。
             9. 如果根因分析需要参考上游信息，必须以 upstream_status="unknown" + upstream_search_keywords（供用户手动搜索的关键词）形式输出，不得给出确定的 PR/Issue 链接，不得自行推断上游仓库地址。
             参考 cpf-ohos-issue-analysis Skill 的 issue-types/*.md 和 references/log-interpretation.md。
-            输出 JSON 或 Markdown+JSON 均可，但结尾必须包含 verdict、summary、artifact_path、key_findings、problem_type、layer、priority、confidence、confirmed_evidence、inferred_evidence、missing_evidence、next_iteration_focus（conditional_pass 时必填）、upstream_status（只能为 "unknown"）、upstream_search_keywords。
+            输出 JSON 或 Markdown+JSON 均可，但结尾必须包含 verdict、summary、artifact_path、key_findings、problem_type、layer、priority、problem_ownership（framework_library|business_code|mixed）、confidence、confirmed_evidence、inferred_evidence、missing_evidence、next_iteration_focus（conditional_pass 时必填）、upstream_status（只能为 "unknown"）、upstream_search_keywords。
 
         - id: challenge-root-cause
           name: 根因质疑
@@ -225,8 +238,9 @@ workflow:
                - conditional_pass：方向正确但需补充修正，回退到 defender 继续迭代（针对 attacker 的 evidence_gaps 补充）
                - fail：根因无法确定（迭代 3 轮仍 confidence<0.3 或 attacker 发现重大错误），进入兜底报告
             5. 如果 conditional_pass，在 feedback_to_defender 中说明回退时需要补充的方向
+            6. 【Demo 缺陷回退】如果分析发现复现 Demo 没有踩到相关代码路径、触发条件不完整或 Demo 本身有误，导致根因无法在现有 Demo 上验证：verdict=conditional_pass 且 next_state="问题复现"（仅在需要重新构造 Demo 时使用；一般打磨回退仍不写 next_state，走自迭代）
             效率约束：只读取项目源码文件，不读取 ACEHarness 内部状态文件。
-            输出结尾必须包含 <step-conclusion> 标签，内含 verdict、summary、confidence_assessment、feedback_to_defender（conditional_pass 时必填）、ruling_reason。
+            输出结尾必须包含 <step-conclusion> 标签，内含 verdict、summary、confidence_assessment、feedback_to_defender（conditional_pass 时必填）、ruling_reason、next_state（仅 Demo 缺陷回退时填 "问题复现"，其余情况省略）。
       transitions:
         - to: 方案设计
           condition: { verdict: pass }
@@ -236,9 +250,13 @@ workflow:
           condition: { verdict: conditional_pass }
           priority: 2
           label: judge 裁决需打磨，回退到 defender 继续迭代收敛（针对 evidence_gaps 补充）
+        - to: 问题复现
+          condition: { verdict: conditional_pass }
+          priority: 3
+          label: 仅当 judge 指定 next_state=问题复现：Demo 未踩到相关代码路径/Demo 有误，需重新构造复现（默认 cpass 仍走自迭代）
         - to: 报告沉淀
           condition: { verdict: fail }
-          priority: 3
+          priority: 4
           label: 根因无法确定（迭代 3 轮仍置信度<0.3 或 attacker 发现重大错误），直接生成报告（含兜底排查思路）
 
     # ========== 状态3：方案设计（纯方案设计，不实际修改代码）==========
@@ -262,7 +280,11 @@ workflow:
             3. 生成短期修复 + 根因修复 + 长期改进的完整建议
             4. 评估修复风险和影响范围
             5. 【OHOS 独有问题修复优先级】如果根因是 OHOS 端独有问题（Android/iOS 不存在），优先通过修改 Native 端（C++/ArkTS）代码解决，而非 Dart 层补丁。在 JSON 中标注 fix_code_layer（native/framework/dart）和 is_ohos_specific（true/false）。如果选择 Dart 层修复，必须在 risk_assessment 中说明为何无法在 Native 层修复。
-            输出结尾必须包含 verdict、summary、artifact_path、key_findings、fix_strategy、risk_level、missing_evidence、upstream_status（只能为 unknown）。
+            6. 【问题归属分流】读取根因分析的 problem_ownership：
+               - business_code（应用开发者问题）：不设计框架仓代码修改。输出面向应用开发者的修改建议（改哪里、怎么改、示例代码），verdict=fail 走「输出建议供人工执行」出口进入报告沉淀（此处 fail 表示无需框架侧修复，不是方案失败）
+               - mixed：输出应用侧规避建议 + 框架侧长期改进建议，verdict=fail 走建议出口；确需框架 patch 修复根因才 pass
+               - framework_library：正常设计框架仓 patch（verdict=pass/conditional_pass）
+            输出结尾必须包含 verdict、summary、artifact_path、key_findings、problem_ownership（继承根因分析）、fix_strategy、risk_level、missing_evidence、upstream_status（只能为 unknown）。
             注意：本步骤只输出修复方案设计（root_cause_fix.file/line/code_before/code_after），不实际修改代码文件。代码修改由下游「代码修复」阶段执行。
       transitions:
         - to: 代码修复
@@ -276,7 +298,7 @@ workflow:
         - to: 报告沉淀
           condition: { verdict: fail }
           priority: 3
-          label: 修复方案驳回，输出建议供人工执行
+          label: 方案被驳回，或应用层问题分流（business_code/mixed 只出建议不 patch 框架仓），输出建议供人工执行
 
     # ========== 状态3.5：代码修复（实际修改代码+编译验证+生成patch）==========
     - name: 代码修复
@@ -323,11 +345,12 @@ workflow:
         以攻击者视角验证修复方案的有效性，并在真机或模拟器上实际运行验证修复后 bug 消失。
         验证结论要求：只有 verdict=pass 且 issue_golden_flag_met=true 且 engine_aligned=true 才进入报告沉淀。
         缺字段、修订黄金标志或引擎未对齐时，引擎会把 pass 降为 conditional_pass；工作流到达「完成」时若最后一次修复验证不是 pass，引擎标 failed 而不是 completed。
-        verdict=conditional_pass 或 fail 时，引擎按 feedback_to_target 回退（方案设计/根因分析/代码修复）；未填写时默认代码修复。修订黄金标志或分支 B（ArkUI 覆盖）回方案设计；engine_aligned 对不上回报告沉淀（不得写成已解决）。
-        为防止无限循环，maxTransitions=30 限制总流转次数；根因分析→方案设计→代码修复→修复验证 整体最多循环 3 次。
+        verdict=conditional_pass 或 fail 时，引擎按 feedback_to_target 回退（方案设计/根因分析/问题复现/代码修复）；未填写时默认代码修复。修订黄金标志或分支 B（ArkUI 覆盖）回方案设计；engine_aligned 对不上回报告沉淀（不得写成已解决）；Demo 本身构造有误/未复现原始 Issue 场景回问题复现。
+        为防止无限循环：修复验证 maxVisits=4（修复环最多循环 3 次，引擎强制），全局 maxTransitions=30 兜底。
       requireHumanApproval: false
       isInitial: false
       isFinal: false
+      maxVisits: 4
       position: { x: 975, y: 200 }
       steps:
         - id: verify-fix
@@ -343,16 +366,18 @@ workflow:
                - 用代码修复阶段修改后的 repo/ 代码重新构建（flutter build hap/apk/ios）
                - 【embedding HAR】修复落在 embedding / flutter_embedding / ArkTS 平台层时：先读 Demo 的 oh-package.json5 和 ohos/oh_modules/.ohpm/lock.json5，确认 @ohos/flutter_ohos 实际指向哪个 HAR，把新 HAR 盖到该文件（常见 flutter_embedding_${mode}.har）。flutter build hap 默认吃 release 的 flutter_embedding_release.har，只盖 debug 无效。禁止默认盖 flutter.har；换完删 ohos/oh_modules 并清 ~/.ohpm/cache 再编；以 oh_modules 里是否出现新代码为准。口径见 cpf-ohos-issue-analysis/references/fix-strategy.md 与 flutter-issue-demo-reproduction/references/verification-depth-checklist.md §J。允许阅读已挂载 Skill 的 SKILL.md。
                - 安装到设备并运行问题复现阶段提供的 Demo 复现步骤
-               - 检查黄金标志：必须沿用复现阶段从 Issue 正文锁定的那一条，本阶段禁止修订/改写/放宽。不能用本机碰巧复现的更重症状代替。修不了则 issue_golden_flag_met=false，verdict 最高 conditional_pass。引擎会把「修订黄金标志」或缺少 issue_golden_flag_met=true 的 pass 降为 conditional_pass，不会进入报告沉淀。JSON 须填 sdk_version、repo_commit、engine_aligned、har_path、issue_golden_flag_met。
+               - 检查黄金标志：必须沿用问题复现阶段 JSON 中锁定的 issue_golden_flag（从 Issue 正文选定的唯一可观测判据），本阶段禁止修订/改写/放宽。不能用本机碰巧复现的更重症状代替。修不了则 issue_golden_flag_met=false，verdict 最高 conditional_pass。引擎会把「修订黄金标志」或缺少 issue_golden_flag_met=true 的 pass 降为 conditional_pass，不会进入报告沉淀。JSON 须填 sdk_version、repo_commit、engine_aligned、har_path、issue_golden_flag_met。
             3. 验证修复方案与根因的对应性：修复是否针对确认的根因，而非表面症状
             4. 构造绕过场景：基于 Issue 的复现步骤和触发条件，构造修复未覆盖的场景
             5. 副作用分析：修复是否会破坏现有功能？是否引入新的风险
             6. 三端一致性检查：修复后的行为是否与 Android/iOS 基线一致
             7. 回归风险评估：修复的影响范围是否可控
             效率要求：根因分析和方案设计阶段已提供代码定位，优先引用已有结论；缺证据再读 lock.json5、oh-package.json5、已挂载 Skill 的 SKILL.md / fix-strategy.md / verification-depth-checklist.md 以及对不上的源码。同一文件不要反复通读，不要扫全仓。不要写死可读文件个数。
-            如果验证未达 pass（verdict=conditional_pass 或 fail），必须在 feedback_to_target 字段中说明回退目标（代码修复/修复方案设计/根因分析），在 feedback_reason 字段中说明回退原因。
+            如果验证未达 pass（verdict=conditional_pass 或 fail），必须在 feedback_to_target 字段中说明回退目标（代码修复/修复方案设计/根因分析/问题复现——Demo 本身构造有误或未复现原始 Issue 场景时选问题复现），在 feedback_reason 字段中说明回退原因。
             输出结尾必须包含 <step-conclusion> 标签，内含 verdict、summary、issue_resolved、root_cause_coverage、regression_risk、run_verification、feedback_to_target（conditional_pass/fail 时必填）、feedback_reason（conditional_pass/fail 时必填）、missing_scenarios。
       transitions:
+        # 注意：本状态的回退路由由引擎 resolveFixVerificationNextState 特判（按 feedback_to_target/next_state，
+        # 含 feedback_to_target=问题复现），下列同 verdict 多目标边仅作图示与兜底，正常匹配按 priority 取第一条。
         - to: 报告沉淀
           condition: { verdict: pass }
           priority: 1

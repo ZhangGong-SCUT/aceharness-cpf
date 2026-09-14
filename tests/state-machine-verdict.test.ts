@@ -144,6 +144,21 @@ describe('enforceFixVerificationGoldenFlag', () => {
     })).toBe('报告沉淀');
   });
 
+  test('routes demo-side feedback to 问题复现', () => {
+    const output = '{"verdict":"fail","feedback_to_target":"问题复现","feedback_reason":"Demo 未复现原始 Issue 场景"}';
+    expect(extractFixVerificationRollbackTarget(output)).toBe('问题复现');
+    expect(resolveFixVerificationNextState({
+      stateName: '修复验证',
+      verdict: 'fail',
+      output,
+      allowedStates: ['代码修复', '方案设计', '根因分析', '报告沉淀', '问题复现'],
+    })).toBe('问题复现');
+  });
+
+  test('routes prose 回到问题复现 to 问题复现', () => {
+    expect(extractFixVerificationRollbackTarget('结论：Demo 本身构造有误，需回到问题复现重新构造')).toBe('问题复现');
+  });
+
   test('downgrades pass that rewrites the Issue golden flag', () => {
     const output = [
       '**verdict: pass**（按修订后黄金标志）',
@@ -180,6 +195,17 @@ describe('shouldFinalizeDiagnosisAsCompleted', () => {
     });
     expect(gate.complete).toBe(false);
     expect(gate.reason).toMatch(/未完成修复验证/);
+  });
+
+  test('completes designed fallback exits that never entered 修复验证', () => {
+    const gate = shouldFinalizeDiagnosisAsCompleted({
+      hasFixVerificationState: true,
+      lastFixVerificationVerdict: null,
+      finalStateName: '完成',
+      fixVerificationReached: false,
+    });
+    expect(gate.complete).toBe(true);
+    expect(gate.reason).toMatch(/兜底|建议出口/);
   });
 
   test('does not change 终止 or non-diagnosis workflows', () => {
@@ -244,6 +270,14 @@ describe('pickCircuitBreakerEscape', () => {
 
   test('escapes a conditional_pass self-loop to fail, not the first pass edge', () => {
     expect(pickCircuitBreakerEscape(rootCauseTransitions, '根因分析', 'conditional_pass')?.to).toBe('报告沉淀');
+  });
+
+  test('self-loop exhaustion escapes via fail even when a cpass reroute edge exists', () => {
+    const transitions = [
+      ...rootCauseTransitions,
+      { condition: { verdict: 'conditional_pass' }, to: '问题复现' },
+    ];
+    expect(pickCircuitBreakerEscape(transitions, '根因分析', 'conditional_pass')?.to).toBe('报告沉淀');
   });
 
   test('still prefers a matching non-self exit when fail is absent', () => {
