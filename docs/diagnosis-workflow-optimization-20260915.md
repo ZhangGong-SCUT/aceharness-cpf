@@ -59,10 +59,11 @@
 - `npx tsc --noEmit`：src/ 零报错（tests/ 的报错为预存，与本改动无关）
 - eslint：6 个改动文件零告警
 
-## ⚠️ 部署注意（未部署）
+## 部署记录（2026-09-15 17:30 已完成）
 
-本次只改了仓库源码与配置，**尚未部署到运行中的服务**（pid 340665，生产模式跑 dist/.next + ~/.aceharness/configs）：
+下午用户提交 Issue 2712 报「引擎初始化失败: opencode 不可用」，排查发现根因与部署联动处理：
 
-1. 仓库 src/ 还有他人未提交的 WIP（extractBaseBranch/fallbackBranch 等），现在 `npm run build` 会把半成品编译进去——等 WIP 落地后再构建
-2. **禁止只 `npm run sync:configs` 不同步引擎**：旧引擎的 matchCondition 会忽略新条件键，fieldMatch 边退化为裸 verdict 边（cpass 会错误路由到优先级 2 的问题复现）
-3. 正确部署顺序：`npm run build` → 重启服务 → `npm run sync:configs`（三者一次完成）
+1. **故障根因**：ACEHarness 当天 11:22 被迁移为 systemd user 服务（`~/.config/systemd/user/aceharness.service`），服务环境 PATH 为 systemd 默认值，不含 opencode 二进制所在目录 `/home/flutter/.local/node/bin`；引擎可用性检查（stdio 的 `commandExists` 与 SDK 的 `findCommand`）都只找二进制、不探测已监听 4096 的 opencode serve，双双失败 → 所有 run 自 11:21 起均报此错（含 pr2006 三个 run）。
+2. **修复**：`ln -s ~/.local/node/bin/opencode ~/.local/bin/opencode`（~/.local/bin 在服务 PATH 与引擎公共搜索路径中，即时生效）；systemd 单元补 `Environment=PATH=/home/flutter/.local/node/bin:...` 与 `SHELL=/bin/bash` 加固。
+3. **部署**（经核当天 11:30 的在线构建已含工作区 WIP，重建无回滚风险）：`npx next build` → `systemctl --user daemon-reload && restart aceharness`（新 PID 377073）→ 同步两份诊断 YAML 到 `~/.aceharness/configs/`（其余配置已一致）。
+4. **验证**：编译产物含 `matchTransitionFieldConditions` 且旧特判已消失；服务进程内 `/api/engine/availability?engine=opencode&refresh=1` 返回 `available:true`（stdio+SDK 均可用）；运行时配置含 12 处 fieldMatch 条件边。
