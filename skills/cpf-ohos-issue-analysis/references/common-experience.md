@@ -34,6 +34,7 @@
 - **NEVER** 把本机碰巧复现到的更重症状当成 Issue 验收（例如 Issue 要自定义 `code`/`details`，却用「Future 不挂死」判 pass）— **Use**：黄金标志必须是 Issue 正文的预期/实际结果；旁证可以记，不能替代验收
 - **NEVER** 在修复验证阶段修订、改写、放宽黄金标志后再写 `pass`（例如第 1 轮 `window ≠ local` 已 fail，第 2 轮改成「display 带偏移」）— 复现阶段锁定的 Issue 验收不能改。修不了：`issue_golden_flag_met=false`，`verdict` 最高 `conditional_pass`。引擎见到「修订黄金标志」或缺少 `issue_golden_flag_met=true` 会把 `pass` 降为 `conditional_pass`。
 - **NEVER** 把评论里的「已合入 / 已在 PR #xxx 修复 / 对照该 PR」或官方修复 commit 当成修法，也禁止 `git apply` / cherry-pick 官方修复。采集阶段不得写出 PR 号、PR URL、官方修复 commit；当前 Issue 号和 reset merge commit 必须保留。下游只根据回退后的源码和复现证据改。
+- **NEVER** 拿模板生成的 demo 工程直接 `flutter build hap` 就开始排编译错 — 模板是 HarmonyOS 商用配置，本机 Linux 工具链跑不通（会连环报 `SDK component missing` / `compatibleSdkVersion type integer` / 签名错）。**Use**：先按 `../../flutter-issue-demo-reproduction/references/linux-build-env.md` §B 完成五项改造（`runtimeOS: OpenHarmony` + 整数 26 + `compileSdkVersion` + `sdk.dir` + 签名密文块 + bundleName），再编。ArkTS 写法约束（handler 必须 class、`invokeMethod` 无 `.then`）也在该文件 §C。
 
 ## 通用工具约束
 

@@ -117,6 +117,8 @@ Issue #2500 修复验证曾把新 HAR 盖到 `flutter.har`，第一轮真机黄�
 - 本机没有匹配 SDK（`matched=false`）：补丁仍可出，运行验证写 `needs_runtime_validation` / `conditional_pass`，`issue_resolved=partial`，`engine_aligned=false`。禁止改用日常 SDK 凑真机。引擎见到清单未对上会把修复验证 `pass` 降为 `conditional_pass`。
 - 黄金标志跟 **Issue 正文的预期结果**，不跟本机旧 SDK 上碰巧更重的症状。
 
+**本机（Linux）构建/真机操作前 MANDATORY 读 [`../../flutter-issue-demo-reproduction/references/linux-build-env.md`](../../flutter-issue-demo-reproduction/references/linux-build-env.md)**：demo 工程模板必须完成 build-profile 五项改造（`runtimeOS: OpenHarmony` + 整数 26 + `sdk.dir` + 签名密文块 + bundleName `com.example.flutterabilitydemo`）才能编 hap / 装真机；含 ArkTS handler 写法约束与报错对照表。
+
 Issue #2492：仓是 `oh-3.41.9-dev`，真机用本机 3.27.5 SDK；验证把同样补丁打进 3.27 HAR 后写了 `bug_fixed=true`，Issue 要的自定义 `code`/`details` 并未过。
 
 ## 把 embedding 改动送进 Demo（验证必做）
