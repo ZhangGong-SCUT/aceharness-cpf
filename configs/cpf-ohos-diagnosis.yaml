@@ -2,7 +2,7 @@ workflow:
   name: 鸿蒙跨平台框架问题AI自动诊断
   description: |
     面向 OHOS 跨平台框架（Flutter-OHOS / React Native-OHOS / KMP-CMP 等）鸿蒙化场景的问题诊断与解决。
-    精简版：信息采集(代码仓拉取+分支回退) → 问题复现(构造Demo复现) → 复现验证(对抗验证) → 根因分析(红蓝对抗+含分类定界) → 方案设计(纯方案设计) → 代码修复(实际修改代码+编译+生成patch) → 修复验证(真机/模拟器运行验证) → 报告沉淀 → 完成。
+    精简版：信息采集(代码仓拉取+分支回退) → 问题复现(构造Demo复现) → 复现验证(对抗验证) → 根因分析(红蓝对抗+含分类定界) → 方案设计(红蓝对抗：设计+质疑+裁决) → 代码修复(实际修改代码+编译+生成patch) → 修复验证(真机/模拟器运行验证) → 报告沉淀 → 完成。
     verdict 枚举：pass / conditional_pass / fail（不再使用 skipped，原 skipped 场景统一映射为 conditional_pass）。
     - pass：当前状态目标完全达成，可前进到下一状态。
     - conditional_pass：已有方向但需打磨，应优先回退继续补充（信息采集/问题复现/根因分析/报告沉淀的 cpass 仍前进；复现验证/代码修复/修复验证的 cpass 回退）。
@@ -11,7 +11,7 @@ workflow:
     - Issue 不可访问（正文 API 404 且确认 API 可用）→ 信息采集 fail → 终止，不空跑后续阶段。
     - 根因无法确定 → 根因分析 fail → 报告沉淀（兜底报告）。
     - 应用层问题（problem_ownership=business_code/mixed）→ 方案设计 fail → 报告沉淀（只出修改建议，不 patch 框架仓）。
-    循环上限（引擎强制）：问题复现/复现验证 maxVisits=3（复现环最多 2 次）；修复验证 maxVisits=4（修复环最多 3 次）；根因分析自环熔断 maxSelfTransitions=3；全局 maxTransitions=30。
+    循环上限（引擎强制）：问题复现/复现验证 maxVisits=3（复现环最多 2 次）；修复验证 maxVisits=4（修复环最多 3 次）；根因分析自环熔断 maxSelfTransitions=3；方案设计自环熔断 maxSelfTransitions=2；全局 maxTransitions=30。
   mode: state-machine
   maxTransitions: 30
   supervisor:
@@ -259,14 +259,18 @@ workflow:
           priority: 4
           label: 根因无法确定（迭代 3 轮仍置信度<0.3 或 attacker 发现重大错误），直接生成报告（含兜底排查思路）
 
-    # ========== 状态3：方案设计（纯方案设计，不实际修改代码）==========
+    # ========== 状态3：方案设计（红蓝对抗：设计→质疑→裁决，不实际修改代码）==========
     - name: 方案设计
       description: |
-        基于确认的根因，设计系统性修复方案。只输出方案设计，不实际修改代码。
-        代码修改由下游「代码修复」阶段执行。
+        基于确认的根因，设计系统性修复方案。采用红蓝对抗 3 步结构：
+        defender 方案设计 → attacker 方案质疑 → judge 方案裁决。
+        只输出方案设计，不实际修改代码；代码修改由下游「代码修复」阶段执行。
+        judge 输出 conditional_pass 时回退到 defender 针对质疑补充（自迭代，maxSelfTransitions=2 熔断）；
+        judge 也可指定 next_state=根因分析 回退返工根因（仅当质疑揭示根因本身有误时）。
       requireHumanApproval: false
       isInitial: false
       isFinal: false
+      maxSelfTransitions: 2
       position: { x: 850, y: 200 }
       steps:
         - id: design-fix
@@ -284,20 +288,57 @@ workflow:
                - business_code（应用开发者问题）：不设计框架仓代码修改。输出面向应用开发者的修改建议（改哪里、怎么改、示例代码），verdict=fail 走「输出建议供人工执行」出口进入报告沉淀（此处 fail 表示无需框架侧修复，不是方案失败）
                - mixed：输出应用侧规避建议 + 框架侧长期改进建议，verdict=fail 走建议出口；确需框架 patch 修复根因才 pass
                - framework_library：正常设计框架仓 patch（verdict=pass/conditional_pass）
+            7. 【多轮迭代收敛机制】本步骤输出会被 attacker（方案质疑）挑战、judge（方案裁决）裁决；如果被打回，下一轮优先针对质疑点（challenges/fix_gaps）补充修正，不要从头重做。
             输出结尾必须包含 verdict、summary、artifact_path、key_findings、problem_ownership（继承根因分析）、fix_strategy、risk_level、missing_evidence、upstream_status（只能为 unknown）。
             注意：本步骤只输出修复方案设计（root_cause_fix.file/line/code_before/code_after），不实际修改代码文件。代码修改由下游「代码修复」阶段执行。
+
+        - id: challenge-fix-design
+          name: 方案质疑
+          agent: diagnosis-fix-challenger
+          role: attacker
+          task: |
+            以批判性视角质疑 defender（diagnosis-fix-advisor）的修复方案，发现漏洞、不完整之处和潜在风险（效率约束：输出不超过 1500 字）：
+            1. 质疑方案与根因的对应性：修复是否针对确认的根因，还是仅掩盖表面症状
+            2. 质疑覆盖完整性：是否覆盖所有触发路径和边界条件（极端输入、并发场景、平台差异）
+            3. 质疑副作用：是否会破坏现有功能、引入新风险（含整数溢出/缓冲区溢出等安全风险）
+            4. 质疑 OHOS 修复优先级：OHOS 独有问题是否优先 Native 端（C++/ArkTS）修复；选 Dart 层补丁时理由是否充分
+            5. 质疑可行性：修改文件/行定位是否准确、编译影响、回滚可行性
+            注意：defender 因 problem_ownership=business_code/mixed 输出 fail（应用层分流，只出建议）时不属于方案缺陷，不要为此质疑。
+            效率约束：只读取项目源码文件，不读取 ACEHarness 内部状态文件。
+            输出结尾必须包含 <step-conclusion> 标签，内含 verdict（pass/conditional_pass/fail）、challenges（质疑点列表）、risks（风险清单）、fix_gaps（方案缺口，供裁决与回退参考）。
+
+        - id: judge-fix-design
+          name: 方案裁决
+          agent: diagnosis-fix-judge
+          role: judge
+          task: |
+            在 defender（修复方案设计）和 attacker（方案质疑）之间做出客观裁决，判断修复方案是否可接受、能否进入代码修改阶段。
+            1. 审查 defender 的方案和 attacker 的质疑发现
+            2. 判断方案是否真正解决根因、质疑是否合理、风险是否可接受
+            3. 做出明确裁决：
+               - pass：方案可接受（针对根因、覆盖充分、风险可控），进入代码修复
+               - conditional_pass：方向正确但需修正，回退到 defender 针对质疑补充（自迭代）
+               - fail：方案有重大风险需重新设计；或 defender 因 problem_ownership=business_code/mixed 输出 fail 的应用层分流（此时直接维持 fail，无需质疑），进入报告沉淀只出修改建议
+            4. 如果 conditional_pass，在 feedback_to_designer 中说明回退时需要补充的方向
+            5. 【根因回退】如果质疑揭示根因本身有误（无论方案怎么设计都建立在错误根因上）：verdict=conditional_pass 且 next_state="根因分析"（仅在根因需返工时使用；一般打磨回退仍不写 next_state，走自迭代）
+            效率约束：只读取项目源码文件，不读取 ACEHarness 内部状态文件。
+            输出结尾必须包含 <step-conclusion> 标签，内含 verdict、summary、feedback_to_designer（conditional_pass 时必填）、ruling_reason、next_state（仅根因回退时填 "根因分析"，其余情况省略）。
       transitions:
         - to: 代码修复
           condition: { verdict: pass }
           priority: 1
-          label: 修复方案完成，进入代码修复
-        - to: 根因分析
+          label: 方案裁决通过，进入代码修复
+        - to: 方案设计
           condition: { verdict: conditional_pass }
           priority: 2
-          label: 修复方案有条件通过，回到根因分析重新打磨根因/方案
+          label: 裁决需打磨，回退 defender 针对质疑补充（自迭代）
+        - to: 根因分析
+          condition: { verdict: conditional_pass }
+          priority: 3
+          label: 仅当 judge 指定 next_state=根因分析：根因本身有误需返工
         - to: 报告沉淀
           condition: { verdict: fail }
-          priority: 3
+          priority: 4
           label: 方案被驳回，或应用层问题分流（business_code/mixed 只出建议不 patch 框架仓），输出建议供人工执行
 
     # ========== 状态3.5：代码修复（实际修改代码+编译验证+生成patch）==========
@@ -345,7 +386,7 @@ workflow:
         以攻击者视角验证修复方案的有效性，并在真机或模拟器上实际运行验证修复后 bug 消失。
         验证结论要求：只有 verdict=pass 且 issue_golden_flag_met=true 且 engine_aligned=true 才进入报告沉淀。
         缺字段、修订黄金标志或引擎未对齐时，引擎会把 pass 降为 conditional_pass；工作流到达「完成」时若最后一次修复验证不是 pass，引擎标 failed 而不是 completed。
-        verdict=conditional_pass 或 fail 时，引擎按 feedback_to_target 回退（方案设计/根因分析/问题复现/代码修复）；未填写时默认代码修复。修订黄金标志或分支 B（ArkUI 覆盖）回方案设计；engine_aligned 对不上回报告沉淀（不得写成已解决）；Demo 本身构造有误/未复现原始 Issue 场景回问题复现。
+        verdict=conditional_pass 或 fail 时，按 feedback_to_target / next_state 字段路由回退（方案设计/根因分析/问题复现/代码修复，由本状态 transitions 的 fieldMatch 条件边按 priority 匹配）；未填写时默认代码修复。修订黄金标志或分支 B（ArkUI 覆盖）回方案设计；engine_aligned 对不上回报告沉淀（不得写成已解决）；Demo 本身构造有误/未复现原始 Issue 场景回问题复现。
         为防止无限循环：修复验证 maxVisits=4（修复环最多循环 3 次，引擎强制），全局 maxTransitions=30 兜底。
       requireHumanApproval: false
       isInitial: false
@@ -377,40 +418,99 @@ workflow:
             如果验证未达 pass（verdict=conditional_pass 或 fail），必须在 feedback_to_target 字段中说明回退目标（代码修复/修复方案设计/根因分析/问题复现——Demo 本身构造有误或未复现原始 Issue 场景时选问题复现），在 feedback_reason 字段中说明回退原因。
             输出结尾必须包含 <step-conclusion> 标签，内含 verdict、summary、issue_resolved、root_cause_coverage、regression_risk、run_verification、feedback_to_target（conditional_pass/fail 时必填）、feedback_reason（conditional_pass/fail 时必填）、missing_scenarios。
       transitions:
-        # 注意：本状态的回退路由由引擎 resolveFixVerificationNextState 特判（按 feedback_to_target/next_state，
-        # 含 feedback_to_target=问题复现），下列同 verdict 多目标边仅作图示与兜底，正常匹配按 priority 取第一条。
+        # 回退路由完全由下列条件边表达（引擎按 priority 顺序取第一条匹配），无引擎特判。
+        # 匹配语义：fieldMatch 从最后输出的非工具 JSON 提取字段做正则匹配；
+        # fieldAbsent+outputMatch 表示结构化字段缺失时才对全文做散文回退；
+        # fieldNotEquals 表示字段不等于给定值（含缺失）时命中。
         - to: 报告沉淀
           condition: { verdict: pass }
           priority: 1
           label: 修复验证通过（真机运行 bug 消失），进入报告沉淀
-        - to: 代码修复
-          condition: { verdict: conditional_pass }
+        # ---- conditional_pass：按 feedback_to_target / next_state 字段路由 ----
+        - to: 问题复现
+          condition: { verdict: conditional_pass, fieldMatch: { 'feedback_to_target|next_state': '问题复现|复现验证|重新(构造)?复现' } }
           priority: 2
+          label: feedback_to_target=问题复现（Demo 本身构造有误/未复现原始场景）
+        - to: 根因分析
+          condition: { verdict: conditional_pass, fieldMatch: { 'feedback_to_target|next_state': '根因' } }
+          priority: 3
+          label: feedback_to_target=根因分析
+        - to: 方案设计
+          condition: { verdict: conditional_pass, fieldMatch: { 'feedback_to_target|next_state': '方案' } }
+          priority: 4
+          label: feedback_to_target=方案设计（方案方向错/修订黄金标志）
+        - to: 报告沉淀
+          condition: { verdict: conditional_pass, fieldMatch: { 'feedback_to_target|next_state': '报告沉淀|报告' } }
+          priority: 5
+          label: feedback_to_target=报告沉淀
+        - to: 代码修复
+          condition: { verdict: conditional_pass, fieldMatch: { 'feedback_to_target|next_state': '代码修复|改代码' } }
+          priority: 6
+          label: feedback_to_target=代码修复（代码需打磨）
+        # ---- conditional_pass：结构化字段缺失时的全文散文回退 ----
+        - to: 方案设计
+          condition: { verdict: conditional_pass, fieldAbsent: ['feedback_to_target|next_state'], outputMatch: '修订后?黄金标志|黄金标志必须修订|按修订后.{0,20}黄金标志|原黄金标志[\s\S]{0,80}不可达|回退(到)?方案设计|回到方案设计|重新设计方案|分支\s*B|ArkUI[\s\S]{0,40}覆盖' }
+          priority: 7
+          label: 散文回退：修订黄金标志/回退方案设计/分支B（ArkUI 覆盖）
+        - to: 根因分析
+          condition: { verdict: conditional_pass, fieldAbsent: ['feedback_to_target|next_state'], outputMatch: '回退(到)?根因分析|回到根因分析' }
+          priority: 8
+          label: 散文回退：回退根因分析
+        - to: 问题复现
+          condition: { verdict: conditional_pass, fieldAbsent: ['feedback_to_target|next_state'], outputMatch: '回退(到)?问题复现|回到问题复现|重新构造.{0,8}([Dd]emo|复现)|Demo\s*(本身)?\s*(构造|实现)?有误' }
+          priority: 9
+          label: 散文回退：Demo 构造有误，回问题复现
+        # ---- conditional_pass：引擎未对齐 → 报告沉淀（不得判已解决）----
+        - to: 报告沉淀
+          condition: { verdict: conditional_pass, fieldNotEquals: { 'run_verification.engine_aligned|engine_aligned': 'true' } }
+          priority: 10
+          label: 引擎未对齐，补丁已出但不得判已解决
+        # ---- conditional_pass：默认回代码修复 ----
+        - to: 代码修复
+          condition: { verdict: conditional_pass }
+          priority: 11
           label: 默认：代码需打磨，回退代码修复
+        # ---- fail：同构路由 ----
+        - to: 问题复现
+          condition: { verdict: fail, fieldMatch: { 'feedback_to_target|next_state': '问题复现|复现验证|重新(构造)?复现' } }
+          priority: 12
+          label: feedback_to_target=问题复现（Demo 本身构造有误/未复现原始场景）
+        - to: 根因分析
+          condition: { verdict: fail, fieldMatch: { 'feedback_to_target|next_state': '根因' } }
+          priority: 13
+          label: feedback_to_target=根因分析
+        - to: 方案设计
+          condition: { verdict: fail, fieldMatch: { 'feedback_to_target|next_state': '方案' } }
+          priority: 14
+          label: feedback_to_target=方案设计（方案方向错/修订黄金标志）
+        - to: 报告沉淀
+          condition: { verdict: fail, fieldMatch: { 'feedback_to_target|next_state': '报告沉淀|报告' } }
+          priority: 15
+          label: feedback_to_target=报告沉淀
+        - to: 代码修复
+          condition: { verdict: fail, fieldMatch: { 'feedback_to_target|next_state': '代码修复|改代码' } }
+          priority: 16
+          label: feedback_to_target=代码修复
+        - to: 方案设计
+          condition: { verdict: fail, fieldAbsent: ['feedback_to_target|next_state'], outputMatch: '修订后?黄金标志|黄金标志必须修订|按修订后.{0,20}黄金标志|原黄金标志[\s\S]{0,80}不可达|回退(到)?方案设计|回到方案设计|重新设计方案|分支\s*B|ArkUI[\s\S]{0,40}覆盖' }
+          priority: 17
+          label: 散文回退：修订黄金标志/回退方案设计/分支B（ArkUI 覆盖）
+        - to: 根因分析
+          condition: { verdict: fail, fieldAbsent: ['feedback_to_target|next_state'], outputMatch: '回退(到)?根因分析|回到根因分析' }
+          priority: 18
+          label: 散文回退：回退根因分析
+        - to: 问题复现
+          condition: { verdict: fail, fieldAbsent: ['feedback_to_target|next_state'], outputMatch: '回退(到)?问题复现|回到问题复现|重新构造.{0,8}([Dd]emo|复现)|Demo\s*(本身)?\s*(构造|实现)?有误' }
+          priority: 19
+          label: 散文回退：Demo 构造有误，回问题复现
+        - to: 报告沉淀
+          condition: { verdict: fail, fieldNotEquals: { 'run_verification.engine_aligned|engine_aligned': 'true' } }
+          priority: 20
+          label: 引擎未对齐，补丁已出但不得判已解决
         - to: 代码修复
           condition: { verdict: fail }
-          priority: 3
+          priority: 21
           label: 默认：bug 仍复现，回退代码修复
-        - to: 方案设计
-          condition: { verdict: fail }
-          priority: 4
-          label: feedback_to_target=方案设计（方案方向错 / 修订黄金标志）
-        - to: 方案设计
-          condition: { verdict: conditional_pass }
-          priority: 5
-          label: feedback_to_target=方案设计
-        - to: 根因分析
-          condition: { verdict: fail }
-          priority: 6
-          label: feedback_to_target=根因分析
-        - to: 根因分析
-          condition: { verdict: conditional_pass }
-          priority: 7
-          label: feedback_to_target=根因分析
-        - to: 报告沉淀
-          condition: { verdict: conditional_pass }
-          priority: 8
-          label: 引擎未对齐，补丁已出但不得判已解决
 
     # ========== 状态5：报告沉淀（1步，无裁决）==========
     - name: 报告沉淀

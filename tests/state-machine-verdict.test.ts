@@ -11,8 +11,10 @@ import {
   extractLastNextState,
   extractLastIssuesArray,
   enforceFixVerificationGoldenFlag,
-  extractFixVerificationRollbackTarget,
-  resolveFixVerificationNextState,
+  resolveOutputField,
+  matchTransitionFieldConditions,
+  hasTransitionFieldCondition,
+  describeTransitionFieldCondition,
   shouldFinalizeDiagnosisAsCompleted,
 } from '@/lib/state-machine/utils';
 
@@ -114,57 +116,122 @@ describe('enforceFixVerificationGoldenFlag', () => {
     )).toBe('conditional_pass');
   });
 
-  test('routes fail with 方案设计 feedback instead of 代码修复', () => {
-    const output = '{"verdict":"fail","feedback_to_target":"方案设计","summary":"分支 B，需回退方案设计"}';
-    expect(extractFixVerificationRollbackTarget(output)).toBe('方案设计');
-    expect(resolveFixVerificationNextState({
-      stateName: '修复验证',
-      verdict: 'fail',
-      output,
-      allowedStates: ['代码修复', '方案设计', '根因分析', '报告沉淀'],
-    })).toBe('方案设计');
-  });
-
-  test('routes rewritten golden-flag pass to 方案设计 after downgrade', () => {
-    const output = '**verdict: pass**（按修订后黄金标志）\n{"verdict":"pass","issue_golden_flag_met":true}';
-    expect(resolveFixVerificationNextState({
-      stateName: '修复验证',
-      verdict: 'conditional_pass',
-      output,
-      allowedStates: ['代码修复', '方案设计', '根因分析', '报告沉淀'],
-    })).toBe('方案设计');
-  });
-
-  test('routes unaligned engine to 报告沉淀', () => {
-    expect(resolveFixVerificationNextState({
-      stateName: '修复验证',
-      verdict: 'conditional_pass',
-      output: '{"verdict":"conditional_pass","run_verification":{"engine_aligned":false}}',
-      allowedStates: ['代码修复', '方案设计', '根因分析', '报告沉淀'],
-    })).toBe('报告沉淀');
-  });
-
-  test('routes demo-side feedback to 问题复现', () => {
-    const output = '{"verdict":"fail","feedback_to_target":"问题复现","feedback_reason":"Demo 未复现原始 Issue 场景"}';
-    expect(extractFixVerificationRollbackTarget(output)).toBe('问题复现');
-    expect(resolveFixVerificationNextState({
-      stateName: '修复验证',
-      verdict: 'fail',
-      output,
-      allowedStates: ['代码修复', '方案设计', '根因分析', '报告沉淀', '问题复现'],
-    })).toBe('问题复现');
-  });
-
-  test('routes prose 回到问题复现 to 问题复现', () => {
-    expect(extractFixVerificationRollbackTarget('结论：Demo 本身构造有误，需回到问题复现重新构造')).toBe('问题复现');
-  });
-
   test('downgrades pass that rewrites the Issue golden flag', () => {
     const output = [
       '**verdict: pass**（按修订后黄金标志）',
       '{"verdict":"pass","issue_golden_flag_met":true,"bug_fixed":true}',
     ].join('\n');
     expect(enforceFixVerificationGoldenFlag(output, 'pass', verifyCtx)).toBe('conditional_pass');
+  });
+});
+
+describe('resolveOutputField', () => {
+  test('resolves top-level field from the last non-tool JSON', () => {
+    const outputs = [
+      '<ace-process>{"toolName":"read","kind":"tool-call","input":{}}</ace-process>',
+      '{"verdict":"fail","feedback_to_target":"方案设计","summary":"分支 B，需回退方案设计"}',
+    ];
+    expect(resolveOutputField(outputs, 'feedback_to_target')).toEqual({ found: true, value: '方案设计' });
+  });
+
+  test('resolves dot path into nested objects', () => {
+    const outputs = ['{"run_verification":{"engine_aligned":false}}'];
+    expect(resolveOutputField(outputs, 'run_verification.engine_aligned')).toEqual({ found: true, value: false });
+  });
+
+  test('pipe candidates resolve the first existing path', () => {
+    const outputs = ['{"run_verification":{"engine_aligned":true}}'];
+    expect(resolveOutputField(outputs, 'engine_aligned|run_verification.engine_aligned'))
+      .toEqual({ found: true, value: true });
+    const outputs2 = ['{"engine_aligned":"true"}'];
+    expect(resolveOutputField(outputs2, 'engine_aligned|run_verification.engine_aligned'))
+      .toEqual({ found: true, value: 'true' });
+  });
+
+  test('missing field returns found=false', () => {
+    expect(resolveOutputField(['{"verdict":"pass"}'], 'feedback_to_target')).toEqual({ found: false, value: undefined });
+    expect(resolveOutputField([], 'feedback_to_target').found).toBe(false);
+  });
+
+  test('later JSON wins over earlier one', () => {
+    const outputs = [
+      '{"feedback_to_target":"代码修复"}',
+      '{"feedback_to_target":"根因分析"}',
+    ];
+    expect(resolveOutputField(outputs, 'feedback_to_target').value).toBe('根因分析');
+  });
+});
+
+describe('matchTransitionFieldConditions', () => {
+  test('fieldEquals requires exact stringified equality', () => {
+    const outputs = ['{"feedback_to_target":"方案设计"}'];
+    expect(matchTransitionFieldConditions(outputs, { fieldEquals: { feedback_to_target: '方案设计' } })).toBe(true);
+    expect(matchTransitionFieldConditions(outputs, { fieldEquals: { feedback_to_target: '代码修复' } })).toBe(false);
+    expect(matchTransitionFieldConditions(outputs, { fieldEquals: { missing_field: 'x' } })).toBe(false);
+  });
+
+  test('fieldEquals compares booleans via string coercion', () => {
+    const outputs = ['{"engine_aligned":true}'];
+    expect(matchTransitionFieldConditions(outputs, { fieldEquals: { engine_aligned: 'true' } })).toBe(true);
+    expect(matchTransitionFieldConditions(outputs, { fieldEquals: { engine_aligned: true } })).toBe(true);
+    expect(matchTransitionFieldConditions(outputs, { fieldEquals: { engine_aligned: 'false' } })).toBe(false);
+  });
+
+  test('fieldNotEquals passes when field is missing or different', () => {
+    expect(matchTransitionFieldConditions(['{"verdict":"fail"}'], {
+      fieldNotEquals: { 'run_verification.engine_aligned|engine_aligned': 'true' },
+    })).toBe(true);
+    expect(matchTransitionFieldConditions(['{"run_verification":{"engine_aligned":false}}'], {
+      fieldNotEquals: { 'run_verification.engine_aligned|engine_aligned': 'true' },
+    })).toBe(true);
+    expect(matchTransitionFieldConditions(['{"engine_aligned":true}'], {
+      fieldNotEquals: { 'run_verification.engine_aligned|engine_aligned': 'true' },
+    })).toBe(false);
+  });
+
+  test('fieldMatch requires field presence and regex match (no full-text fallback)', () => {
+    const outputs = ['结论：需回退到方案设计重新设计（无 JSON 字段）'];
+    expect(matchTransitionFieldConditions(outputs, { fieldMatch: { feedback_to_target: '方案' } })).toBe(false);
+    expect(matchTransitionFieldConditions(['{"feedback_to_target":"回方案设计"}'], {
+      fieldMatch: { feedback_to_target: '方案' },
+    })).toBe(true);
+  });
+
+  test('fieldAbsent blocks when structured field exists', () => {
+    const withField = ['{"feedback_to_target":"代码修复"}'];
+    const proseOnly = ['结论：Demo 本身构造有误，需回到问题复现重新构造'];
+    expect(matchTransitionFieldConditions(withField, {
+      fieldAbsent: ['feedback_to_target|next_state'],
+      outputMatch: '回到问题复现',
+    })).toBe(false);
+    expect(matchTransitionFieldConditions(proseOnly, {
+      fieldAbsent: ['feedback_to_target|next_state'],
+      outputMatch: '回到问题复现',
+    })).toBe(true);
+  });
+
+  test('outputMatch tests the joined raw output', () => {
+    expect(matchTransitionFieldConditions(['abc', 'def'], { outputMatch: 'bcd' })).toBe(false);
+    expect(matchTransitionFieldConditions(['abc', 'def'], { outputMatch: 'abc\\ndef' })).toBe(true);
+  });
+
+  test('invalid regex fails the condition instead of crashing', () => {
+    expect(matchTransitionFieldConditions(['{"feedback_to_target":"x"}'], {
+      fieldMatch: { feedback_to_target: '([unclosed' },
+    })).toBe(false);
+    expect(matchTransitionFieldConditions(['text'], { outputMatch: '([unclosed' })).toBe(false);
+  });
+
+  test('hasTransitionFieldCondition and describe helper', () => {
+    expect(hasTransitionFieldCondition(null)).toBe(false);
+    expect(hasTransitionFieldCondition({})).toBe(false);
+    expect(hasTransitionFieldCondition({ fieldAbsent: ['a'] })).toBe(true);
+    expect(describeTransitionFieldCondition({
+      fieldEquals: { stage: 'complete' },
+      fieldMatch: { feedback_to_target: '方案' },
+      fieldAbsent: ['next_state'],
+      outputMatch: '回到根因分析',
+    })).toBe('stage=complete, feedback_to_target~/方案/, !next_state, output~/回到根因分析/');
   });
 });
 

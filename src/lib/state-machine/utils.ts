@@ -280,64 +280,6 @@ export function enforceFixVerificationGoldenFlag(
   return 'pass';
 }
 
-const FIX_VERIFY_ROLLBACK_STATES = ['代码修复', '方案设计', '根因分析', '报告沉淀', '问题复现'] as const;
-
-export function mapFixVerificationFeedbackTarget(raw: string | null | undefined): string | null {
-  const text = String(raw || '').trim();
-  if (!text) return null;
-  if (/问题复现|复现验证|重新(构造)?复现/.test(text)) return '问题复现';
-  if (/根因/.test(text)) return '根因分析';
-  if (/方案/.test(text)) return '方案设计';
-  if (/报告沉淀|报告/.test(text)) return '报告沉淀';
-  if (/代码修复|改代码/.test(text)) return '代码修复';
-  if ((FIX_VERIFY_ROLLBACK_STATES as readonly string[]).includes(text)) return text;
-  return null;
-}
-
-export function extractFixVerificationRollbackTarget(output: string): string | null {
-  let fromJson: string | null = null;
-  walkNonToolJsonObjects(output, (parsed) => {
-    const mappedFeedback = mapFixVerificationFeedbackTarget(
-      typeof parsed?.feedback_to_target === 'string' ? parsed.feedback_to_target : '',
-    );
-    if (mappedFeedback) {
-      fromJson = mappedFeedback;
-      return;
-    }
-    if (typeof parsed?.next_state === 'string') {
-      fromJson = mapFixVerificationFeedbackTarget(parsed.next_state) || parsed.next_state.trim() || fromJson;
-    }
-  });
-  if (fromJson) return fromJson;
-
-  const text = String(output || '');
-  if (REVISED_GOLDEN_FLAG.test(text)) return '方案设计';
-  if (/回退(到)?方案设计|回到方案设计|重新设计方案/.test(text)) return '方案设计';
-  if (/回退(到)?根因分析|回到根因分析/.test(text)) return '根因分析';
-  if (/分支\s*B/.test(text) || /ArkUI[\s\S]{0,40}覆盖/.test(text)) return '方案设计';
-  if (/回退(到)?问题复现|回到问题复现|重新构造.{0,8}([Dd]emo|复现)|Demo\s*(本身)?\s*(构造|实现)?有误/.test(text)) return '问题复现';
-  return null;
-}
-
-export function resolveFixVerificationNextState(input: {
-  stateName: string;
-  verdict: WorkflowVerdict;
-  output: string;
-  allowedStates: Iterable<string>;
-}): string | null {
-  if (!/修复验证/.test(input.stateName)) return null;
-  const allowed = new Set([...input.allowedStates]);
-  const pick = (name: string | null | undefined) => (name && allowed.has(name) ? name : null);
-
-  if (input.verdict === 'pass') return pick('报告沉淀');
-
-  const rollback = extractFixVerificationRollbackTarget(input.output);
-  if (rollback) return pick(rollback);
-
-  if (extractEngineAligned(input.output) !== true) return pick('报告沉淀');
-  return null;
-}
-
 function keywordFallbackVerdict(output: string): WorkflowVerdict {
   const cleaned = output
     .replace(/故不\s*fail/gi, ' ')
@@ -620,4 +562,145 @@ export function shouldFinalizeDiagnosisAsCompleted(input: {
     complete: false,
     reason: `修复验证未过黄金标志/引擎对齐（verdict=${input.lastFixVerificationVerdict}），不得标 completed`,
   };
+}
+
+// ============ 基于输出字段的转移条件匹配 ============
+
+export type TransitionFieldCondition = {
+  fieldEquals?: Record<string, string | number | boolean>;
+  fieldNotEquals?: Record<string, string | number | boolean>;
+  fieldMatch?: Record<string, string>;
+  fieldAbsent?: string[];
+  outputMatch?: string;
+};
+
+function descendJsonPath(parsed: any, candidates: string[]): { found: boolean; value: unknown } {
+  for (const candidate of candidates) {
+    let current: any = parsed;
+    let resolved = true;
+    for (const segment of candidate.split('.').map((part) => part.trim()).filter(Boolean)) {
+      if (current == null || typeof current !== 'object' || !(segment in current)) {
+        resolved = false;
+        break;
+      }
+      current = current[segment];
+    }
+    if (resolved) return { found: true, value: current };
+  }
+  return { found: false, value: undefined };
+}
+
+/**
+ * 从状态的步骤输出中解析字段路径。
+ * 键格式："feedback_to_target" / "run_verification.engine_aligned" / "a|b"（候选路径，取第一个存在的）。
+ * 跨多个非工具 JSON 按出现顺序解析，最后一次解析结果生效（与 verdict 提取口径一致）。
+ */
+export function resolveOutputField(outputs: string[], path: string): { found: boolean; value: unknown } {
+  const candidates = String(path || '')
+    .split('|')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (candidates.length === 0) return { found: false, value: undefined };
+
+  let result: { found: boolean; value: unknown } = { found: false, value: undefined };
+  const joined = (outputs || []).join('\n');
+  walkNonToolJsonObjects(joined, (parsed) => {
+    const resolution = descendJsonPath(parsed, candidates);
+    if (resolution.found) result = resolution;
+  });
+  return result;
+}
+
+function stringifyConditionValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : String(value);
+}
+
+function valuesEqual(actual: unknown, expected: string | number | boolean): boolean {
+  if (actual == null) return false;
+  return stringifyConditionValue(actual) === stringifyConditionValue(expected);
+}
+
+function safeTestRegex(pattern: string, subject: string): boolean | null {
+  let regex: RegExp;
+  try {
+    regex = new RegExp(pattern);
+  } catch {
+    return null; // 无效正则视为条件失败，不拖垮工作流
+  }
+  return regex.test(subject);
+}
+
+/**
+ * 评估转移条件中的字段/全文匹配部分。
+ * - fieldEquals：所有键必须解析成功且相等
+ * - fieldNotEquals：所有键均不得等于给定值（字段缺失视为不相等，条件通过）
+ * - fieldMatch：所有键必须存在且匹配正则（不回退到全文）
+ * - fieldAbsent：所有键都必须未解析到（结构化字段缺失时才允许全文散文匹配）
+ * - outputMatch：正则必须匹配状态完整原始输出
+ */
+export function matchTransitionFieldConditions(
+  outputs: string[],
+  condition: TransitionFieldCondition,
+): boolean {
+  const fieldEquals = condition.fieldEquals || {};
+  for (const [path, expected] of Object.entries(fieldEquals)) {
+    const resolution = resolveOutputField(outputs, path);
+    if (!resolution.found || !valuesEqual(resolution.value, expected)) return false;
+  }
+
+  const fieldNotEquals = condition.fieldNotEquals || {};
+  for (const [path, expected] of Object.entries(fieldNotEquals)) {
+    const resolution = resolveOutputField(outputs, path);
+    if (resolution.found && valuesEqual(resolution.value, expected)) return false;
+  }
+
+  const fieldMatch = condition.fieldMatch || {};
+  for (const [path, pattern] of Object.entries(fieldMatch)) {
+    const resolution = resolveOutputField(outputs, path);
+    if (!resolution.found) return false;
+    const matched = safeTestRegex(pattern, stringifyConditionValue(resolution.value));
+    if (matched !== true) return false;
+  }
+
+  for (const path of condition.fieldAbsent || []) {
+    if (resolveOutputField(outputs, path).found) return false;
+  }
+
+  if (condition.outputMatch) {
+    const matched = safeTestRegex(condition.outputMatch, (outputs || []).join('\n'));
+    if (matched !== true) return false;
+  }
+
+  return true;
+}
+
+export function hasTransitionFieldCondition(condition?: TransitionFieldCondition | null): boolean {
+  if (!condition) return false;
+  return Boolean(
+    condition.fieldEquals
+    || condition.fieldNotEquals
+    || condition.fieldMatch
+    || condition.fieldAbsent?.length
+    || condition.outputMatch,
+  );
+}
+
+/** 供提示词展示用：把字段条件压缩成一行可读文本 */
+export function describeTransitionFieldCondition(condition?: TransitionFieldCondition | null): string {
+  if (!condition) return '';
+  const parts: string[] = [];
+  for (const [path, expected] of Object.entries(condition.fieldEquals || {})) {
+    parts.push(`${path}=${expected}`);
+  }
+  for (const [path, expected] of Object.entries(condition.fieldNotEquals || {})) {
+    parts.push(`${path}!=${expected}`);
+  }
+  for (const [path, pattern] of Object.entries(condition.fieldMatch || {})) {
+    parts.push(`${path}~/${pattern}/`);
+  }
+  for (const path of condition.fieldAbsent || []) {
+    parts.push(`!${path}`);
+  }
+  if (condition.outputMatch) parts.push(`output~/${condition.outputMatch}/`);
+  return parts.join(', ');
 }

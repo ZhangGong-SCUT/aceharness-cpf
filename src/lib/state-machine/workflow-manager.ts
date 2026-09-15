@@ -61,7 +61,9 @@ import {
   enforceFixVerificationGoldenFlag,
   isEngineLevelFailure,
   isFixVerificationStep,
-  resolveFixVerificationNextState,
+  matchTransitionFieldConditions,
+  hasTransitionFieldCondition,
+  describeTransitionFieldCondition,
   shouldFinalizeDiagnosisAsCompleted,
   type WorkflowVerdict,
 } from '@/lib/state-machine/utils';
@@ -603,6 +605,7 @@ function hasAdvancedTransitionCondition(transition: StateTransition): boolean {
     || condition.severities?.length
     || condition.minIssueCount !== undefined
     || condition.maxIssueCount !== undefined
+    || hasTransitionFieldCondition(condition)
   );
 }
 
@@ -6666,9 +6669,11 @@ try {
         const transitions = (state.transitions || [])
           .map((transition) => {
             const verdict = transition.condition?.verdict;
-            if (verdict === 'pass') return `pass -> ${transition.to}`;
-            if (verdict === 'conditional_pass') return `conditional_pass -> ${transition.to}`;
-            if (verdict === 'fail') return `fail -> ${transition.to}`;
+            const fieldCondition = describeTransitionFieldCondition(transition.condition);
+            const suffix = fieldCondition ? ` [${fieldCondition}]` : '';
+            if (verdict === 'pass') return `pass${suffix} -> ${transition.to}`;
+            if (verdict === 'conditional_pass') return `conditional_pass${suffix} -> ${transition.to}`;
+            if (verdict === 'fail') return `fail${suffix} -> ${transition.to}`;
             return transition.to;
           })
           .filter(Boolean);
@@ -6686,7 +6691,9 @@ try {
       .filter((transition) => transition.condition?.verdict)
       .map((transition) => {
         const verdict = transition.condition.verdict;
-        return `- ${verdict}: 进入 "${transition.to}"${transition.label ? `（${transition.label}）` : ''}`;
+        const fieldCondition = describeTransitionFieldCondition(transition.condition);
+        const suffix = fieldCondition ? `，条件: ${fieldCondition}` : '';
+        return `- ${verdict}: 进入 "${transition.to}"${suffix}${transition.label ? `（${transition.label}）` : ''}`;
       });
 
     return [
@@ -6934,7 +6941,11 @@ try {
     if (requiresFinalVerdict) {
       const verdictTransitions = (state.transitions || [])
         .filter((transition) => transition.condition?.verdict)
-        .map((transition) => `- ${transition.condition.verdict}: 进入 "${transition.to}"${transition.label ? `（${transition.label}）` : ''}`)
+        .map((transition) => {
+          const fieldCondition = describeTransitionFieldCondition(transition.condition);
+          const suffix = fieldCondition ? `，条件: ${fieldCondition}` : '';
+          return `- ${transition.condition.verdict}: 进入 "${transition.to}"${suffix}${transition.label ? `（${transition.label}）` : ''}`;
+        })
         .join('\n') || '- 当前状态未配置 verdict 转移。';
       parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: 只能是 \`"pass"\`、\`"conditional_pass"\`、\`"fail"\`，它们的真实流向完全由当前状态 transitions 决定。\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）。\n- \`summary\`: 一句话总结你的评估结论。\n\n# 当前状态 verdict 实际流向\n${verdictTransitions}\n你必须根据上面的实际流向选择 verdict：如果你的自然语言建议是进入某个状态，结构化 verdict 必须匹配能到达该状态的转移。不要根据名称假设 conditional_pass 一定前进或一定回退。\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
     }
@@ -7716,16 +7727,6 @@ try {
       return target;
     }
 
-    const routedFixVerify = resolveFixVerificationNextState({
-      stateName: result.stateName,
-      verdict: result.verdict,
-      output: result.stepOutputs.join('\n'),
-      allowedStates: config.workflow.states.map((state) => state.name),
-    });
-    if (routedFixVerify) {
-      return routedFixVerify;
-    }
-
     // AI-suggested next_state is only accepted when it is one of the configured
     // fallback targets for the emitted verdict.
     const aiSuggestedState = this.parseNextStateFromOutputs(result.stepOutputs, config);
@@ -7844,6 +7845,11 @@ try {
     }
     if (condition.maxIssueCount !== undefined) {
       if (result.issues.length > condition.maxIssueCount) return false;
+    }
+
+    // Check output-field conditions (fieldEquals / fieldNotEquals / fieldMatch / outputMatch)
+    if (!matchTransitionFieldConditions(result.stepOutputs || [], condition)) {
+      return false;
     }
 
     return true;

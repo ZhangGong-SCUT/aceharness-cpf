@@ -714,6 +714,13 @@ export const issueSchema = z.object({
 });
 
 // 状态转移条件 Schema
+// fieldEquals / fieldNotEquals / fieldMatch / fieldAbsent 基于状态最后输出的非工具 JSON 中的字段做路由：
+// - 键支持 "a.b" 点路径与 "a|b" 候选路径（取第一个存在的候选，跨多个 JSON 取最后一次解析结果）
+// - fieldEquals：所有字段必须解析成功且相等（字符串化后比较）
+// - fieldNotEquals：所有字段均不得等于给定值（字段缺失视为不相等，条件通过）
+// - fieldMatch：所有字段必须存在且匹配正则（不回退到全文匹配）
+// - fieldAbsent：所有字段路径都必须未解析到（用于"结构化字段缺失时才做全文散文匹配"的场景）
+// - outputMatch：对状态完整原始输出做正则匹配
 export const transitionConditionSchema = z.object({
   verdict: z.enum(['pass', 'conditional_pass', 'fail']).optional(),
   issueTypes: z.array(z.enum(['design', 'implementation', 'test', 'performance', 'security'])).optional(),
@@ -721,6 +728,11 @@ export const transitionConditionSchema = z.object({
   minIssueCount: z.number().optional(),
   maxIssueCount: z.number().optional(),
   custom: z.string().optional(), // 自定义条件表达式
+  fieldEquals: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+  fieldNotEquals: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+  fieldMatch: z.record(z.string(), z.string()).optional(),
+  fieldAbsent: z.array(z.string()).optional(),
+  outputMatch: z.string().optional(),
 });
 
 // 状态转移规则 Schema
