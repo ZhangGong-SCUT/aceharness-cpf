@@ -224,14 +224,47 @@ Issue 标题或内容中明确提到版本号时，按映射表推断对应分�
 
 Issue body 或评论中明确提到分支名（如 `br_pigeon-v26.1.5_ohos`），直接使用该分支。
 
-### 优先级 3：使用仓库默认分支
+### 优先级 3：使用默认分支 dev
 
-以上都无法推断时，使用仓库默认分支（clone 后不切换分支）。
+以上都无法推断时，使用 `dev` 分支（团队日常开发分支；不要留在镜像默认 HEAD）。
 
 ### 输出字段
 
 - `branch`：最终使用的分支名
-- `branch_source`：`inferred_from_issue`（从版本号推断）/ `explicit_in_issue`（Issue 中明确提到）/ `default_branch`（使用默认分支）
+- `branch_source`：`inferred_from_issue`（从版本号推断）/ `explicit_in_issue`（从 Issue 内容直接提取）/ `default_branch`（使用默认分支 dev）/ `fallback_branch`（engine 仓无同名分支回退 dev 时标注）
+
+## 5.5 多仓准备规则（framework + engine）
+
+Flutter 3.35 以下版本的部分功能代码在 engine 仓实现，只拉 framework 仓会漏掉引擎层源码。按以下规则确定仓库清单：
+
+| 条件 | 准备的仓 |
+|---|---|
+| Issue 正文/评论给了仓地址 | 正文地址（可能是 engine fork，如 wxflutter_engine335） |
+| 版本低于 3.35（oh-3.27.x / oh-3.22.x 等） | framework 仓 **和** engine 仓 |
+| problem_type_preliminary ∈ 渲染/稳定性/性能（引擎层高发） | 建议一并准备 engine 仓 |
+| 其余（3.35+ 且功能类问题） | framework 仓 |
+
+- framework 仓：`https://gitcode.com/CPF-Flutter/flutter_flutter.git`（默认分支 `dev`）
+- engine 仓：`https://gitcode.com/CPF-Flutter/flutter_engine.git`（**分支与 framework 同名**，如 `oh-3.27.4-dev`；无同名分支回退 `dev`）
+- 目录约定：framework/正文主仓 → `repo/`；engine 仓 → `repo-engine/`
+
+### 统一用共享镜像缓存脚本（禁止手写 git clone 全量拉取）
+
+每个 run 的工作区是全新的，直接 clone 上游要分钟级；共享镜像缓存（`~/.aceharness/repo-cache/` 裸仓 + 本地 hardlink clone）把它降到秒级：
+
+```bash
+# framework / 正文主仓（--branch 用第 5 节推断的分支）
+node skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs clone \
+  --repo https://gitcode.com/CPF-Flutter/flutter_flutter.git \
+  --dest repo/ --branch oh-3.27.4-dev --fallback-branch dev
+
+# engine 仓（需要时；分支同名，无同名分支自动回退 dev）
+node skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs clone \
+  --repo https://gitcode.com/CPF-Flutter/flutter_engine.git \
+  --dest repo-engine/ --branch oh-3.27.4-dev --fallback-branch dev
+```
+
+脚本行为：目录已存在自动 fetch 复用；镜像异常自动降级直连上游（与旧流程一致的保底）；完整历史（支持回退 merge commit），不要 `--depth=1`。输出单行 JSON：`result`（success|degraded|failed）、`from_cache`、`branch`、`branch_source`、`commit`、`duration_ms`、`degraded_reason`。
 
 ## 6. 输出 JSON 模板
 
@@ -241,8 +274,10 @@ Issue body 或评论中明确提到分支名（如 `br_pigeon-v26.1.5_ohos`）�
 {
   "clone_result": "success|skipped|failed",
   "repo_url": "CPF-Flutter/flutter_packages",
+  "engine_repo_url": "CPF-Flutter/flutter_engine 或 null（未准备 engine 仓时）",
+  "engine_repo_path": "repo-engine/ 或 null",
   "branch": "br_pigeon-v25.3.2_ohos",
-  "branch_source": "inferred_from_issue|explicit_in_issue|default_branch",
+  "branch_source": "inferred_from_issue|explicit_in_issue|default_branch|fallback_branch",
   "local_path": "repo/",
   "key_files": ["packages/pigeon/lib/src/arkts/arkts_generator.dart", "..."],
   "commit": "d2530f60c0554637971e62e516a27cf06ca06b43",

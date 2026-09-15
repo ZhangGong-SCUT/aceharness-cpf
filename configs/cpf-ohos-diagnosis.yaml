@@ -43,17 +43,25 @@ workflow:
                【快速终止】正文 API 返回 404 时：先用同仓另一个 Issue 号对照确认 API 本身可用；确认可用而正文仍 404（Issue 不存在/私有/已删除）→ verdict=fail、summary 注明 issue_not_accessible，走终止，禁止带空正文继续后续阶段。仅 comments 拿不到而正文正常 → 继续，verdict 最高 conditional_pass。
             2. 下载截图到 outputs/screenshots/。能看图就 Read 原图自己看；看不清或看不到再调用 look_at_image。freeform 无图片 URL 时不要使用残留截图。
             3. 提取结构化环境信息（设备/系统/API/框架/引擎版本、分支、复现概率），评估完整性；同时给出问题类型初判 problem_type_preliminary（稳定性/内存泄漏/功能/性能/渲染，无法判断填 unknown），供问题复现阶段决定插桩/埋点策略
-            4. 识别代码仓库 URL 和分支（正文仓地址或默认 flutter_flutter；版本号推断分支，无法推断则用默认分支）
-            5. 代码仓准备（智能复用本地已有仓库）：
-               - 检测 repo/ 目录是否已存在且为有效 git 仓库（repo/.git 存在）
-               - 【已存在】执行 git -C repo/ fetch --all --prune 更新远程分支引用（不重新 clone，节省时间和带宽）
-               - 【不存在】执行完整 clone（不要 --depth=1，需完整历史）到 repo/
-               - fetch/clone 后 checkout 到对应分支
+            4. 识别代码仓库 URL 和分支（正文仓地址或默认 flutter_flutter；版本号推断分支，无法推断则用默认分支 dev）
+            5. 代码仓准备（共享镜像缓存，多仓；禁止手写 git clone 全量拉取）：
+               - 【仓库清单】按以下优先级确定要准备的仓（可多个）：
+                 a. Issue 正文/评论给出仓地址 → 用正文地址（可能是 engine fork 等）
+                 b. 版本低于 3.35（如 oh-3.27.4-dev/oh-3.22.0-dev）：framework 仓 + engine 仓都要准备（低版本部分功能代码在 engine）
+                 c. problem_type_preliminary 为渲染/稳定性/性能（引擎层高发）→ 建议一并准备 engine 仓
+                 d. 其余：framework 仓
+                 - framework 仓：https://gitcode.com/CPF-Flutter/flutter_flutter（默认分支 dev）
+                 - engine 仓：https://gitcode.com/CPF-Flutter/flutter_engine（分支与 framework 同名，无同名分支用 dev）
+               - 【目录约定】framework/正文主仓 → repo/；engine 仓 → repo-engine/
+               - 【统一用缓存脚本】（本地镜像 hardlink clone，秒级；目录已存在自动 fetch 复用；脚本失败自动降级直连，无需人工干预）：
+                 node skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs clone --repo <仓URL> --dest repo/ --branch <分支> --fallback-branch dev
+                 （engine 仓把 --dest 换成 repo-engine/）
+               - 不要 --depth=1（回退 merge commit 需要完整历史），脚本已保证完整历史
             6. 有 Issue created_at 才回退到创建时间前的 merge commit；freeform 保持 HEAD，reset_status=skipped_no_issue_date
             7. 验证当前 HEAD，列出关键文件路径。branch 必须是真实分支名，引擎会据此写入 outputs/ohos-flutter-sdk.json。JSON 填 input_source=issue_url 或 freeform_text
             8. 评论里若出现「已合入 / 已在 PR #xx 修复」，只记「维护者称后续有修复」；禁止写出 PR 号、PR URL、官方修复 commit。有 Issue 号时保留号和 reset merge commit。
             API URL、截图解析、环境信息字段等详细指导见 cpf-ohos-issue-analysis Skill 的 references/issue-content-collection.md。
-            输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、repo_path、branch、commit、issue_created_at、reset_target_merge_commit、issue_content_complete、issue_comments_count、screenshots、environment_info、environment_completeness、missing_evidence、repo_preparation（fetched|cloned|skipped）、problem_type_preliminary（稳定性|内存泄漏|功能|性能|渲染|unknown）。
+            输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、repo_path、engine_repo_path（准备了 engine 仓时填，否则 null）、branch、commit、issue_created_at、reset_target_merge_commit、issue_content_complete、issue_comments_count、screenshots、environment_info、environment_completeness、missing_evidence、repo_preparation（cached|fetched|cloned|degraded|skipped）、problem_type_preliminary（稳定性|内存泄漏|功能|性能|渲染|unknown）。
       transitions:
         # 信息采集 → 问题复现（构造 Demo 复现 Issue 问题）
         - to: 问题复现
@@ -205,8 +213,9 @@ workflow:
                - 下一轮迭代时优先针对 missing_evidence 补充，不要从头重做
             6. 如果置信度<0.3 且已迭代 3 轮仍无法收敛，直接在输出中包含兜底排查思路（可疑方向、验证步骤、缺失信息清单），verdict=fail
             7. 必须区分 confirmed（已由 Issue/API/日志/代码直接证明）、inferred（基于代码和平台差异推断）、unverified（待运行时验证）；不得把未验证的症状解释写成事实。
-            8. 【硬约束】不要搜索 Issue 所在仓库的其他 PR 和 Issue（如列出仓库所有 PR、搜索相关 PR/Issue 等）。但允许获取当前 Issue 本身的信息（标题、body、评论、创建时间等），可通过 GitCode/GitHub API 的 issues/{number} 端点获取。所有代码分析只在本地代码仓（repo/ 目录）中进行。
-            9. 如果根因分析需要参考上游信息，必须以 upstream_status="unknown" + upstream_search_keywords（供用户手动搜索的关键词）形式输出，不得给出确定的 PR/Issue 链接，不得自行推断上游仓库地址。
+            8. 【硬约束】不要搜索 Issue 所在仓库的其他 PR 和 Issue（如列出仓库所有 PR、搜索相关 PR/Issue 等）。但允许获取当前 Issue 本身的信息（标题、body、评论、创建时间等），可通过 GitCode/GitHub API 的 issues/{number} 端点获取。所有代码分析只在本地代码仓（repo/ 目录，及其它信息采集已准备的仓如 repo-engine/）中进行。
+            9. 【engine 仓可用】版本低于 3.35 或问题疑似引擎层（渲染/稳定性/性能）时，优先读 repo-engine/（信息采集已按同名分支准备好的 flutter_engine 仓）；engine 层根因要引用 engine 源码文件:行号作为 confirmed 证据，不得只凭 framework 侧推断。
+            10. 如果根因分析需要参考上游信息，必须以 upstream_status="unknown" + upstream_search_keywords（供用户手动搜索的关键词）形式输出，不得给出确定的 PR/Issue 链接，不得自行推断上游仓库地址。
             参考 cpf-ohos-issue-analysis Skill 的 issue-types/*.md 和 references/log-interpretation.md。
             输出 JSON 或 Markdown+JSON 均可，但结尾必须包含 verdict、summary、artifact_path、key_findings、problem_type、layer、priority、problem_ownership（framework_library|business_code|mixed）、confidence、confirmed_evidence、inferred_evidence、missing_evidence、next_iteration_focus（conditional_pass 时必填）、upstream_status（只能为 "unknown"）、upstream_search_keywords。
 
@@ -344,7 +353,7 @@ workflow:
     # ========== 状态3.5：代码修复（实际修改代码+编译验证+生成patch）==========
     - name: 代码修复
       description: |
-        根据方案设计阶段的方案，实际修改 repo/ 中的代码文件，执行编译验证，生成 patch 文件。
+        根据方案设计阶段的方案，实际修改 repo/（框架层）或 repo-engine/（引擎层）中的代码文件，执行编译验证，生成 patch 文件。
         编译失败时回退到方案设计重新设计方案；编译通过后进入修复验证。
       requireHumanApproval: false
       isInitial: false
@@ -359,9 +368,9 @@ workflow:
             根据方案设计阶段（diagnosis-fix-advisor）输出的修复方案，实际修改代码仓中的文件，执行编译验证，生成 patch 文件：
             1. 读取方案设计阶段的输出（root_cause_fix.file / line / code_before / code_after）
             2. 读取目标源码，理解代码上下文
-            3. 【实际修改代码】使用 Write/Edit 工具修改 repo/ 中的代码文件，使修复落地
+            3. 【实际修改代码】使用 Write/Edit 工具修改代码文件使修复落地：框架层修复改 repo/，引擎层修复改 repo-engine/（信息采集未准备 repo-engine/ 时回退 repo/ 并在 key_findings 说明）
             4. 【编译验证】执行 flutter analyze 或 flutter build 验证代码能编译通过，编译失败时修正代码重试（最多 3 次）
-            5. 【生成 patch】执行 git -C repo/ diff > outputs/fix.patch 生成 patch 文件
+            5. 【生成 patch】执行 git -C repo/ diff > outputs/fix.patch 生成 patch 文件；引擎层修复追加 git -C repo-engine/ diff > outputs/fix-engine.patch，并在 modification_result 标注 patch 来源仓（framework|engine）
             6. 【回滚准备】记录修改前的 HEAD commit，如需回滚可 git reset --hard
             7. 自检修改正确性（语法、完整性、上下文一致性、导入完整性）
             8. 禁止 git apply / cherry-pick 官方修复 PR 或官方 commit，必须按方案自己改 repo/
