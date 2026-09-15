@@ -321,14 +321,37 @@ interface StateMachineDiagramProps {
   } | null;
 }
 
+// 检查预定义位置是否有效：所有节点都有 position 且包围盒互不重叠
+// （部分旧配置的 position 间距过小，直接使用会导致节点堆叠，需回退自动布局）
+function hasValidPredefinedPositions(states: StateMachineState[]): boolean {
+  if (states.length === 0) return false;
+  const NODE_W = 340;
+  const NODE_H = 260;
+  const boxes: Array<{ x: number; y: number }> = [];
+  for (const state of states) {
+    if (!state.position) return false;
+    boxes.push(state.position);
+  }
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i];
+      const b = boxes[j];
+      if (a.x < b.x + NODE_W && b.x < a.x + NODE_W && a.y < b.y + NODE_H && b.y < a.y + NODE_H) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 // 自动布局算法：基于层次结构排列节点，优化空间利用
 function calculateNodeLayout(states: StateMachineState[], useAutoLayout: boolean = true): Map<string, { x: number; y: number }> {
   const positions = new Map<string, { x: number; y: number }>();
 
-  // 如果不使用自动布局且所有节点都有预定义位置，直接使用
+  // 如果不使用自动布局且所有节点都有互不重叠的预定义位置，直接使用
   if (!useAutoLayout) {
     const allHavePositions = states.every(s => s.position);
-    if (allHavePositions) {
+    if (allHavePositions && hasValidPredefinedPositions(states)) {
       states.forEach(state => {
         if (state.position) {
           positions.set(state.name, state.position);
@@ -961,8 +984,8 @@ function StateMachineDiagramInner({
 
   // 转换为 ReactFlow 节点
   const initialNodes: Node[] = useMemo(() => {
-    // 计算布局 - 强制使用自动布局
-    const layoutPositions = calculateNodeLayout(states, true);
+    // 计算布局 - 优先使用配置中预定义的位置（有效时），否则回退自动布局
+    const layoutPositions = calculateNodeLayout(states, !hasValidPredefinedPositions(states));
 
     const nodes = states.map((state, index) => {
       const position = layoutPositions.get(state.name) || {
@@ -1053,7 +1076,7 @@ function StateMachineDiagramInner({
     const edgeSet = new Set<string>(); // 用于去重
 
     const nodesById = new Map(nodes.map((node) => [node.id, node]));
-    const fallbackPositions = calculateNodeLayout(states, true);
+    const fallbackPositions = calculateNodeLayout(states, !hasValidPredefinedPositions(states));
     const humanApprovalNode = nodesById.get('__human_approval__');
     if (!humanApprovalNode) {
       const avgX = states.length > 0

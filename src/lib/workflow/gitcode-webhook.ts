@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto';
+import { readdirSync, readFileSync, existsSync } from 'fs';
+import { join, resolve } from 'path';
 import { loadSystemSettings } from '@/lib/config/system-settings';
 import { loadUsers, storeToken, type User } from '@/lib/core/user-store';
 import {
@@ -7,8 +9,9 @@ import {
   parseGitcodeWebhookPayload,
   parseNameList,
 } from '@/lib/workflow/pr-review-input';
-import { decideGitcodeWebhookRun, formatWakeInstruction, type RunningPrSnapshot } from '@/lib/workflow/gitcode-pr-wake';
+import { decideGitcodeWebhookRun, formatWakeInstruction, resolveGitcodeMaxParallel, WAIT_WAKE_STATES, FIX_STATES, identityFromPrInput, identityFromGlobalContext, type RunningPrSnapshot } from '@/lib/workflow/gitcode-pr-wake';
 import { isStateMachineManagerLike, workflowRegistry } from '@/lib/workflow/registry';
+import { getWorkspaceRoot } from '@/lib/core/app-paths';
 
 export const GITCODE_PR_REVIEW_CONFIG = DEFAULT_PR_REVIEW_CONFIG;
 
@@ -58,6 +61,18 @@ export async function resolveGitcodeWatchRepos(): Promise<string[]> {
   if (fromEnv.length > 0) return fromEnv;
   const settings = await loadSystemSettings();
   return parseNameList(settings.gitcodeWatchRepos);
+}
+
+/**
+ * webhook 是否自动启动 PR 监控。
+ * 显式配置 ACE_GITCODE_AUTO_MONITOR=true/on/1 或 settings.gitcodeAutoMonitor=true 时开启；
+ * 其余情况（未配置）默认人工模式：webhook 只接收记录，不启动工作流。
+ */
+export async function resolveGitcodeAutoMonitor(): Promise<boolean> {
+  const fromEnv = String(process.env.ACE_GITCODE_AUTO_MONITOR || '').trim().toLowerCase();
+  if (fromEnv) return fromEnv === 'true' || fromEnv === 'on' || fromEnv === '1';
+  const settings = await loadSystemSettings();
+  return settings.gitcodeAutoMonitor === true;
 }
 
 export async function resolveWebhookRunUser(): Promise<User> {
@@ -114,7 +129,19 @@ export async function startPrReviewFromWebhook(input: {
     };
   }
 
-  const ignored = describeIgnoredPr({
+  // 既有活跃监控（挂起/等待门禁等）的唤醒不受启动白名单约束：
+  // manual-start-by 豁免启动的监控（作者不在 ACE_GITCODE_PR_AUTHOR 白名单）同样依赖
+  // webhook 唤醒推进流程，若此处被白名单拦截，挂起的 run 将永久休眠（pr1958 教训）。
+  const running = snapshotRunningPrs(configFile);
+  const incomingIdentity = identityFromPrInput(parsed.input);
+  const hasActiveRunForPr = !!incomingIdentity && running.some((item) => {
+    const status = String(item?.status || '');
+    return (status === 'running' || status === 'preparing')
+      && String(item?.runId || '').trim()
+      && identityFromGlobalContext(item.globalContext) === incomingIdentity;
+  });
+
+  const ignored = hasActiveRunForPr ? null : describeIgnoredPr({
     author: parsed.input.author,
     owner: parsed.input.owner,
     repo: parsed.input.repo,
@@ -135,11 +162,27 @@ export async function startPrReviewFromWebhook(input: {
     };
   }
 
-  const running = snapshotRunningPr(configFile);
   const decision = decideGitcodeWebhookRun({
     incoming: parsed.input,
     running,
+    maxParallel: resolveGitcodeMaxParallel(),
   });
+  // 人工监控模式只拦「启动新监控」；wake（唤醒挂起中/等待门禁的既有 run）是已开启监控的正常运转，必须放行，
+  // 否则挂起等 CI 的 run 永远收不到唤醒（pr1978 教训）。
+  const autoMonitor = await resolveGitcodeAutoMonitor();
+  if (!autoMonitor && decision.action !== 'ignore' && decision.action !== 'wake') {
+    return {
+      accepted: true,
+      started: false,
+      status: 202,
+      reason: '人工监控模式：Webhook 事件已记录，未自动启动新监控（已开启监控的唤醒不受影响）。',
+      configFile,
+      action: parsed.action,
+      event: parsed.event,
+      author: parsed.input.author,
+      prUrl: parsed.input.prUrl,
+    };
+  }
   if (decision.action === 'ignore') {
     return {
       accepted: false,
@@ -153,13 +196,13 @@ export async function startPrReviewFromWebhook(input: {
       prUrl: parsed.input.prUrl,
     };
   }
-  if (decision.action === 'busy-other-pr') {
+  if (decision.action === 'busy-parallel') {
     return {
       accepted: true,
       started: false,
       status: 409,
       reason: decision.reason,
-      runId: decision.runId,
+      runId: decision.runIds[0],
       configFile,
       action: parsed.action,
       event: parsed.event,
@@ -170,7 +213,6 @@ export async function startPrReviewFromWebhook(input: {
   if (decision.action === 'wake') {
     const woke = await wakeExistingPrRun({
       runId: decision.runId,
-      configFile,
       mode: decision.mode,
       instruction: formatWakeInstruction({
         action: parsed.action,
@@ -198,6 +240,9 @@ export async function startPrReviewFromWebhook(input: {
   const user = await resolveWebhookRunUser();
   const token = randomUUID();
   storeToken(token, user.id);
+  // runId 带 PR 编号（run-<ts>-pr<number>-<rand>），运行列表/目录里能直观定位是哪条 PR
+  const prNumber = String(parsed.input.number || '').replace(/[^0-9A-Za-z_-]/g, '');
+  const runId = `run-${Date.now()}${prNumber ? `-pr${prNumber}` : ''}-${randomUUID().slice(0, 8)}`;
   const response = await fetch(`${getInternalWorkflowBaseUrl(input.requestOrigin)}/api/workflow/start`, {
     method: 'POST',
     headers: {
@@ -206,6 +251,7 @@ export async function startPrReviewFromWebhook(input: {
     },
     body: JSON.stringify({
       configFile,
+      runId,
       skipPreflight: true,
       initialContexts: {
         globalContext: parsed.context,
@@ -243,37 +289,82 @@ export async function startPrReviewFromWebhook(input: {
   };
 }
 
-function snapshotRunningPr(configFile: string): RunningPrSnapshot | null {
-  const manager = workflowRegistry.getRunningManager(configFile);
-  if (!manager) return null;
-  const status = manager.getStatus() as {
-    runId?: string;
-    status?: string;
-    currentState?: string | null;
-    globalContext?: string;
-    pendingHumanQuestion?: RunningPrSnapshot['pendingHumanQuestion'];
-  };
-  return {
-    runId: status.runId,
-    status: status.status,
-    currentState: status.currentState,
-    globalContext: status.globalContext,
-    pendingHumanQuestion: status.pendingHumanQuestion
-      || (typeof (manager as { getPendingHumanQuestion?: () => RunningPrSnapshot['pendingHumanQuestion'] }).getPendingHumanQuestion === 'function'
-        ? (manager as { getPendingHumanQuestion: () => RunningPrSnapshot['pendingHumanQuestion'] }).getPendingHumanQuestion()
-        : null),
-  };
+/**
+ * 同一配置可并行多个 PR run（每 run 独立 manager / 工作区）。
+ * 快照全部活跃 run，事件按 PR 身份精确匹配唤醒；没匹配到且未达并发上限就新起 run。
+ */
+function snapshotRunningPrs(configFile: string): RunningPrSnapshot[] {
+  const memSnapshot = workflowRegistry.getRunningManagers()
+    .filter((item) => item.configFile === configFile)
+    .map((item) => {
+      const status = item.manager.getStatus() as {
+        runId?: string;
+        status?: string;
+        currentState?: string | null;
+        globalContext?: string;
+        pendingHumanQuestion?: RunningPrSnapshot['pendingHumanQuestion'];
+      };
+      return {
+        runId: status.runId,
+        status: status.status,
+        currentState: status.currentState,
+        globalContext: status.globalContext,
+        pendingHumanQuestion: status.pendingHumanQuestion
+          || (typeof (item.manager as { getPendingHumanQuestion?: () => RunningPrSnapshot['pendingHumanQuestion'] }).getPendingHumanQuestion === 'function'
+            ? (item.manager as { getPendingHumanQuestion: () => RunningPrSnapshot['pendingHumanQuestion'] }).getPendingHumanQuestion()
+            : null),
+      };
+    });
+
+  // 服务重启后，挂起/等待门禁的 run 没有内存 manager，仅靠内存快照会让 webhook 决策把它们当成"新 PR"
+  // 而不是 wake 目标（pr1978 教训）。补扫磁盘 runs 目录：非终态 + 等待类状态的 run 一并纳入快照（内存优先去重）。
+  // ACE_WEBHOOK_DISK_SNAPSHOT=0 可关闭（单测隔离用，避免读到真实 runs 目录破坏测试确定性）。
+  if (String(process.env.ACE_WEBHOOK_DISK_SNAPSHOT ?? '1') !== '1') return memSnapshot;
+  try {
+    const runsDir = resolve(getWorkspaceRoot(), 'runs');
+    const seen = new Set(memSnapshot.map((s) => String(s.runId || '')));
+    for (const name of readdirSync(runsDir)) {
+      if (!name.startsWith('run-') || !/-pr\d+(-|$)/.test(name)) continue;
+      const summaryPath = join(runsDir, name, 'summary.json');
+      const statePath = join(runsDir, name, 'state.yaml');
+      if (!existsSync(summaryPath) || !existsSync(statePath)) continue;
+      let summary: { runId?: string; configFile?: string; status?: string; currentPhase?: string } | null = null;
+      try { summary = JSON.parse(readFileSync(summaryPath, 'utf8')); } catch { continue; }
+      if (!summary || summary.configFile !== configFile) continue;
+      if (['completed', 'failed', 'crashed', 'stopped'].includes(String(summary.status))) continue;
+      const runId = String(summary.runId || name);
+      if (seen.has(runId)) continue;
+      // 从 state.yaml 文本提取 pr_url 构造 globalContext 身份（classifyPrReviewInput 能从中解析 owner/repo/number）
+      let globalContext = '';
+      try {
+        const raw = readFileSync(statePath, 'utf8');
+        const m = raw.match(/pr_url:\s*(\S+)/);
+        globalContext = m ? `GitCode 自己的 PR 自修任务\npr_url: ${m[1]}` : '';
+      } catch { continue; }
+      if (!globalContext) continue;
+      const currentState = String(summary.currentPhase || '');
+      if (!WAIT_WAKE_STATES.has(currentState) && !FIX_STATES.has(currentState)) continue;
+      seen.add(runId);
+      memSnapshot.push({
+        runId,
+        status: summary.status,
+        currentState: currentState || null,
+        globalContext,
+        pendingHumanQuestion: currentState === '__human_approval__' ? {} : null,
+      });
+    }
+  } catch { /* 磁盘扫描失败时退回纯内存快照 */ }
+  return memSnapshot;
 }
 
 async function wakeExistingPrRun(input: {
   runId: string;
-  configFile: string;
   mode: 'resume-wait' | 'queue';
   instruction: string;
   context: string;
 }): Promise<{ ok: boolean; reason: string }> {
-  const manager = await workflowRegistry.getManagerByRunId(input.runId)
-    || workflowRegistry.getRunningManager(input.configFile);
+  // 多 run 并行下 getRunningManager(configFile) 会返回任意活跃 run，必须只按 runId 精确唤醒
+  const manager = await workflowRegistry.getManagerByRunId(input.runId);
   if (!manager) {
     return { ok: false, reason: `找不到运行中的工作流 ${input.runId}` };
   }

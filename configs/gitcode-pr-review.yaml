@@ -1,7 +1,7 @@
 workflow:
   name: GitCode 自己的 PR 自修
   description: |
-    只处理作者白名单在监听仓上仍开着的 PR。
+    只处理"自己的 PR"（白名单作者，或 AIWeb 手动开启者本人）在监听仓上仍开着的 PR。
     按 OpenHarmony DCP 标签和 openharmony_ci 评论分类：DCO / 静态检查 / 编译 / AI 检视。
     修好后 push 到 fork 分支并评论 start build，再挂起等下一次 Webhook。
     测试失败停下来问人。禁止自动评论 submit，禁止合入。
@@ -18,10 +18,10 @@ workflow:
 
   states:
     - name: 识别
-      description: 解析 PR，确认白名单作者、监听仓、fork 分支，已关闭则停。
+      description: 解析 PR，确认是"自己的 PR"（白名单作者 或 manual-start-by 本人）、监听仓、fork 分支，已关闭则停。
       isInitial: true
       maxSelfTransitions: 2
-      position: { x: 80, y: 80 }
+      position: { x: 30, y: 80 }
       steps:
         - id: identify-pr
           name: 识别PR
@@ -29,7 +29,7 @@ workflow:
           role: defender
           task: |
             从 globalContext 解析 pr_url / owner / repo / number / author / head_ref / head_repo / base_ref。禁止编造。
-            作者必须在 ACE_GITCODE_PR_AUTHOR 白名单。仓必须在 ACE_GITCODE_WATCH_REPOS（若已配置）。
+            作者准入（满足其一）：在 ACE_GITCODE_PR_AUTHOR 白名单；或 globalContext 含 manual-start-by 且 PR 作者 = manual-start-by 本人（AIWeb 手动开启）。仓必须在 ACE_GITCODE_WATCH_REPOS（若已配置）。
             已关闭或已合入 → fail。缺字段 → conditional_pass。齐全 → pass。
             输出 JSON：verdict、summary、pr_url、author、head_repo、head_ref、own_pr。
         - id: challenge-identify
@@ -48,7 +48,7 @@ workflow:
         - to: 等待门禁
           condition: { verdict: pass }
           priority: 1
-          label: 是白名单作者的开着的 PR
+          label: 是自己的 PR（白名单或手动开启者本人）且开着
         - to: 识别
           condition: { verdict: conditional_pass }
           priority: 2
@@ -61,7 +61,7 @@ workflow:
     - name: 等待门禁
       description: 拉标签和 openharmony_ci 评论，写出 gate-check.json。还在跑则挂起，不要空转。
       maxSelfTransitions: 1
-      position: { x: 360, y: 80 }
+      position: { x: 380, y: 80 }
       steps:
         - id: check-pr-gates
           name: 检查门禁
@@ -69,7 +69,8 @@ workflow:
           role: defender
           task: |
             按 gitcode-pr-review Skill 检查 OpenHarmony DCP 门禁，不要请求 /commits/{sha}/status。
-            1. node skills/gitcode-pr-review/scripts/check-pr-gates.mjs --pr-url <PR_URL> --out outputs
+            脚本会自动从 run 的 state.yaml 检测 globalContext 中的 user_fix_feedback: / user_revert: 指令行（AIWeb 用户人工指令），命中时 phase 自动覆盖为 user_fix，无需额外参数。
+            1. node skills/gitcode-pr-review/scripts/check-pr-gates.mjs --pr-url <PR_URL> --author <author> --out outputs
             2. 读 outputs/gate-check.json 的 phase
             3. phase=running → conditional_pass，准备挂起等 Webhook，禁止 sleep 空等
             4. 已关闭/不是自己的 PR → fail
@@ -110,7 +111,7 @@ workflow:
       description: 停在这里等 GitCode Webhook 叫醒，不要用 Agent 空转。
       requireHumanApproval: true
       maxSelfTransitions: 1
-      position: { x: 640, y: 80 }
+      position: { x: 740, y: 80 }
       steps:
         - id: park-gate-wait
           name: 记录挂起
@@ -137,7 +138,7 @@ workflow:
     - name: 分类处置
       description: 脚本分流。优先级 DCO → 静态检查 → 编译 → AI 检视 → 测试。
       maxSelfTransitions: 1
-      position: { x: 80, y: 260 }
+      position: { x: 380, y: 380 }
       steps:
         - id: route-phase
           name: 按phase分流
@@ -164,7 +165,7 @@ workflow:
     - name: 分流静态
       description: phase=static_failed 则进静态修复。
       maxSelfTransitions: 1
-      position: { x: 280, y: 260 }
+      position: { x: 740, y: 380 }
       steps:
         - id: route-static
           name: 分流静态检查
@@ -187,7 +188,7 @@ workflow:
     - name: 分流编译
       description: phase=compile_failed 则进编译修复。
       maxSelfTransitions: 1
-      position: { x: 480, y: 260 }
+      position: { x: 1100, y: 380 }
       steps:
         - id: route-compile
           name: 分流编译
@@ -210,7 +211,7 @@ workflow:
     - name: 分流测试
       description: 测试失败或说不清则人工确认，不要自动改。
       maxSelfTransitions: 1
-      position: { x: 680, y: 260 }
+      position: { x: 1460, y: 380 }
       steps:
         - id: route-test
           name: 分流测试
@@ -233,14 +234,14 @@ workflow:
     - name: 分流检视
       description: 有未处理的 AI 检视意见才进检视修复。
       maxSelfTransitions: 1
-      position: { x: 880, y: 260 }
+      position: { x: 1820, y: 380 }
       steps:
         - id: route-review
           name: 分流检视
           agent: developer
           role: defender
           task: |
-            运行 skills/gitcode-pr-review/scripts/fetch-ai-review.mjs --pr-url <PR_URL> --out outputs
+            运行 skills/gitcode-pr-review/scripts/fetch-ai-review.mjs --pr-url <PR_URL> --author <author> --out outputs
             若 outputs/ai-review-comments.json 的 actionable_count>0：verdict=fail，next_state=检视修复。
             否则跑 route-pr-phase.mjs --from 分流检视，原样输出。只有 AI已检视 标签没有意见正文时不要空改。
       transitions:
@@ -257,7 +258,7 @@ workflow:
     - name: 分流触发
       description: 需要第一次 start build 则去推送并触发；全绿去就绪。
       maxSelfTransitions: 1
-      position: { x: 1080, y: 260 }
+      position: { x: 2180, y: 380 }
       steps:
         - id: route-trigger
           name: 分流触发
@@ -282,7 +283,7 @@ workflow:
     - name: DCO修复
       description: 只补 Signed-off-by，不改业务代码。
       maxSelfTransitions: 3
-      position: { x: 80, y: 460 }
+      position: { x: 380, y: 680 }
       steps:
         - id: fix-dco
           name: 补DCO
@@ -316,22 +317,28 @@ workflow:
     - name: 静态修复
       description: 对着 codeCheck / 静态检查报告改，不要当成编译失败。
       maxSelfTransitions: 3
-      position: { x: 280, y: 460 }
+      position: { x: 740, y: 680 }
       steps:
         - id: fix-static
           name: 修静态检查
           agent: developer
           role: defender
           task: |
-            checkout fork head_ref 到 repo/。对着 gate-check.json 的 report_url / 静态检查失败日志改。
+            checkout fork head_ref 到 repo/。
+            先拉 codeCheck 失败明细：node skills/gitcode-pr-review/scripts/fetch-dcp-report.mjs --report-url <gate-check.json 的 report_url> --out outputs
+            读 outputs/dcp-codecheck-defects.json，修 defects 点到的 filepath/line。
+            然后同规则扫雷（DCP 一次只报一处，同类问题在 PR 改动里往往多处，逐轮修会浪费多轮 CI）：
+            node skills/gitcode-pr-review/scripts/scan-same-rule-defects.mjs --pr-url <PR_URL> --author <author> --defects outputs/dcp-codecheck-defects.json --out outputs
+            读 outputs/same-rule-candidates.json，把 candidates 里的 PR 新增行同规则问题一并修掉（needs_escape 的注意转义），与 defects 修复同属一个 commit。
+            只改 PR 自己改动的行，不改 PR 未触碰的存量代码，不当编译失败修。
             不要在本机编 Flutter/OH 全量工程。本状态不要 git commit / git push。
-            修不好则 conditional_pass 并写清缺哪份 DCP 日志。
-            输出 JSON：verdict、summary、fixed_files。
+            明细拉不到（脚本退出非 0）才 conditional_pass 并写清缺哪份 DCP 日志。
+            输出 JSON：verdict、summary、fixed_files、defect_count、same_rule_fixed_count。
         - id: challenge-static
           name: 质疑静态修复
           agent: code-hunter
           role: attacker
-          task: 检查是否对着静态检查报告改、有没有改去修编译。输出 <step-conclusion>。
+          task: 检查是否对着静态检查报告改、是否把 same-rule-candidates.json 的 PR 新增行同类问题一起修了、有没有改到 PR 未触碰的存量代码或改去修编译。输出 <step-conclusion>。
         - id: judge-static
           name: 静态修复裁决
           agent: code-judge
@@ -351,7 +358,7 @@ workflow:
     - name: 编译修复
       description: 对着 DCP 编译失败日志改。
       maxSelfTransitions: 3
-      position: { x: 480, y: 460 }
+      position: { x: 1100, y: 680 }
       steps:
         - id: fix-compile
           name: 修编译
@@ -360,17 +367,21 @@ workflow:
           task: |
             checkout fork head_ref 到 repo/。对着 DCP 编译失败日志改导致失败的文件。
             不要在步骤里编 Flutter/OH 全量工程。本状态不要 git commit / git push。
+            环境抖动豁免重试（env-jitter-retry）：若日志行级实证根因为 CI 环境问题（唯一失败链属基础设施类，如 npm ENOTEMPTY / hvigor wrapper 竞态 / pub get 超时，且 PR 改动文件零编译错误，无代码可修），依次检查：
+            a) outputs/env-jitter-used.txt 已存在 → 本 run 豁免已用过，不再自动重试，fail 转人工确认。
+            b) 作者凭据：node skills/gitcode-pr-review/scripts/gitcode-token.mjs --check-author <author小写> 退出码非 0 → 无法代发，fail 转人工确认并在结论写明「作者 Token 未注入，需本人在 PR 评论 start build」。
+            c) 两者都通过 → fixed_files=[]，verdict=pass，summary 以「env-jitter-retry」开头，next_state=推送并触发；并执行 echo $(date -u +%FT%TZ) >> outputs/env-jitter-used.txt 写入豁免标记（本 run 最多一次）。
             输出 JSON：verdict、summary、fixed_files、remaining_errors。
         - id: challenge-compile
           name: 质疑编译修复
           agent: code-hunter
           role: attacker
-          task: 检查是否对着编译日志改、有没有漏修同类报错。输出 <step-conclusion>。
+          task: 检查是否对着编译日志改、有没有漏修同类报错。env-jitter-retry 豁免时改为质疑：环境根因是否有日志行级实证、PR 文件是否真零编译错误、豁免标记与作者凭据检查是否属实。输出 <step-conclusion>。
         - id: judge-compile
           name: 编译修复裁决
           agent: code-judge
           role: judge
-          task: pass 去推送并触发。conditional_pass 继续改。fail 去人工确认。
+          task: pass 去推送并触发。conditional_pass 继续改。fail 去人工确认。若修编译以 env-jitter-retry 豁免通过（实证 CI 环境问题、无代码可修），pass 的 <step-conclusion> 开头必须原样保留「env-jitter-retry」前缀并写明「豁免重试一次」，供推送并触发识别重发；丢失该标记会导致豁免空转。
       transitions:
         - to: 推送并触发
           condition: { verdict: pass }
@@ -385,22 +396,26 @@ workflow:
     - name: 检视修复
       description: 按 PR 上已有 AI 检视意见改。没有意见不要空改。
       maxSelfTransitions: 3
-      position: { x: 880, y: 460 }
+      position: { x: 1820, y: 680 }
       steps:
         - id: apply-ai-review
           name: 按AI检视修改
           agent: developer
           role: defender
           task: |
-            运行 skills/gitcode-pr-review/scripts/fetch-ai-review.mjs --pr-url <PR_URL> --out outputs
+            运行 skills/gitcode-pr-review/scripts/fetch-ai-review.mjs --pr-url <PR_URL> --author <author> --out outputs
             actionable_count=0：不要空改，verdict=pass。
-            有意见：在 repo/ 按 path/line 改，只改检视点到的文件。本状态不要 git commit / git push。
+            有意见：只处理 comments[]（当前代码的 AI 检视意见和人工行内评论），stale_comments 是旧代码意见不要修。
+            在 repo/ 按 path/line 改，只改检视点到的文件。本状态不要 git commit / git push。
             输出 JSON：verdict、summary、applied_issues。
+            用户人工指令模式（globalContext 含对应指令行时优先于上述常规流程，不再跑 fetch-ai-review.mjs）：
+            - user_fix_feedback: 行及后续缩进行为用户修改指令：在 repo/ 按指令修改，只改指令涉及的文件。applied_issues 填「用户反馈：<指令摘要>」。
+            - user_revert: from <sha> to <sha> 行：在 repo/ 执行 git revert --no-commit <sha>..<sha>（无变更则 verdict=pass 并说明无可回退）。applied_issues 填「回退 AI 检视修复」。
         - id: challenge-ai-review
           name: 质疑检视修复
           agent: code-hunter
           role: attacker
-          task: 检查是否漏掉必须改的检视项，或改了检视没要求的范围。输出 <step-conclusion>。
+          task: 检查是否漏掉必须改的检视项，或改了检视没要求的范围。用户人工指令模式下改为质疑：指令是否执行到位、是否改了指令外的范围。输出 <step-conclusion>。
         - id: judge-ai-review
           name: 检视修复裁决
           agent: fix-reviewer
@@ -420,20 +435,26 @@ workflow:
     - name: 推送并触发
       description: commit（含 DCO）push 到 fork，再评论恰好一行 start build。禁止 submit。
       maxSelfTransitions: 3
-      position: { x: 1080, y: 460 }
+      position: { x: 2180, y: 680 }
       steps:
         - id: push-and-start-build
           name: 推送并start-build
           agent: developer
           role: defender
           task: |
-            1. git -C repo status。无改动且 gate-check.json 的 phase 不是 need_start_build：不要空 commit，也不要空评论 start build，verdict=pass
-            2. 有改动：git -C repo diff > outputs/fix.patch。commit 写清修的是静态/编译/DCO/检视，必须带 Signed-off-by，可用 git commit -s
-            3. push 到 head_repo 的 head_ref（fork remote），禁止 --force
-            4. 推送成功后，或 phase=need_start_build：node skills/gitcode-pr-review/scripts/post-pr-comment.mjs --pr-url <PR_URL> --body "start build" --out outputs
-            5. 禁止评论 submit，禁止合入
-            6. 推送失败则 conditional_pass
-            输出 JSON：verdict、summary、push_status、start_build、dco。
+            1. git -C repo status。无改动且 gate-check.json 的 phase 不是 need_start_build 且上一步骤（编译修复裁决）结论 summary 不是以 env-jitter-retry 开头：不要空 commit，也不要空评论 start build，verdict=pass
+            2. phase=need_start_build 且无改动（CI 抖动重试，gate-check.json 的 start_build_count < start_build_max）：不要 commit、不要 push，直接重发恰好一行 start build，verdict=pass。
+               或上一步骤结论 summary 以 env-jitter-retry 开头且工作区无改动（编译失败实证为 CI 环境问题的一次性豁免重试，不受 start_build 预算约束）：同样不 commit、不 push，以作者凭据直接重发恰好一行 start build，verdict=pass，summary 注明 env-jitter-retry 已使用
+            3. 有改动：git -C repo diff > outputs/fix.patch。commit 写清修的是静态/编译/DCO/检视，必须带 Signed-off-by，可用 git commit -s。
+               user.email 与 Signed-off-by 必须用 PR 基线 commit（head 起点，即 PR 原始提交）的 author 邮箱——那是作者 GitCode 账号绑定且已签 DCO 的邮箱；禁止从仓库其他历史 commit 或 git config 拿邮箱（1913 事故：拿了旧邮箱导致 DCO 失败）。
+               禁止改写历史 commit 的 author 邮箱后 force push——那是顶替他人提交身份，永远不做；DCO 邮箱问题只能由作者本人在线签署对应邮箱的 DCO 协议解决。
+               提交身份必须复用 fork 历史提交的作者（git -C repo log -1 --format='%an <%ae>' 取原 PR 提交人），禁止编造邮箱——DCO 校验 Signed-off-by 邮箱必须与 GitCode 账号一致，用错邮箱必挂 DCO
+            4. push 到 head_repo 的 head_ref（fork remote），禁止 --force。远程用 https://{author}@gitcode.com/{head_repo}.git，使用该作者自己的凭据。记录 push 完成时间
+            5. 推送成功后，或 phase=need_start_build：node skills/gitcode-pr-review/scripts/post-pr-comment.mjs --pr-url <PR_URL> --author <author> --body "start build" --out outputs。
+               刚 push 过的必须加 --wait-push-ack --since <push完成时间ISO>：GitCode 的 MR 更新事件异步滞后（实测 ~70s），等「监测到PR/代码有更新/感谢提交」确认评论出现再发，否则构建会被中止
+            6. 禁止评论 submit，禁止合入
+            7. 推送失败则 conditional_pass
+            输出 JSON：verdict、summary、push_status、start_build、start_build_count、wait_ack、dco。
         - id: challenge-push
           name: 质疑推送
           agent: code-hunter
@@ -459,7 +480,7 @@ workflow:
     - name: 就绪
       description: 门禁标签已绿。通知人去评审、解讨论、自己评论 submit。
       maxSelfTransitions: 1
-      position: { x: 1080, y: 80 }
+      position: { x: 2540, y: 80 }
       steps:
         - id: mark-ready
           name: 标记就绪
@@ -485,7 +506,7 @@ workflow:
       description: 测试失败、报告打不开、推送无权限等，停下来问人。
       requireHumanApproval: true
       maxSelfTransitions: 1
-      position: { x: 680, y: 640 }
+      position: { x: 1460, y: 980 }
       steps:
         - id: ask-human
           name: 记录需人工确认
@@ -509,7 +530,7 @@ workflow:
     - name: 完成
       description: 门禁已绿，等人评审并自己评论 submit。
       isFinal: true
-      position: { x: 1280, y: 80 }
+      position: { x: 2900, y: 80 }
       steps:
         - id: complete-pr-self-heal
           name: 汇总结果
@@ -523,7 +544,7 @@ workflow:
     - name: 终止
       description: 不是自己的 PR，或无法安全自动修。
       isFinal: true
-      position: { x: 80, y: 640 }
+      position: { x: 30, y: 980 }
       steps:
         - id: abort-pr-self-heal
           name: 记录终止原因
@@ -536,7 +557,7 @@ context:
   projectRoot: "_template"
   workspaceMode: isolated-copy
   requirements: |
-    只处理作者白名单的 GitCode PR。门禁看标签和 openharmony_ci 评论。
+    只处理"自己的 PR"（白名单作者或 AIWeb 手动开启者本人）的 GitCode PR。门禁看标签和 openharmony_ci 评论。
     按 DCO / 静态检查 / 编译 / AI 检视分流修复，push 到 fork 后评论 start build。
     测试失败人工确认。禁止自动 submit 和合入。
   timeoutMinutes: 180

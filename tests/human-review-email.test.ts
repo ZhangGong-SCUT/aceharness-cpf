@@ -2,6 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sendMailViaSmtp = vi.fn();
 
+const loadGateSummary = vi.fn();
+
+vi.mock('@/lib/notify/gate-summary', () => ({
+  loadGateSummary,
+  gateStatusLine: (g: any) => g.__statusLine || '',
+  gateChecklistLine: (g: any) => g.__checklist || '',
+  gateFailureLines: (g: any) => g.__failure || [],
+  gateNextStepLines: (g: any) => g.__next || [],
+  buildWorkbenchUrl: (runId: string) => `https://example.test/dashboard?run=${runId}`,
+}));
+
 vi.mock('@/lib/notify/smtp-client', () => ({
   sendMailViaSmtp,
 }));
@@ -69,8 +80,24 @@ describe('human review email notification', () => {
       expect.objectContaining({
         to: ['owner@example.com'],
         cc: ['team@example.com', 'audit@example.com'],
-        subject: expect.stringContaining('等待人工审查'),
+        subject: expect.stringContaining('demo'),
+        text: expect.stringContaining('等待人工审查'),
+        messageId: expect.stringMatching(/^<[^>]+>$/),
       }),
     );
+  });
+
+  it('挂起（自动等待 CI）不发人工审查邮件', async () => {
+    const { sendHumanReviewEmailNotification } = await import('@/lib/notify/human-review-email');
+    const result = await sendHumanReviewEmailNotification({
+      id: 'hq-park-1',
+      runId: 'run-park',
+      configFile: 'gitcode-pr-review.yaml',
+      currentState: '挂起',
+      title: '记录挂起',
+      message: '等待 CI 结果',
+    } as any);
+    expect(result).toMatchObject({ ok: false, reason: 'parked-auto-resume' });
+    expect(sendMailViaSmtp).not.toHaveBeenCalled();
   });
 });
