@@ -57,6 +57,13 @@ GitCode 上游 ──(一次全量/增量 fetch, flock 串行)──▶ ~/.aceha
 | hardlink（镜像与 clone 的 pack 同一 inode） | ✓ 物理磁盘不翻倍 |
 | vitest：field-routing 44 用例 + verdict 全过；diagnosis-harness-regression 2 个失败为基线预存（stash 对照确认） | ✓ |
 
+### 端到端验证（真实 Issue 诊断任务，2026-09-15 19:30）
+
+首次提交时发现并修复一处**路径 bug**：YAML/skill 文档最初写的 `skills/cpf-ohos-issue-analysis/scripts/...`，而 agent 工作区实际挂载在 `.agents/skills/`（`getEngineSkillsSubdir` 返回 `.agents/skills`，`~/.aceharness/skills` → 仓库 skills 双层符号链接）。已改为 `.agents/skills/...`（cwd 相对）+ 绝对路径兜底，并在真实 run 工作区 cwd 下实测可达。
+
+- Issue #2712：正文 API 404（Issue 不存在/私有），agent 按对照验证规则快速终止，未空跑——设计内快速终止逻辑工作正常
+- Issue #2492（3.41 渲染类）：**agent 真实执行缓存脚本**（流中捕获两条命令：framework `--dest repo/ --branch oh-3.41.9-dev` + engine `--dest repo-engine/`），脚本输出 `from_cache:true`；**双仓 30 秒内就绪**（旧流程 framework 7m34s + engine 3m24s 全量 ≈ 11 分钟）；engine 无同名分支正确回退 `dev`；信息采集 JSON 输出 `repo_preparation:"cached"`、`engine_repo_path` 就位；任务正常推进至根因分析（issueanalysis_analyzing）
+
 ## 部署
 
 - skill 目录（脚本 + 文档）经 `~/.aceharness/skills/` 符号链接挂载，仓库改动即时生效，无需重启

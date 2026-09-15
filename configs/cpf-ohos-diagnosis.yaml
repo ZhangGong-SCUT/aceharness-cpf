@@ -54,8 +54,8 @@ workflow:
                  - engine 仓：https://gitcode.com/CPF-Flutter/flutter_engine（分支与 framework 同名，无同名分支用 dev）
                - 【目录约定】framework/正文主仓 → repo/；engine 仓 → repo-engine/
                - 【统一用缓存脚本】（本地镜像 hardlink clone，秒级；目录已存在自动 fetch 复用；脚本失败自动降级直连，无需人工干预）：
-                 node skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs clone --repo <仓URL> --dest repo/ --branch <分支> --fallback-branch dev
-                 （engine 仓把 --dest 换成 repo-engine/）
+                 node .agents/skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs clone --repo <仓URL> --dest repo/ --branch <分支> --fallback-branch dev
+                 （engine 仓把 --dest 换成 repo-engine/；若提示找不到脚本，改用绝对路径 node ~/.aceharness/skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs）
                - 不要 --depth=1（回退 merge commit 需要完整历史），脚本已保证完整历史
             6. 有 Issue created_at 才回退到创建时间前的 merge commit；freeform 保持 HEAD，reset_status=skipped_no_issue_date
             7. 验证当前 HEAD，列出关键文件路径。branch 必须是真实分支名，引擎会据此写入 outputs/ohos-flutter-sdk.json。JSON 填 input_source=issue_url 或 freeform_text

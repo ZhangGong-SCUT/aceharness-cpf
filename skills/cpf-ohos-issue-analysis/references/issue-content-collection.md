@@ -253,13 +253,14 @@ Flutter 3.35 以下版本的部分功能代码在 engine 仓实现，只拉 fram
 每个 run 的工作区是全新的，直接 clone 上游要分钟级；共享镜像缓存（`~/.aceharness/repo-cache/` 裸仓 + 本地 hardlink clone）把它降到秒级：
 
 ```bash
-# framework / 正文主仓（--branch 用第 5 节推断的分支）
-node skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs clone \
+# framework / 正文主仓（--branch 用第 5 节推断的分支；脚本在工作区 cwd 下的
+# .agents/skills/ 下，找不到时用绝对路径 ~/.aceharness/skills/...）
+node .agents/skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs clone \
   --repo https://gitcode.com/CPF-Flutter/flutter_flutter.git \
   --dest repo/ --branch oh-3.27.4-dev --fallback-branch dev
 
 # engine 仓（需要时；分支同名，无同名分支自动回退 dev）
-node skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs clone \
+node .agents/skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs clone \
   --repo https://gitcode.com/CPF-Flutter/flutter_engine.git \
   --dest repo-engine/ --branch oh-3.27.4-dev --fallback-branch dev
 ```
