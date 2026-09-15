@@ -188,29 +188,36 @@ export async function sendWorkflowStateEmailNotification(
     gate,
   });
 
-  await sendMailViaSmtp(
-    {
-      host: emailSettings.smtpHost,
-      port: Number(emailSettings.smtpPort),
-      secure: Boolean(emailSettings.smtpSecure),
-      tlsInsecure: Boolean(emailSettings.smtpTlsInsecure),
-      username: emailSettings.smtpUsername,
-      password: emailSettings.smtpPassword,
-      fromEmail: emailSettings.fromEmail,
-      fromName: emailSettings.fromName,
-      replyTo: emailSettings.replyTo,
-    },
-    {
-      to: ownerEmail ? [ownerEmail] : [],
-      cc: cc.length ? cc : undefined,
-      subject,
-      text,
-      messageId: thread.messageId,
-      inReplyTo: thread.inReplyTo,
-      references: thread.references,
-      threadIndex: thread.threadIndex,
-    },
-  );
+  try {
+    await sendMailViaSmtp(
+      {
+        host: emailSettings.smtpHost,
+        port: Number(emailSettings.smtpPort),
+        secure: Boolean(emailSettings.smtpSecure),
+        tlsInsecure: Boolean(emailSettings.smtpTlsInsecure),
+        username: emailSettings.smtpUsername,
+        password: emailSettings.smtpPassword,
+        fromEmail: emailSettings.fromEmail,
+        fromName: emailSettings.fromName,
+        replyTo: emailSettings.replyTo,
+      },
+      {
+        to: ownerEmail ? [ownerEmail] : [],
+        cc: cc.length ? cc : undefined,
+        subject,
+        text,
+        messageId: thread.messageId,
+        inReplyTo: thread.inReplyTo,
+        references: thread.references,
+        threadIndex: thread.threadIndex,
+      },
+    );
+  } catch (err: any) {
+    // 投递审计：失败原因落日志（此前静默上抛被 delivery 层吞掉，"没收到邮件"无从排查）
+    console.error(`[email] 状态邮件投递失败: to=${ownerEmail || '-'} cc=${cc.join(',') || '-'} subject="${subject}" error=${err?.message || err}`);
+    throw err;
+  }
+  console.log(`[email] 状态邮件已投递: to=${ownerEmail || '-'}${cc.length ? ` cc=${cc.join(',')}` : ''} subject="${subject}" state=${state}`);
 
   deliveredStateKeys.add(dedupeKey);
   return { ok: true };

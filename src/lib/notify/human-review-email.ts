@@ -106,26 +106,33 @@ export async function sendHumanReviewEmailNotification(question: HumanQuestion):
   const threadKey = resolveEmailThreadKey({ runId: question.runId, globalContext: runState?.globalContext });
   const thread = buildThreadHeaders(threadKey, emailSettings.smtpHost);
 
-  await sendMailViaSmtp({
-    host: emailSettings.smtpHost,
-    port: emailSettings.smtpPort,
-    secure: emailSettings.smtpSecure,
-    tlsInsecure: emailSettings.smtpTlsInsecure,
-    username: emailSettings.smtpUsername,
-    password: emailSettings.smtpPassword,
-    fromEmail: emailSettings.fromEmail,
-    fromName: emailSettings.fromName,
-    replyTo: emailSettings.replyTo,
-  }, {
-    to,
-    cc,
-    subject: buildWorkflowEmailSubject(emailSettings.subjectPrefix, { configFile: question.configFile, prUrl }),
-    text: buildBody(question, prUrl),
-    messageId: thread.messageId,
-    inReplyTo: thread.inReplyTo,
-    references: thread.references,
-    threadIndex: thread.threadIndex,
-  });
+  try {
+    await sendMailViaSmtp({
+      host: emailSettings.smtpHost,
+      port: emailSettings.smtpPort,
+      secure: emailSettings.smtpSecure,
+      tlsInsecure: emailSettings.smtpTlsInsecure,
+      username: emailSettings.smtpUsername,
+      password: emailSettings.smtpPassword,
+      fromEmail: emailSettings.fromEmail,
+      fromName: emailSettings.fromName,
+      replyTo: emailSettings.replyTo,
+    }, {
+      to,
+      cc,
+      subject: buildWorkflowEmailSubject(emailSettings.subjectPrefix, { configFile: question.configFile, prUrl }),
+      text: buildBody(question, prUrl),
+      messageId: thread.messageId,
+      inReplyTo: thread.inReplyTo,
+      references: thread.references,
+      threadIndex: thread.threadIndex,
+    });
+  } catch (err: any) {
+    // 投递审计：失败原因落日志（此前静默上抛被 delivery 层吞掉）
+    console.error(`[email] 人工审查邮件投递失败: to=${to.join(',') || '-'} cc=${cc.join(',') || '-'} question=${question.id} error=${err?.message || err}`);
+    throw err;
+  }
+  console.log(`[email] 人工审查邮件已投递: to=${to.join(',') || '-'}${cc.length ? ` cc=${cc.join(',')}` : ''} question=${question.id} state=${question.currentState || '-'}`);
 
   deliveredQuestionIds.add(question.id);
   return { ok: true };
