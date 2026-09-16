@@ -94,6 +94,17 @@ OHOS 独有问题的根因通常在：
 4. **embedding / Native ArkTS 修复是否进了 Demo 实际消费的 HAR**（见下一节）
    - 黄金标志仍是修复前的值，先核对换的是哪个 HAR，再判断修复无效
 
+## 修复验证的真机截图规范（截图不是乱截的）
+
+修复验证阶段的真机复测必须留证，**截图与 hilog 同场景配对采集**，规则如下（Issue #2721 教训：13 张复现截图 vs 1 张白屏修复截图，证据链失衡）：
+
+1. **全场景覆盖**：复现阶段建立的每个场景（S1-S4、Reset 等）修复后逐一复测，每场景 OHOS 一张；复现有 Android 对照的，修复后同样每场景一张。禁止只截一个场景交差。
+2. **截图时机**：点击场景按钮 → `sleep 2~3`（等 WMS 生效、渲染稳定）→ `snapshot_display`。截图前确认 app 在前台（`hdc shell aa start` 拉起 / `uitest` 点击成功回显）；息屏或后台状态下截出白屏/壁纸无效。
+3. **有效性自查**：白屏、锁屏、桌面壁纸、纯色空屏 = 无效截图，必须重拍（拉起 → 点击 → sleep → 重截），**不允许重拍失败就弃截图只交 hilog**，也不允许多场景共用一张截图。
+4. **命名对齐**：`fix_{场景}_{平台}_after.jpeg`（如 `fix_s1_ohos_after.jpeg`、`fix_s1_android_after.png`），与复现阶段 `sN_{平台}_after` 命名对齐，便于前后对照。
+5. **hilog 配对**：每场景的截图与 `ohos-hilog-fix-{场景}.txt` 同场景采集（先截屏后抓日志，或反之，保持同一次场景执行内），证据可互相对照时间。
+6. **方向/旋转类 bug 的判据声明**：`hdc shell snapshot_display` 输出按逻辑屏归一化，180° 倒置在截图中不可见——此类 bug 的黄金判据是 hilog 数值（`ohosOrientation` 值 + WMS `rotation`），截图仅作场景标记；但场景标记本身仍须是有效画面（见第 3 条）。
+
 ## 把 embedding 改动送进 Demo（验证必做）
 
 OHOS Flutter 工具链里同时有两套 HAR 文件名，**不能默认盖 `flutter.har`**：
@@ -131,7 +142,7 @@ repo-engine 的 flutter_embedding 工程自带 `build-profile.json5`，`compatib
 
 Issue #2492：仓是 `oh-3.41.9-dev`，真机用本机 3.27.5 SDK；验证把同样补丁打进 3.27 HAR 后写了 `bug_fixed=true`，Issue 要的自定义 `code`/`details` 并未过。
 
-## 把 embedding 改动送进 Demo（验证必做）
+## embedding 换装操作步骤（验证必做）
 
 验证 embedding / `flutter_embedding` 目录下的 ArkTS 修复时：
 
