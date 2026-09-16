@@ -243,7 +243,9 @@ workflow:
           task: |
             运行 skills/gitcode-pr-review/scripts/fetch-ai-review.mjs --pr-url <PR_URL> --author <author> --out outputs
             若 outputs/ai-review-comments.json 的 actionable_count>0：verdict=fail，next_state=检视修复。
-            否则跑 route-pr-phase.mjs --from 分流检视，原样输出。只有 AI已检视 标签没有意见正文时不要空改。
+            若 actionable_count=0 且 ai_reviewed=false（未被 AI 检视）：同样 verdict=fail，next_state=检视修复——
+            检视修复状态会识别 ai_reviewed=false 并执行「同主题跨分支修复同步」而非常规检视修复。
+            否则（actionable_count=0 且 ai_reviewed=true，检视过无问题）跑 route-pr-phase.mjs --from 分流检视，原样输出。只有 AI已检视 标签没有意见正文时不要空改。
       transitions:
         - to: 分流触发
           condition: { verdict: pass }
@@ -394,7 +396,7 @@ workflow:
           priority: 3
 
     - name: 检视修复
-      description: 按 PR 上已有 AI 检视意见改。没有意见不要空改。
+      description: 按 PR 上已有 AI 检视意见改；未被检视时尝试同步同主题分支的修复。
       maxSelfTransitions: 3
       position: { x: 1820, y: 680 }
       steps:
@@ -404,23 +406,53 @@ workflow:
           role: defender
           task: |
             运行 skills/gitcode-pr-review/scripts/fetch-ai-review.mjs --pr-url <PR_URL> --author <author> --out outputs
-            actionable_count=0：不要空改，verdict=pass。
+            读 outputs/ai-review-comments.json，按以下顺序判断执行模式：
+
+            【模式A：常规检视修复（ai_reviewed=true 或 actionable_count>0）】
+            actionable_count=0 且 ai_reviewed=true：不要空改，verdict=pass。
             有意见：只处理 comments[]（当前代码的 AI 检视意见和人工行内评论），stale_comments 是旧代码意见不要修。
             在 repo/ 按 path/line 改，只改检视点到的文件。本状态不要 git commit / git push。
             输出 JSON：verdict、summary、applied_issues。
-            用户人工指令模式（globalContext 含对应指令行时优先于上述常规流程，不再跑 fetch-ai-review.mjs）：
+
+            【模式B：同主题跨分支修复同步（ai_reviewed=false 且 actionable_count=0）】
+            本 PR 未被 AI 检视。checkout fork head_ref 到 repo/ 后：
+            1. 运行 skills/gitcode-pr-review/scripts/find-sibling-prs.mjs --pr-url <PR_URL> --author <author> --out outputs
+            2. 读 outputs/sibling-prs.json：
+               a) 无同主题兄弟 PR（sibling_count=0）→ verdict=pass（无修复可同步）。
+               b) 有兄弟但全部未检视（reviewed_siblings 为空）→ verdict=pass（都未检视，无修复来源）。
+               c) 有已检视的兄弟（reviewed_siblings 非空）→ 对每个已检视兄弟：
+                  - 在 ~/.aceharness/runs/ 目录中查找该 PR 编号的最新 run（目录名含 -pr<编号>-），
+                    读取其 outputs/fix.patch
+                  - 若找到 fix.patch：git -C repo apply --check <fix.patch 路径>
+                  - apply 干净 → git -C repo apply <fix.patch 路径>，verdict=pass，
+                    summary 注明「已同步 PR #<兄弟编号> 的修复」、synced_from=#<兄弟编号>
+                  - apply 冲突 → 不强推，verdict=conditional_pass，
+                    summary 注明「兄弟 PR #<编号> 的修复在本分支有冲突，需人工处理」
+            3. 无兄弟 run 有 fix.patch → 对已检视兄弟跑 fetch-ai-review.mjs --pr-url <兄弟PR URL> --author <author>，
+               若兄弟有 actionable 意见，将其中的代码修复手动应用到本分支（同模式A逻辑，来源是兄弟的意见）。
+            4. 输出 JSON：verdict、summary、applied_issues、synced_from（兄弟 PR 编号或 null）。
+            本状态不要 git commit / git push。
+
+            【模式C：用户人工指令（globalContext 含指令行时优先）】
             - user_fix_feedback: 行及后续缩进行为用户修改指令：在 repo/ 按指令修改，只改指令涉及的文件。applied_issues 填「用户反馈：<指令摘要>」。
             - user_revert: from <sha> to <sha> 行：在 repo/ 执行 git revert --no-commit <sha>..<sha>（无变更则 verdict=pass 并说明无可回退）。applied_issues 填「回退 AI 检视修复」。
         - id: challenge-ai-review
           name: 质疑检视修复
           agent: code-hunter
           role: attacker
-          task: 检查是否漏掉必须改的检视项，或改了检视没要求的范围。用户人工指令模式下改为质疑：指令是否执行到位、是否改了指令外的范围。输出 <step-conclusion>。
+          task: |
+            模式A：检查是否漏掉必须改的检视项，或改了检视没要求的范围。
+            模式B（兄弟同步）：检查同步的修复是否真的来自同主题 PR、apply 是否干净无冲突残留、有没有同步了不相关的改动、兄弟 PR 编号与 fix.patch 是否匹配。
+            模式C：指令是否执行到位、是否改了指令外的范围。
+            输出 <step-conclusion>。
         - id: judge-ai-review
           name: 检视修复裁决
           agent: fix-reviewer
           role: judge
-          task: pass 去推送并触发。conditional_pass 继续改。fail 去人工确认。
+          task: |
+            pass 去推送并触发（含模式B同步成功或无兄弟可同步）。
+            conditional_pass：模式A继续改；模式B apply 冲突去人工确认。
+            fail 去人工确认。
       transitions:
         - to: 推送并触发
           condition: { verdict: pass }

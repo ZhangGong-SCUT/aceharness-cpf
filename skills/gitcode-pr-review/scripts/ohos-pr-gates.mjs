@@ -39,6 +39,7 @@ export const CLASSIFY_ROUTES = {
   },
   分流检视: {
     ai_review_pending: { verdict: 'fail', next_state: '检视修复' },
+    ai_unreviewed: { verdict: 'fail', next_state: '同步修复' },
     running: { verdict: 'conditional_pass', next_state: '挂起' },
     default: { verdict: 'pass', next_state: '分流触发' },
   },
