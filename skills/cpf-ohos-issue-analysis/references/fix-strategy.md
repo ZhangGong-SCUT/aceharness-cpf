@@ -79,6 +79,8 @@ OHOS 独有问题的根因通常在：
 
 修复验证 Agent 应检查：
 
+0. **真机复测全程持有设备锁**：`device-lock.mjs acquire`（复测开始）→ 全场景复测 + 截图 + hilog → `release`（结束）。无锁操作真机的验证结论不可信（并发 run 会串台），verifier 见到应降 `conditional_pass` 并注明。
+
 1. **`is_ohos_specific=true` 时是否遵循了 Native 优先**
    - `fix_code_layer=native` → 通过
    - `fix_code_layer=dart` → 检查 `risk_assessment` 是否说明了降级理由，未说明则 `verdict=fail`
