@@ -1,0 +1,11 @@
+[Unit]
+Description=Cloudflare Tunnel Watchdog (auto-restart on disconnect)
+After=cloudflared.service
+
+[Service]
+ExecStart=/usr/bin/python3 /home/flutter/ACEHarness/scripts/tunnel-watchdog.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
