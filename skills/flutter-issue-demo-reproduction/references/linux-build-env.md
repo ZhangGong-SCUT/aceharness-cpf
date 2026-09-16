@@ -164,6 +164,33 @@ adb -s emulator-5554 exec-out screencap -p > outputs/android_baseline.png
 
 iOS 本机是 Linux，无 mac，跨平台对照用 Android（技能允许）。
 
+### D.2 换 SDK cache HAR 三步（MANDATORY——防静默错配）
+
+修复落在 embedding / flutter_embedding 层、需要把新编 HAR 盖进 SDK cache 时，**必须**按以下三步执行：
+
+```bash
+CACHE_HAR=<选用SDK>/bin/cache/artifacts/engine/ohos-arm64-release/flutter_embedding_release.har
+NEW_HAR=outputs/flutter_embedding_release.har   # 以 Demo lock 实际消费的 ${mode} 为准
+
+# 1. 备份当前 cache HAR（上一轮 run 可能盖过它的修复版，备份才能追溯/还原）
+mkdir -p /tmp/opencode/har && cp "$CACHE_HAR" /tmp/opencode/har/prev_$(date +%m%d%H%M).har
+
+# 2. 盖入本轮新 HAR
+cp "$NEW_HAR" "$CACHE_HAR"
+
+# 3.【强制复核】两串 md5 必须完全一致；不一致 = 盖入失败，立即 verdict=fail，禁止继续构建
+md5sum "$NEW_HAR" "$CACHE_HAR"
+```
+
+**为什么强制**：demo 构建时 ohpm 从 SDK cache 装 embedding——若第 2 步 cp 失败/路径错/被跳过，
+构建**不会报任何错**，会静默沿用 cache 里的旧 HAR（可能是上一轮 AI 的修复版），而**旧代码同样可能
+通过黄金标志**，最终得出「本轮方案有效」的**假结论**（真机跑的根本不是本轮代码）。md5 复核是唯一
+可靠的"cache 装的必然是本轮代码"证明——没有这一步，验证结论不可信。
+
+盖入并复核通过后，再删 Demo 的 `ohos/oh_modules`、清 `~/.ohpm/cache`，重新 `flutter build hap`；
+构建完成后**再核对一次** `oh_modules/.../flutter_ohos/src/.../<改动文件>` 实际含本轮修改（防 ohpm
+缓存路径键复用旧包）。两次核对都过，才能上真机。
+
 ---
 
 ## E. 常见报错 → 根因对照
