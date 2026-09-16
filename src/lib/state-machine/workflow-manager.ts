@@ -8734,6 +8734,12 @@ try {
     // Load config and continue execution
     const configContent = await this.readWorkflowConfigContent(runState.configFile);
     const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+    // 重跑必须回到 run 的工作目录执行（agent cwd / 产物路径都依赖 projectRoot），
+    // 否则 agent 会在工作流模板目录（_template）里找文件（#2646 教训）
+    if (runState.workingDirectory) {
+      workflowConfig.context = workflowConfig.context || ({} as typeof workflowConfig.context);
+      workflowConfig.context.projectRoot = runState.workingDirectory;
+    }
     this.currentWorkflowConfig = workflowConfig;
     this.workflowMcpServers = [];
     await this.resolveWorkflowMcpServers(workflowConfig);
@@ -8743,7 +8749,19 @@ try {
     await this.loadAgentConfigs();
     this.ensureSupervisorAgentExists(workflowConfig);
     this.initializeAgents(workflowConfig);
+    // 被重跑 state 及其后续 state 的 agent 一律开新 session：
+    // 旧 session 加载可能超时/损坏（#2646: ACP session/load timeout 30s 反复失败）
+    const rerunStateIdx = workflowConfig.workflow.states.findIndex((s) => s.name === stateName);
+    const rerunAgentNames = new Set<string>();
+    if (rerunStateIdx >= 0) {
+      for (const st of workflowConfig.workflow.states.slice(rerunStateIdx)) {
+        for (const step of st.steps || []) {
+          if (step.agent) rerunAgentNames.add(step.agent);
+        }
+      }
+    }
     for (const persistedAgent of runState.agents || []) {
+      if (rerunAgentNames.has(persistedAgent.name)) continue;
       const agent = this.agents.find((item) => item.name === persistedAgent.name);
       if (agent && persistedAgent.sessionId) {
         agent.sessionId = persistedAgent.sessionId;
