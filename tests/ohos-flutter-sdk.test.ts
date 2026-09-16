@@ -27,6 +27,15 @@ describe('ohos flutter sdk inventory', () => {
     expect(extractVersionHint('oh-3.35.7-release')).toBe('3.35.7');
   });
 
+  test('extracts branch from Chinese prose conclusion (issue #2721 regression)', () => {
+    // step-conclusion 散文格式：「- 分支 dev（branch_source=default_branch，Issue 无版本号）」
+    expect(extractRepoBranch('- 分支 dev（branch_source=default_branch，Issue 无版本号）；framework HEAD=6d56736')).toBe('dev');
+    expect(extractRepoBranch('- 分支：oh-3.41.9-dev')).toBe('oh-3.41.9-dev');
+    // 行中非行首的「分支」不误报
+    expect(extractRepoBranch('### 优先级 3：使用默认分支 dev（团队日常开发分支）')).toBeNull();
+    expect(extractRepoBranch('engine 仓分支与 framework 同名，无同名分支回退 dev')).toBeNull();
+  });
+
   test('reads attached HEAD from repo/.git', () => {
     const repo = mkdtempSync(join(tmpdir(), 'ohos-repo-'));
     mkdirSync(join(repo, '.git'), { recursive: true });

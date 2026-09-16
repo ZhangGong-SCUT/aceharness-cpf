@@ -8448,7 +8448,10 @@ try {
 
   private readWorkspaceRepoBranch(): string | null {
     const workingDir = this.getWorkingDirectory();
-    return workingDir ? readRepoBranchFromDisk(join(workingDir, 'repo')) : null;
+    if (!workingDir) return null;
+    // framework 仓优先；引擎层 Issue 可能只克隆了 engine 仓，兜底读 repo-engine
+    return readRepoBranchFromDisk(join(workingDir, 'repo'))
+      || readRepoBranchFromDisk(join(workingDir, 'repo-engine'));
   }
 
   private async persistOhosFlutterSdkPin(resolved: ResolvedOhosFlutterSdk): Promise<void> {

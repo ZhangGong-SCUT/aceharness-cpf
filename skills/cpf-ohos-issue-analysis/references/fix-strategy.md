@@ -117,6 +117,16 @@ Issue #2500 修复验证曾把新 HAR 盖到 `flutter.har`，第一轮真机黄�
 - 本机没有匹配 SDK（`matched=false`）：补丁仍可出，运行验证写 `needs_runtime_validation` / `conditional_pass`，`issue_resolved=partial`，`engine_aligned=false`。禁止改用日常 SDK 凑真机。引擎见到清单未对上会把修复验证 `pass` 降为 `conditional_pass`。
 - 黄金标志跟 **Issue 正文的预期结果**，不跟本机旧 SDK 上碰巧更重的症状。
 
+### 引擎 HAR 工程的 API 版本对齐（禁止打桩绕过）
+
+repo-engine 的 flutter_embedding 工程自带 `build-profile.json5`，`compatibleSdkVersion` 常是旧值（如 `"5.1.0(18)"`）。dev/新分支源码可能用到更高版本 API（如 `window.getGlobalWindowMode` @since 20），按旧 API 语境编译会报 `Property 'xxx' does not exist`。此时禁止删源码/伪造类型打桩，按以下流程对齐：
+
+1. 查真机实际 API（`hdc shell param get const.ohos.apiversion`）与本机编译 SDK（`harmony-tools/ohos-sdk/` 下目录名，如 `26`）。
+2. **真机 API ≥ 源码所需 API** 时：把 HAR 工程 build-profile 的 `compatibleSdkVersion`/`compileSdkVersion` 改成与本机 SDK 一致的 API 再重编。格式：`runtimeOS: "OpenHarmony"` 工程用整数（如 `26`）；`runtimeOS: "HarmonyOS"` 工程用 `"x.y.z(api)"` 字符串。demo 工程同步对齐。
+3. 用本机完整 SDK 编出的 HAR **可以上真机做行为验证**（`engine_aligned=true`，前提是 SDK 分支对号入座），黄金标志照常实测。
+4. 打桩产物只可用于纯编译检查，文件必须带 `_compile_check_only` 标记，**不得上真机**。
+5. 只有真机 API < 源码所需 API（如真机 API 18 而代码用 @since 20 接口）时，才写 `needs_runtime_validation` / `conditional_pass`。
+
 **本机（Linux）构建/真机操作前 MANDATORY 读 [`../../flutter-issue-demo-reproduction/references/linux-build-env.md`](../../flutter-issue-demo-reproduction/references/linux-build-env.md)**：demo 工程模板必须完成 build-profile 五项改造（`runtimeOS: OpenHarmony` + 整数 26 + `sdk.dir` + 签名密文块 + bundleName `com.example.flutterabilitydemo`）才能编 hap / 装真机；含 ArkTS handler 写法约束与报错对照表。
 
 Issue #2492：仓是 `oh-3.41.9-dev`，真机用本机 3.27.5 SDK；验证把同样补丁打进 3.27 HAR 后写了 `bug_fixed=true`，Issue 要的自定义 `code`/`details` 并未过。

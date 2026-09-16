@@ -52,6 +52,9 @@ export function extractRepoBranch(text: string): string | null {
   if (json?.[1] && json[1] !== 'missing') return json[1].trim();
   const line = String(text || '').match(/(?:^|\n)\s*[-*]?\s*\**branch\**\s*[:：]\s*`?([^\s`,]+)`?/i);
   if (line?.[1] && line[1] !== 'missing') return line[1].trim();
+  // 中文散文格式（step-conclusion 常见）：「- 分支 dev(branch_source=…)」「分支：oh-3.41.9-dev」
+  const zh = String(text || '').match(/(?:^|\n)\s*[-*]?\s*\**分支\**\s*[:：]?\s*`?([A-Za-z0-9][A-Za-z0-9_.\/-]*)/);
+  if (zh?.[1] && zh[1] !== 'missing') return zh[1].trim();
   return null;
 }
 
