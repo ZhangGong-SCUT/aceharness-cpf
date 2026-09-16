@@ -123,6 +123,34 @@ describe('enforceFixVerificationGoldenFlag', () => {
     ].join('\n');
     expect(enforceFixVerificationGoldenFlag(output, 'pass', verifyCtx)).toBe('conditional_pass');
   });
+
+  test('prose fallback: issue_golden_flag_met=true in text keeps pass (#2646 regression)', () => {
+    // #2646 实际形态：验证明明通过，但只在 step-conclusion 散文里写结论，没有 JSON 块
+    const output = [
+      '规则回显：修不了则 issue_golden_flag_met=false，verdict 最高 conditional_pass。',
+      '## 结果 / 裁决',
+      'pass：修复在真机 6HK0125B07000225 上验证通过。',
+      '黄金标志：B1=MissingPluginException、B2=null，均立即返回，issue_golden_flag_met=true',
+      '引擎对齐：repo oh-3.44.9-dev + SDK 3.44.9-ohos，engine_aligned=true',
+    ].join('\n');
+    expect(enforceFixVerificationGoldenFlag(output, 'pass', verifyCtx)).toBe('pass');
+  });
+
+  test('prose fallback: engine_aligned missing entirely still downgrades', () => {
+    const output = [
+      '规则回显：修不了则 issue_golden_flag_met=false，verdict 最高 conditional_pass。',
+      '最终结论：pass，issue_golden_flag_met=true（但未提及 engine_aligned）',
+    ].join('\n');
+    expect(enforceFixVerificationGoldenFlag(output, 'pass', verifyCtx)).toBe('conditional_pass');
+  });
+
+  test('prose fallback: explicit false in conclusion downgrades', () => {
+    const output = [
+      '{"engine_aligned": true}',
+      '结论：issue_golden_flag_met=false',
+    ].join('\n');
+    expect(enforceFixVerificationGoldenFlag(output, 'pass', verifyCtx)).toBe('conditional_pass');
+  });
 });
 
 describe('resolveOutputField', () => {

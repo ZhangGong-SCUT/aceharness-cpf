@@ -80,6 +80,7 @@ OHOS 独有问题的根因通常在：
 修复验证 Agent 应检查：
 
 0. **真机复测全程持有设备锁**：`device-lock.mjs acquire`（复测开始）→ 全场景复测 + 截图 + hilog → `release`（结束）。无锁操作真机的验证结论不可信（并发 run 会串台），verifier 见到应降 `conditional_pass` 并注明。
+0b. **验证结论必须输出 JSON 布尔字段，散文不算**（#2646 教训：真机验证明明全过，仅因只在散文里写结论、未输出 JSON 块，被引擎终审判「缺字段」降级 conditional_pass → run failed）：最终输出必须包含 JSON 块（或 step-conclusion 内嵌 JSON），至少含 `"verdict"`、`"engine_aligned": true/false`、`"issue_golden_flag_met": true/false`（可放 `run_verification` 嵌套或顶层）。散文里写「引擎对齐：repo xxx + SDK xxx」**引擎不认**——引擎只解析 JSON 布尔字段（散文等号形式仅兜底）。引擎对齐时两个字段都写 true；未对齐写 false 并走 conditional_pass。
 
 1. **`is_ohos_specific=true` 时是否遵循了 Native 优先**
    - `fix_code_layer=native` → 通过

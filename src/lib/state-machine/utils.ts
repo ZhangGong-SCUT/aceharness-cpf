@@ -249,7 +249,13 @@ export function extractIssueGoldenFlagMet(output: string): boolean | null {
     if (typeof nested === 'boolean') found = nested;
     if (typeof top === 'boolean') found = top;
   });
-  return found;
+  if (found !== null) return found;
+  // JSON 缺字段时的散文兜底：step-conclusion 常把结论写成
+  // 「issue_golden_flag_met=true」等号形式。取**最后一次**匹配——
+  // prompt/规则回显在前、最终结论在后（#2646 教训：验证明明通过，
+  // 仅因未输出 JSON 块被门禁降级为 conditional_pass）。
+  const matches = [...String(output || '').matchAll(/issue_golden_flag_met\**\s*[=:：]\s*\**\s*(true|false)\b/gi)];
+  return matches.length ? matches[matches.length - 1][1].toLowerCase() === 'true' : null;
 }
 
 export function extractEngineAligned(output: string): boolean | null {
@@ -260,7 +266,10 @@ export function extractEngineAligned(output: string): boolean | null {
     if (typeof nested === 'boolean') found = nested;
     if (typeof top === 'boolean') found = top;
   });
-  return found;
+  if (found !== null) return found;
+  // 同上：散文兜底，取最后一次匹配（engine_aligned=true）
+  const matches = [...String(output || '').matchAll(/engine[_\s]*aligned\**\s*[=:：]\s*\**\s*(true|false)\b/gi)];
+  return matches.length ? matches[matches.length - 1][1].toLowerCase() === 'true' : null;
 }
 
 /**
