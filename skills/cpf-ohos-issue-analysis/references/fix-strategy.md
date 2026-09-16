@@ -106,6 +106,7 @@ OHOS 独有问题的根因通常在：
 4. **命名对齐**：`fix_{场景}_{平台}_after.jpeg`（如 `fix_s1_ohos_after.jpeg`、`fix_s1_android_after.png`），与复现阶段 `sN_{平台}_after` 命名对齐，便于前后对照。
 5. **hilog 配对**：每场景的截图与 `ohos-hilog-fix-{场景}.txt` 同场景采集（先截屏后抓日志，或反之，保持同一次场景执行内），证据可互相对照时间。
 6. **方向/旋转类 bug 的判据声明**：`hdc shell snapshot_display` 输出按逻辑屏归一化，180° 倒置在截图中不可见——此类 bug 的黄金判据是 hilog 数值（`ohosOrientation` 值 + WMS `rotation`），截图仅作场景标记；但场景标记本身仍须是有效画面（见第 3 条）。
+7. **截图必须可区分场景**（#2721 教训：S2/S3 截图 md5 完全相同，hilog 证明场景都执行了但画面无差异）：若 demo 页面不随场景变化（如只调 `setPreferredOrientations` 不改 UI），多场景截图会一模一样——要么截屏前让画面携带场景标识（Toast/标题/控件高亮），要么只截一张代表性画面并在 README 注明「其余场景以 hilog 区分」，**禁止重复提交同画面截图凑数**。
 
 ## 把 embedding 改动送进 Demo（验证必做）
 
