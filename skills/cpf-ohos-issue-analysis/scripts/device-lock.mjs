@@ -79,7 +79,8 @@ function tryAcquire(deviceId, runId, stepName, ttlMinutes) {
 
   if (existing) {
     if (existing.runId === runId) {
-      // 同 run 重入 = 续租
+      // 同 run 重入 = 续租。直接覆盖写有极小竞态窗口（恰逢他人 stale 抢占），
+      // 但续租方原本就是持有者，覆盖成自己的新时间戳语义等价，可接受。
       const renewed = { ...existing, acquiredAt: new Date().toISOString(), stepName: stepName || existing.stepName };
       writeFileSync(p, JSON.stringify(renewed, null, 2), 'utf-8');
       return { acquired: true, deviceId, renewed: true };
@@ -87,15 +88,21 @@ function tryAcquire(deviceId, runId, stepName, ttlMinutes) {
     if (!isStale(existing, ttlMinutes)) {
       return { acquired: false, deviceId, holder: existing };
     }
-    // 过期/僵尸：清掉抢入
-    try { unlinkSync(p); } catch { /* ignore */ }
+    // 过期/僵尸：清掉后走下方独占创建抢入
+    try { unlinkSync(p); } catch { /* 可能已被并发方清掉，继续 */ }
   }
 
+  // 独占创建（O_EXCL）：并发 acquire 的原子性保证——只有一个进程能创建成功，
+  // 其余收到 EEXIST 后重读锁（此刻必然是赢家的锁）按"被占"处理。
   const lock = { runId, deviceId, acquiredAt: new Date().toISOString(), stepName: stepName || '', pid: process.pid };
   try {
-    writeFileSync(p, JSON.stringify(lock, null, 2), 'utf-8');
+    writeFileSync(p, JSON.stringify(lock, null, 2), 'utf-8', { flag: 'wx' });
     return { acquired: true, deviceId, lock };
   } catch (e) {
+    if (e.code === 'EEXIST') {
+      const winner = readLock(deviceId);
+      return { acquired: false, deviceId, holder: winner, note: 'lost race' };
+    }
     return { acquired: false, deviceId, error: e.message };
   }
 }
