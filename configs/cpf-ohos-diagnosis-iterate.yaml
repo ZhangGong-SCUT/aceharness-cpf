@@ -1,0 +1,328 @@
+workflow:
+  name: 鸿蒙跨平台框架问题AI诊断-用户反馈迭代
+  description: |
+    用户反馈迭代模式：原诊断 run 完成后，用户对修复方案不满意时提交反馈，
+    从「方案设计」阶段重新收敛（不全量重跑）。
+    继承原 run 的：Issue 信息、复现 Demo（直接引用原 run 目录）、根因结论、冻结黄金标志。
+    新增：用户反馈作为特权约束注入方案设计（强约束但仍需过质疑/裁决，不得跳过真机验证）。
+    上下文装载(恢复repo+继承上下文) → 方案设计(红蓝对抗+用户反馈特权约束) → 代码修复 → 修复验证(沿用冻结黄金标志) → 报告沉淀(含AI轮vs用户轮对比) → 完成。
+    verdict 枚举与回退语义同 cpf-ohos-diagnosis.yaml。
+    循环上限：方案设计自环熔断 maxSelfTransitions=3；修复验证 maxVisits=4；全局 maxTransitions=18。
+  mode: state-machine
+  maxTransitions: 18
+  supervisor:
+    enabled: true
+    agent: default-supervisor
+    stageReviewAsync: false
+    stageReviewEnabled: true
+    checkpointAdviceEnabled: true
+    scoringEnabled: true
+    experienceEnabled: true
+
+  states:
+    # ========== 状态0：上下文装载（恢复 repo + 继承原 run 上下文）==========
+    - name: 上下文装载
+      description: |
+        从原 run（parent-run）恢复诊断上下文：Issue 元信息、根因结论、冻结黄金标志、Demo 位置；
+        重新 clone repo/（及 repo-engine/）并回退到原轮同一 commit，保证两轮 patch 可对比。
+      requireHumanApproval: false
+      isInitial: true
+      isFinal: false
+      position: { x: 100, y: 200 }
+      steps:
+        - id: restore-context
+          name: 继承上下文恢复
+          agent: diagnosis-issue-collector
+          role: defender
+          task: |
+            用户反馈迭代模式的上下文装载。globalContext 中已给出 parent-run-id / parent-run-dir / user-feedback 等信息。
+            1. 读原 run 目录（parent-run-dir）恢复上下文：
+               - outputs/ 下的产物（诊断报告 md、fix.patch / fix-engine.patch、ohos-flutter-sdk.json、复现截图与日志）
+               - 从问题复现阶段输出 JSON 中提取 issue_golden_flag（冻结黄金标志，本轮禁止修订）
+               - 根因结论（problem_type / layer / problem_ownership / confidence）
+               - Demo 工程位置 = parent-run-dir/demo/（本轮直接引用该绝对路径复用，不重建）
+            2. 重新拉取代码仓（原 run 的 repo/ 已被完成步骤清理）：
+               - repo-url + repo-branch 从 globalContext 或原 run 的 outputs/ohos-flutter-sdk.json 获取
+               - clone 到本 run 目录 repo/，checkout 到原轮相同的 reset_target_merge_commit（从原 run 信息采集输出 JSON 或 ~/.aceharness/runs/<parent-run-id>/ 持久化状态中读取；找不到时 checkout 分支最新并明确标注）
+               - 原轮涉及引擎层（repo-engine/）时同样恢复
+            3. 校验恢复完整性：黄金标志缺失时 verdict=fail 终止（无验收标准无法迭代）；demo/ 不存在时 verdict=fail 终止
+            4. 输出继承上下文清单，供方案设计阶段使用
+            输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、issue_golden_flag（冻结值）、root_cause_summary、problem_ownership、demo_path（绝对路径）、repo_commit（实际恢复到的 commit）、context_completeness（complete|partial）。
+      transitions:
+        - to: 方案设计
+          condition: { verdict: pass }
+          priority: 1
+          label: 上下文恢复完整，进入方案设计
+        - to: 终止
+          condition: { verdict: fail }
+          priority: 2
+          label: 关键上下文缺失（黄金标志/Demo 不可恢复），终止
+
+    # ========== 状态1：方案设计（红蓝对抗 + 用户反馈特权约束）==========
+    - name: 方案设计
+      description: |
+        基于继承的根因与用户反馈重新设计修复方案。红蓝对抗 3 步：设计 → 质疑 → 裁决。
+        用户反馈是特权约束：方案必须优先吸收，但用户意见不豁免质疑与验证——
+        用户建议若有误，attacker/judge 照常指出；黄金标志为冻结值，禁止修订。
+      requireHumanApproval: false
+      isInitial: false
+      isFinal: false
+      maxSelfTransitions: 3
+      position: { x: 400, y: 200 }
+      steps:
+        - id: design-fix-iterate
+          name: 修复方案设计
+          agent: diagnosis-fix-advisor
+          role: defender
+          task: |
+            基于继承的根因结论与【用户反馈】设计系统性修复方案（只输出方案，不实际修改代码）：
+            0. 【用户反馈特权约束】globalContext 的 user-feedback 是用户对原 AI 方案的修改意见：
+               - 必须逐条回应用户反馈：采纳/部分采纳/不采纳都要给理由（不采纳时依据代码证据说明）
+               - 方案以用户意见为优先基线，在其基础上补充系统性、边界场景处理
+               - 用户意见与代码事实冲突时，以事实为准但明确标注冲突点，供裁决判断
+               - 用户反馈不是验收标准：黄金标志沿用冻结值，禁止按用户描述放宽或改写
+            1. 读取上下文装载阶段的继承清单（root_cause_summary / problem_ownership / demo_path / repo_commit）与原 run 的 fix.patch（原 AI 方案，作为对比基线）
+            2. 生成完整修复建议（root_cause_fix.file / line / code_before / code_after）
+            3. 评估修复风险和影响范围；OHOS 独有问题优先 Native 端修复（fix_code_layer / is_ohos_specific）
+            4. problem_ownership=business_code/mixed 时按原规则走建议出口
+            5. 多轮迭代收敛：被打回时优先针对质疑点补充修正
+            输出结尾必须包含 verdict、summary、artifact_path、key_findings、problem_ownership（继承）、fix_strategy、user_feedback_response（逐条回应表：采纳/部分采纳/不采纳+理由）、risk_level、missing_evidence。
+        - id: challenge-fix-design-iterate
+          name: 方案质疑
+          agent: diagnosis-fix-challenger
+          role: attacker
+          task: |
+            以批判性视角质疑 defender 的迭代方案（输出不超过 1500 字）：
+            1. 【用户反馈落实检查】方案是否真正落实了 user-feedback 的每一条意见？回应理由是否站得住脚？
+            2. 质疑方案与根因的对应性、覆盖完整性（边界条件/平台差异）、副作用
+            3. 质疑与原 AI 方案（原 run fix.patch）的差异化是否合理：变更是改进还是退化？
+            4. 质疑可行性：文件/行定位、编译影响、回滚可行性
+            注意：用户意见本身也要被质疑——用户建议若有代码事实错误或引入风险，必须指出，不得因"用户说的"而放行。
+            输出结尾必须包含 <step-conclusion> 标签，内含 verdict、challenges、risks、fix_gaps。
+        - id: judge-fix-design-iterate
+          name: 方案裁决
+          agent: diagnosis-fix-judge
+          role: judge
+          task: |
+            在 defender（迭代方案）和 attacker（质疑）之间做出客观裁决：
+            1. 审查方案对用户反馈的落实质量与 attacker 的质疑
+            2. pass：方案可接受（落实用户意见、针对根因、风险可控），进入代码修复
+            3. conditional_pass：回退 defender 针对质疑补充（自迭代）
+            4. fail：方案有重大风险；或应用层分流（business_code/mixed 只出建议），进入报告沉淀
+            5. 裁决时公平对待 AI 意见与用户意见：只看证据与风险，不看意见来源
+            输出结尾必须包含 <step-conclusion> 标签，内含 verdict、summary、feedback_to_designer（conditional_pass 时必填）、ruling_reason。
+      transitions:
+        - to: 代码修复
+          condition: { verdict: pass }
+          priority: 1
+          label: 方案裁决通过，进入代码修复
+        - to: 方案设计
+          condition: { verdict: conditional_pass }
+          priority: 2
+          label: 裁决需打磨，回退 defender 补充（自迭代）
+        - to: 报告沉淀
+          condition: { verdict: fail }
+          priority: 3
+          label: 方案被驳回或应用层分流，输出建议供人工执行
+
+    # ========== 状态2：代码修复（同原工作流）==========
+    - name: 代码修复
+      description: |
+        根据迭代方案实际修改 repo/（框架层）或 repo-engine/（引擎层）代码，编译验证，生成 patch。
+        patch 命名为 fix.patch / fix-engine.patch（与 AI 轮同名，便于对比视图对齐）。
+      requireHumanApproval: false
+      isInitial: false
+      isFinal: false
+      position: { x: 650, y: 200 }
+      steps:
+        - id: modify-code-iterate
+          name: 代码修改实施
+          agent: diagnosis-fix-modifier
+          role: defender
+          task: |
+            根据方案设计阶段（含用户反馈约束）输出的修复方案，实际修改代码仓中的文件，执行编译验证，生成 patch 文件：
+            1. 读取方案输出（root_cause_fix.file / line / code_before / code_after 及 user_feedback_response）
+            2. 读取目标源码，理解代码上下文
+            3. 【实际修改代码】使用 Write/Edit 工具修改：框架层修复改 repo/，引擎层修复改 repo-engine/
+            4. 【编译验证】flutter analyze 或 flutter build 验证编译通过，失败时修正重试（最多 3 次）
+            5. 【生成 patch】git -C repo/ diff > outputs/fix.patch；引擎层追加 git -C repo-engine/ diff > outputs/fix-engine.patch
+            6. 【回滚准备】记录修改前 HEAD commit
+            7. 禁止 git apply / cherry-pick 官方修复或原 AI 轮 patch——本轮必须按新方案独立改出（可与 AI 轮 patch 对比，但不得直接套用）
+            输出结尾必须包含 verdict、summary、artifact_path、key_findings、modification_result、compile_result、patch_path、rollback_info、verification_status（compiled|compile_failed|skipped）。
+      transitions:
+        - to: 修复验证
+          condition: { verdict: pass }
+          priority: 1
+          label: 代码修改+编译通过，进入修复验证
+        - to: 方案设计
+          condition: { verdict: conditional_pass }
+          priority: 2
+          label: 代码修改有瑕疵，回到方案设计
+        - to: 方案设计
+          condition: { verdict: fail }
+          priority: 3
+          label: 代码修改失败，回到方案设计
+
+    # ========== 状态3：修复验证（沿用冻结黄金标志，复用原 Demo）==========
+    - name: 修复验证
+      description: |
+        以攻击者视角验证迭代方案有效性，真机/模拟器运行验证。黄金标志沿用上下文装载的冻结值，禁止修订。
+        Demo 复用原 run 目录（demo_path 绝对路径），构建/安装/验证流程同原工作流。
+      requireHumanApproval: false
+      isInitial: false
+      isFinal: false
+      maxVisits: 4
+      position: { x: 900, y: 200 }
+      steps:
+        - id: verify-fix-iterate
+          name: 修复方案对抗验证
+          agent: diagnosis-fix-verifier-advisor
+          role: defender
+          task: |
+            以攻击者视角验证迭代方案的有效性，并在真机或模拟器上实际运行验证修复后 bug 消失（输出不超过 2000 字）：
+            1. 验证修复能否解决 Issue 反馈的问题：修复后现象是否消失？复现步骤是否还能触发
+            2. 【真机/模拟器运行验证】：
+               - 检测设备：hdc list targets（OHOS）/ adb devices（Android）
+               - 【引擎对齐】读 outputs/ohos-flutter-sdk.json（上下文装载阶段会从原 run 复制/重算）。matched=true 必须用 flutterBin 编 hap / 换 HAR；matched=false 禁止退回日常 SDK
+               - 用本轮修改后的 repo/ 代码重新构建；Demo 用继承的 demo_path（原 run 目录），改 HAR 后删 oh_modules 并清 ~/.ohpm/cache 再编
+               - 【冻结黄金标志】沿用上下文装载 JSON 中的 issue_golden_flag，禁止修订/改写/放宽。修不了则 issue_golden_flag_met=false，verdict 最高 conditional_pass
+               - 本机 Linux 构建/真机操作前 MANDATORY 读 flutter-issue-demo-reproduction/references/linux-build-env.md
+            3. 构造绕过场景与副作用分析；三端一致性检查；回归风险评估
+            4. 【对比采证】同时记录：本轮黄金标志结果 vs 原 run 报告中的结果（供报告对比章节使用）
+            如果验证未达 pass，在 feedback_to_target（方案设计/代码修复/报告沉淀）和 feedback_reason 中说明。
+            输出结尾必须包含 <step-conclusion> 标签，内含 verdict、summary、issue_resolved、root_cause_coverage、regression_risk、run_verification、feedback_to_target（conditional_pass/fail 时必填）、feedback_reason（conditional_pass/fail 时必填）、missing_scenarios。
+      transitions:
+        - to: 报告沉淀
+          condition: { verdict: pass }
+          priority: 1
+          label: 修复验证通过，进入报告沉淀
+        - to: 方案设计
+          condition: { verdict: conditional_pass, fieldMatch: { 'feedback_to_target|next_state': '方案' } }
+          priority: 2
+          label: feedback_to_target=方案设计
+        - to: 报告沉淀
+          condition: { verdict: conditional_pass, fieldMatch: { 'feedback_to_target|next_state': '报告沉淀|报告' } }
+          priority: 3
+          label: feedback_to_target=报告沉淀
+        - to: 代码修复
+          condition: { verdict: conditional_pass, fieldMatch: { 'feedback_to_target|next_state': '代码修复|改代码' } }
+          priority: 4
+          label: feedback_to_target=代码修复
+        - to: 报告沉淀
+          condition: { verdict: conditional_pass, fieldNotEquals: { 'run_verification.engine_aligned|engine_aligned': 'true' } }
+          priority: 5
+          label: 引擎未对齐，补丁已出但不得判已解决
+        - to: 代码修复
+          condition: { verdict: conditional_pass }
+          priority: 6
+          label: 默认：代码需打磨，回退代码修复
+        - to: 方案设计
+          condition: { verdict: fail, fieldMatch: { 'feedback_to_target|next_state': '方案' } }
+          priority: 7
+          label: feedback_to_target=方案设计
+        - to: 报告沉淀
+          condition: { verdict: fail, fieldMatch: { 'feedback_to_target|next_state': '报告沉淀|报告' } }
+          priority: 8
+          label: feedback_to_target=报告沉淀
+        - to: 代码修复
+          condition: { verdict: fail, fieldMatch: { 'feedback_to_target|next_state': '代码修复|改代码' } }
+          priority: 9
+          label: feedback_to_target=代码修复
+        - to: 报告沉淀
+          condition: { verdict: fail, fieldNotEquals: { 'run_verification.engine_aligned|engine_aligned': 'true' } }
+          priority: 10
+          label: 引擎未对齐，不得判已解决
+        - to: 代码修复
+          condition: { verdict: fail }
+          priority: 11
+          label: 默认：bug 仍复现，回退代码修复
+
+    # ========== 状态4：报告沉淀（含 AI 轮 vs 用户轮对比）==========
+    - name: 报告沉淀
+      description: |
+        生成迭代诊断报告，必须包含与原 AI 轮的对比章节。单步完成，无需裁决。
+      requireHumanApproval: false
+      isInitial: false
+      isFinal: false
+      position: { x: 1150, y: 200 }
+      steps:
+        - id: generate-report-iterate
+          name: 生成诊断报告
+          agent: diagnosis-reporter
+          role: defender
+          task: |
+            收集本轮全流程上下文，生成结构化迭代报告。直接输出完整报告内容（引擎自动保存到 outputs/报告沉淀-生成诊断报告.md）。
+            报告章节（严格按此输出，不得增减）：问题概述、环境信息、复现步骤、问题复现结论、根因结论、修复建议、验证建议、迭代对比。
+            1-5 章要求同原诊断工作流（已确认/推测/待验证三分，明确复现与归属）。
+            【第 8 章 迭代对比】读原 run 目录（globalContext 的 parent-run-dir）与本轮 outputs/，输出对比表：
+            | 维度 | 原 AI 轮 | 本轮（用户反馈驱动） |
+            至少覆盖：修法要点（两轮 patch 的关键差异，引用文件:行号）、用户反馈落实情况（逐条：采纳/部分采纳/不采纳）、黄金标志验证结果（两轮同标准）、回归风险评级、验证深度（真机/静态/skipped）、结论（哪轮更优/各自适用场景）。对比必须基于两轮实际产物，不得凭记忆编造。
+            报告末尾追加 JSON：`{"verdict":"pass|conditional_pass|fail","summary":"...","key_findings":[...],"reproduction_confirmed":"yes|no|unverified","problem_ownership":"framework_library|business_code|mixed","fix_target":"framework_plugin|application","verification_status":"verified|skipped|needs_runtime_validation","iteration_round":<数字>,"user_feedback_addressed":"all|partial|none","missing_evidence":[...]}`
+      transitions:
+        - to: 完成
+          condition: { verdict: pass }
+          priority: 1
+          label: 迭代报告完成
+        - to: 完成
+          condition: { verdict: conditional_pass }
+          priority: 2
+          label: 报告有瑕疵但仍可用
+        - to: 完成
+          condition: { verdict: fail }
+          priority: 3
+          label: 报告生成失败，输出已有内容
+
+    # ========== 终止状态：完成 ==========
+    - name: 完成
+      description: 迭代流程完成
+      isInitial: false
+      isFinal: true
+      position: { x: 1400, y: 200 }
+      steps:
+        - id: diagnosis-complete-iterate
+          name: 诊断完成
+          agent: diagnosis-completer
+          role: defender
+          task: |
+            迭代流程完成，输出最终总结：
+            1. 迭代报告路径（含 AI 轮对比章节）
+            2. 本轮修复结论摘要（用户反馈落实情况 + 黄金标志结果）
+            3. 与 AI 轮的优劣结论摘要
+            4. 后续行动建议；前序标记 needs_runtime_validation 时不得表述为已解决
+            5. 【磁盘清理】输出总结后执行 rm -rf repo/ repo-engine/（demo 属于原 run 目录，不清理）。
+      transitions: []
+
+    # ========== 终止状态：终止 ==========
+    - name: 终止
+      description: 迭代流程异常终止（上下文不可恢复等）
+      isInitial: false
+      isFinal: true
+      position: { x: 100, y: 450 }
+      steps:
+        - id: diagnosis-abort-iterate
+          name: 终止记录
+          agent: diagnosis-completer
+          role: defender
+          task: |
+            记录迭代终止原因（通常是原 run 上下文缺失：黄金标志/Demo 不可恢复）。
+            然后执行 rm -rf repo/ repo-engine/ 清理。
+      transitions: []
+
+context:
+  projectRoot: "_template"
+  workspaceMode: isolated-copy
+  requirements: |
+    用户反馈迭代模式：基于已完成的诊断 run，按用户修改意见从方案设计阶段重新收敛。
+    输入（通过 globalContext 传入）：issue 元信息、parent-run-id / parent-run-dir、user-feedback。
+    输出：迭代诊断报告（含 AI 轮 vs 用户轮对比）+ 修复 patch。
+    黄金标志为冻结值，禁止修订；用户意见不豁免真机验证。
+  timeoutMinutes: 45
+  gitBaselineEnabled: false
+  mcpServers:
+    - vision-look
+  executionPolicy:
+    defaultEngine: opencode
+    defaultModel: 火山AI网关/glm-5.3
+  skills:
+    - cpf-ohos-issue-analysis
+    - flutter-issue-demo-reproduction
