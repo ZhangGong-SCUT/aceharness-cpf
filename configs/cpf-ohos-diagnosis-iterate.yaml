@@ -45,7 +45,7 @@ workflow:
                - repo-url + repo-branch 从 globalContext 或原 run 的 outputs/ohos-flutter-sdk.json 获取
                - clone 到本 run 目录 repo/，checkout 到原轮相同的 reset_target_merge_commit（从原 run 信息采集输出 JSON 或 ~/.aceharness/runs/<parent-run-id>/ 持久化状态中读取；找不到时 checkout 分支最新并明确标注）
                - 原轮涉及引擎层（repo-engine/）时同样恢复
-            3. 校验恢复完整性：黄金标志缺失时 verdict=fail 终止（无验收标准无法迭代）；demo/ 不存在时 verdict=fail 终止
+            3. 校验恢复完整性：黄金标志缺失时 verdict=fail 终止（无验收标准无法迭代）；demo/ 不存在时 verdict=fail 终止；黄金标志与 Demo 完好但 repo 未能还原到原轮精确 commit（回退到分支最新）时 verdict=conditional_pass 且 context_completeness=partial
             4. 输出继承上下文清单，供方案设计阶段使用
             输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、issue_golden_flag（冻结值）、root_cause_summary、problem_ownership、demo_path（绝对路径）、repo_commit（实际恢复到的 commit）、context_completeness（complete|partial）。
       transitions:
@@ -53,9 +53,13 @@ workflow:
           condition: { verdict: pass }
           priority: 1
           label: 上下文恢复完整，进入方案设计
+        - to: 方案设计
+          condition: { verdict: conditional_pass }
+          priority: 2
+          label: 上下文部分恢复（repo 回退到分支最新而非原轮精确 commit），带 partial 标注进入方案设计
         - to: 终止
           condition: { verdict: fail }
-          priority: 2
+          priority: 3
           label: 关键上下文缺失（黄金标志/Demo 不可恢复），终止
 
     # ========== 状态1：方案设计（红蓝对抗 + 用户反馈特权约束）==========
