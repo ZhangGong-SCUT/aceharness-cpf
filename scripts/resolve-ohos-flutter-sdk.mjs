@@ -40,8 +40,10 @@ function readYamlInventory(filePath) {
 }
 
 function flutterBin(sdkRoot) {
+  const posix = join(sdkRoot, 'bin', 'flutter');
+  if (process.platform !== 'win32' && existsSync(posix)) return posix;
   const bat = join(sdkRoot, 'bin', 'flutter.bat');
-  return existsSync(bat) ? bat : join(sdkRoot, 'bin', 'flutter');
+  return existsSync(bat) ? bat : posix;
 }
 
 function usable(sdkRoot) {
@@ -61,7 +63,30 @@ function readBranch(repoPath) {
   const head = join(repoPath, '.git', 'HEAD');
   if (!existsSync(head)) return null;
   const text = readFileSync(head, 'utf-8').trim();
-  return (text.match(/^ref:\s*refs\/heads\/(.+)$/) || [])[1] || null;
+  const ref = (text.match(/^ref:\s*refs\/heads\/(.+)$/) || [])[1] || null;
+  if (ref) return ref.trim();
+  // detached HEAD：origin/HEAD → packed-refs → 唯一本地分支
+  const hash = (text.match(/^[0-9a-f]{40}$/i) || [])[0];
+  if (!hash) return null;
+  const originHead = join(repoPath, '.git', 'refs', 'remotes', 'origin', 'HEAD');
+  if (existsSync(originHead)) {
+    const oh = (readFileSync(originHead, 'utf-8').trim().match(/^ref:\s*refs\/remotes\/origin\/(.+)$/) || [])[1];
+    if (oh) return oh.trim();
+  }
+  const packed = join(repoPath, '.git', 'packed-refs');
+  if (existsSync(packed)) {
+    const matches = [...readFileSync(packed, 'utf-8').matchAll(/^([0-9a-f]{40}) refs\/remotes\/origin\/(\S+)$/gm)]
+      .filter((m) => m[1] === hash)
+      .map((m) => m[2]);
+    const preferred = matches.find((b) => /^(dev|master|main)$/.test(b));
+    if (preferred || matches.length > 0) return preferred || matches[0];
+  }
+  const headsDir = join(repoPath, '.git', 'refs', 'heads');
+  if (existsSync(headsDir)) {
+    const heads = readdirSync(headsDir).filter((f) => f !== '.DS_Store');
+    if (heads.length === 1 && readFileSync(join(headsDir, heads[0]), 'utf-8').trim() === hash) return heads[0];
+  }
+  return null;
 }
 
 const args = parseArgs(process.argv.slice(2));

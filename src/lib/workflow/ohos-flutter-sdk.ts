@@ -31,9 +31,11 @@ export type ResolvedOhosFlutterSdk = {
 const CONFIG_NAME = 'ohos-flutter-sdks.yaml';
 
 export function flutterExecutable(sdkRoot: string): string {
+  const posix = join(sdkRoot, 'bin', 'flutter');
+  if (process.platform !== 'win32' && existsSync(posix)) return posix;
   const bat = join(sdkRoot, 'bin', 'flutter.bat');
   if (existsSync(bat)) return bat;
-  return join(sdkRoot, 'bin', 'flutter');
+  return posix;
 }
 
 export function isUsableOhosFlutterSdk(sdkRoot: string): boolean {
@@ -59,7 +61,37 @@ export function readRepoBranchFromDisk(repoPath: string): string | null {
   try {
     const text = readFileSync(headPath, 'utf-8').trim();
     const ref = text.match(/^ref:\s*refs\/heads\/(.+)$/);
-    return ref?.[1]?.trim() || null;
+    if (ref?.[1]) return ref[1].trim();
+    // detached HEAD（裸 hash）：按可靠性依次兜底
+    const hash = text.match(/^[0-9a-f]{40}$/i)?.[0];
+    if (!hash) return null;
+    // 1) origin/HEAD 的 symbolic ref（clone 时的默认分支）
+    const originHeadPath = join(repoPath, '.git', 'refs', 'remotes', 'origin', 'HEAD');
+    if (existsSync(originHeadPath)) {
+      const originHead = readFileSync(originHeadPath, 'utf-8').trim();
+      const originRef = originHead.match(/^ref:\s*refs\/remotes\/origin\/(.+)$/);
+      if (originRef?.[1]) return originRef[1].trim();
+    }
+    // 2) packed-refs 中 hash 匹配的 refs/remotes/origin/<branch>（优先 dev/main 等主线）
+    const packedRefsPath = join(repoPath, '.git', 'packed-refs');
+    if (existsSync(packedRefsPath)) {
+      const packed = readFileSync(packedRefsPath, 'utf-8');
+      const matches = [...packed.matchAll(/^([0-9a-f]{40}) refs\/remotes\/origin\/(\S+)$/gm)]
+        .filter((m) => m[1] === hash)
+        .map((m) => m[2]);
+      const preferred = matches.find((b) => /^(dev|master|main)$/.test(b));
+      if (preferred || matches.length > 0) return preferred || matches[0];
+    }
+    // 3) refs/heads/ 下唯一本地分支
+    const headsDir = join(repoPath, '.git', 'refs', 'heads');
+    if (existsSync(headsDir)) {
+      const heads = readdirSync(headsDir).filter((f) => f !== '.DS_Store');
+      if (heads.length === 1) {
+        const headRef = readFileSync(join(headsDir, heads[0]), 'utf-8').trim();
+        if (headRef === hash) return heads[0];
+      }
+    }
+    return null;
   } catch {
     return null;
   }

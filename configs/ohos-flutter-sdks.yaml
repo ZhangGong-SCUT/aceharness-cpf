@@ -1,9 +1,12 @@
 # 本机 OHOS Flutter SDK 清单。诊断按 repo/ 分支对号入座，禁止用对不上的日常 SDK 凑真机。
 # 只登记「装好的 SDK」（有 bin/flutter + bin/cache 引擎产物），不要登记 git clone 的纯源码仓。
 # 路径按你机器改。没有的版本先空着或删掉；对不上时工作流会 engine_aligned=false，不得 pass。
+#
+# 本机（Linux /home/flutter）已装 5 个版本，全部来自 CPF-Flutter/flutter_flutter 对应 dev 分支
+# 浅克隆 + `flutter precache --ohos`（2026-09-06 安装，HAR 产物已通过 gzip CRC 校验）。
+# dailySdk 不配置：本机没有日常开发 SDK，5 个 SDK 全部是工作流专用。
 
-dailySdk: D:\a_flutter\flutter_flutter
-sdkRoot: D:\flutter-sdks
+sdkRoot: /home/flutter/flutter-sdks
 
 sdks:
   - id: 3.22.3-ohos
@@ -14,18 +17,18 @@ sdks:
       - oh-3.22.3-dev
       - oh-3.22.3-release
       - oh-3.22.3
-    path: D:\flutter-sdks\3.22.3-ohos
-  - id: 3.27.5-ohos
-    version: 3.27.5
+    path: /home/flutter/flutter-sdks/3.22.3-ohos
+  - id: 3.27.4-ohos
+    version: 3.27.4
     aliases:
-      - 3.27.5-ohos
-      - 3.27.5
-      - 3.27.4
       - 3.27.4-ohos
+      - 3.27.4
+      - 3.27.5
+      - 3.27.5-ohos
       - oh-3.27
       - oh-3.27.4-dev
       - br_3.27.4-ohos
-    path: D:\a_flutter\flutter_flutter
+    path: /home/flutter/flutter-sdks/3.27.4-ohos
   - id: 3.35.7-ohos
     version: 3.35.7
     aliases:
@@ -36,7 +39,7 @@ sdks:
       - oh-3.35.7-release
       - oh-3.35.7-dev
       - oh-3.35.7
-    path: D:\flutter-sdks\3.35.7-ohos
+    path: /home/flutter/flutter-sdks/3.35.7-ohos
   - id: 3.41.9-ohos
     version: 3.41.9
     aliases:
@@ -45,7 +48,7 @@ sdks:
       - 3.41.10
       - oh-3.41.9-dev
       - oh-3.41.9
-    path: D:\flutter-sdks\3.41.9-ohos
+    path: /home/flutter/flutter-sdks/3.41.9-ohos
   - id: 3.44.9-ohos
     version: 3.44.9
     aliases:
@@ -53,4 +56,5 @@ sdks:
       - 3.44.9
       - oh-3.44.9-dev
       - oh-3.44.9
-    path: D:\flutter-sdks\3.44.9-ohos
+      - dev
+    path: /home/flutter/flutter-sdks/3.44.9-ohos
