@@ -69,12 +69,14 @@ workflow:
           role: defender
           task: |
             按 gitcode-pr-review Skill 检查 OpenHarmony DCP 门禁，不要请求 /commits/{sha}/status。
-            脚本会自动从 run 的 state.yaml 检测 globalContext 中的 user_fix_feedback: / user_revert: 指令行（AIWeb 用户人工指令），命中时 phase 自动覆盖为 user_fix，无需额外参数。
+            脚本会自动从 run 的 state.yaml 检测 globalContext 中的 user_fix_feedback: / user_revert: / user_apply_patch: 指令行（AIWeb 用户人工指令），命中时 phase 自动覆盖为 user_fix，无需额外参数。
+            脚本还会检测 outputs/review-suggestion.json（本 run 已生成的检视建议）：建议存在且 PR head 未变 → phase=review_pending_decision。
             1. node skills/gitcode-pr-review/scripts/check-pr-gates.mjs --pr-url <PR_URL> --author <author> --out outputs
             2. 读 outputs/gate-check.json 的 phase
             3. phase=running → conditional_pass，准备挂起等 Webhook，禁止 sleep 空等
-            4. 已关闭/不是自己的 PR → fail
-            5. 其余 phase → pass，交给分类处置
+            4. phase=review_pending_decision → conditional_pass 去挂起：检视建议已生成等用户在 AIWeb 决策，不要重新生成建议、不要推送、不要 start build
+            5. 已关闭/不是自己的 PR → fail
+            6. 其余 phase → pass，交给分类处置
             欢迎评论没到之前不要 start build。不要等 AI已检视 才往下走。
             输出 JSON：verdict、phase、summary、artifact_path。
         - id: challenge-pr-gates
@@ -119,8 +121,9 @@ workflow:
           role: defender
           task: |
             记录当前 phase=running，等待下一次 Merge Request / Note Webhook。
+            若 outputs/review-suggestion.json 存在（检视建议模式）：waiting_for=user_decision（用户在 AIWeb 面板决策应用/驳回/反馈），summary 注明等待用户决策。
             不要 sleep，不要再跑三个 Agent 等 60 分钟。不要评论 submit。
-            verdict=pass。输出 JSON：verdict、summary、waiting_for=webhook。
+            verdict=pass。输出 JSON：verdict、summary、waiting_for=webhook 或 user_decision。
       transitions:
         - to: 等待门禁
           condition: { verdict: pass }
@@ -241,7 +244,9 @@ workflow:
           agent: developer
           role: defender
           task: |
-            运行 skills/gitcode-pr-review/scripts/fetch-ai-review.mjs --pr-url <PR_URL> --author <author> --out outputs
+            若 outputs/review-suggestion.json 存在（本 run 已生成检视建议，mode=suggestion）：不要跑 fetch-ai-review，
+            直接 verdict=conditional_pass 去挂起——建议等用户在 AIWeb 面板决策（应用/驳回/反馈），不要重新生成建议。
+            否则运行 skills/gitcode-pr-review/scripts/fetch-ai-review.mjs --pr-url <PR_URL> --author <author> --out outputs
             若 outputs/ai-review-comments.json 的 actionable_count>0：verdict=fail，next_state=检视修复。
             若 actionable_count=0 且 ai_reviewed=false（未被 AI 检视）：同样 verdict=fail，next_state=检视修复——
             检视修复状态会识别 ai_reviewed=false 并执行「同主题跨分支修复同步」而非常规检视修复。
@@ -408,10 +413,15 @@ workflow:
             运行 skills/gitcode-pr-review/scripts/fetch-ai-review.mjs --pr-url <PR_URL> --author <author> --out outputs
             读 outputs/ai-review-comments.json，按以下顺序判断执行模式：
 
-            【模式A：常规检视修复（ai_reviewed=true 或 actionable_count>0）】
+            【模式A：常规检视修复（ai_reviewed=true 或 actionable_count>0）——建议模式，不直接推送】
             actionable_count=0 且 ai_reviewed=true：不要空改，verdict=pass。
             有意见：只处理 comments[]（当前代码的 AI 检视意见和人工行内评论），stale_comments 是旧代码意见不要修。
             在 repo/ 按 path/line 改，只改检视点到的文件。本状态不要 git commit / git push。
+            改完代码后生成建议产物（用户在 AIWeb 面板审阅后才决定是否推送）：
+            1. git -C repo diff > outputs/fix.patch（无改动则跳过）
+            2. 写 outputs/review-suggestion.json：{"mode":"suggestion","head_sha":"<git -C repo rev-parse HEAD>","comment_count":<actionable 条数>,"generated_at":"<ISO8601>"}
+            3. verdict=pass、summary 注明「已生成 N 条建议修复（未推送），等待用户决策」。
+            用户不采纳是常态：意见是建议不是门禁，不要为了"修完"而扩大改动或重试。
             输出 JSON：verdict、summary、applied_issues。
 
             【模式B：同主题跨分支修复同步（ai_reviewed=false 且 actionable_count=0）】
@@ -435,6 +445,8 @@ workflow:
 
             【模式C：用户人工指令（globalContext 含指令行时优先）】
             - user_fix_feedback: 行及后续缩进行为用户修改指令：在 repo/ 按指令修改，只改指令涉及的文件。applied_issues 填「用户反馈：<指令摘要>」。
+            - user_apply_patch: run-<id> 行：用户在 AIWeb 面板确认应用建议修复。checkout fork head_ref 后读取 ~/.aceharness/runs/run-<id>/outputs/fix.patch，
+              git -C repo apply --check 通过后 git -C repo apply；apply 冲突说明 PR 基线已漂移（用户等待期间又推送过），verdict=conditional_pass 并注明需在面板重新生成建议。applied_issues 填「应用建议修复（源 run-<id>）」。此模式用户已确认，改完正常走推送。
             - user_revert: from <sha> to <sha> 行：在 repo/ 执行 git revert --no-commit <sha>..<sha>（无变更则 verdict=pass 并说明无可回退）。applied_issues 填「回退 AI 检视修复」。
         - id: challenge-ai-review
           name: 质疑检视修复
@@ -450,15 +462,16 @@ workflow:
           agent: fix-reviewer
           role: judge
           task: |
-            pass 去推送并触发（含模式B同步成功或无兄弟可同步）。
-            conditional_pass：模式A继续改；模式B apply 冲突去人工确认。
-            fail 去人工确认。
+            pass 去推送并触发（模式B同步成功或无兄弟可同步、模式C指令完成、模式A无意见无需建议）。
+            conditional_pass：模式A已生成建议修复（outputs/review-suggestion.json 存在）→ 去挂起等用户在 AIWeb 面板决策（应用/驳回/反馈），不要推送。模式C user_apply_patch 基线冲突也走 conditional_pass 去挂起（需重新生成建议）。
+            fail 去人工确认（模式B apply 冲突、指令执行失败）。
       transitions:
         - to: 推送并触发
           condition: { verdict: pass }
           priority: 1
-        - to: 检视修复
+        - to: 挂起
           condition: { verdict: conditional_pass }
+          label: 建议修复等用户决策（应用/驳回/反馈）
           priority: 2
         - to: 人工确认
           condition: { verdict: fail }

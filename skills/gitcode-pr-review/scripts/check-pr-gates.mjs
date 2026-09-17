@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { classifyOhosPrGates, commentBelongsToPull, DEFAULT_START_BUILD_MAX, DEFAULT_JITTER_RETRY_MAX, normalizeComments, normalizeLabels } from './ohos-pr-gates.mjs';
@@ -145,6 +146,20 @@ function mergeComments(...groups) {
   return out;
 }
 
+/**
+ * 检视建议等待决策判定：建议标记存在（mode=suggestion）且记录的 head_sha 与 PR 当前 head 一致。
+ * head 漂移（用户等待期间又推送）→ false，走正常流程（意见可能已 stale）。
+ */
+export function detectReviewPendingDecision(suggestion, currentHead) {
+  return Boolean(
+    suggestion
+    && suggestion.mode === 'suggestion'
+    && suggestion.head_sha
+    && currentHead
+    && String(suggestion.head_sha).trim() === String(currentHead).trim()
+  );
+}
+
 async function main() {
   const prUrl = arg('--pr-url');
   const parsed = parsePrUrl(prUrl);
@@ -181,14 +196,21 @@ async function main() {
     const m = stateRaw.match(/^(?!- )[ \t]*manual-start-by:[ \t]*(\S+)[ \t]*$/m);
     if (m) manualStartBy = m[1].toLowerCase();
   } catch { /* state.yaml 不存在（直跑脚本）时无豁免 */ }
-  // AIWeb 用户人工指令检测：globalContext 含 user_fix_feedback:/user_revert: 行 → phase 覆盖为 user_fix
-  // （只在 globalContext 段内匹配，避免误中步骤结论文本里的字样）
+  // AIWeb 用户人工指令检测：globalContext 含 user_fix_feedback:/user_revert:/user_apply_patch: 行 → phase 覆盖为 user_fix
+  // （只在 globalContext 段内匹配，避免误中步骤结论文本里的字样；块样式 |- / >- 均可）
   let phaseOverride = '';
   try {
     const stateRaw = await readFile(resolve(outDir, '..', 'state.yaml'), 'utf8');
-    const gc = /^globalContext: >-\n([\s\S]*?)(?=\n[^\s])/m.exec(stateRaw)?.[1] || '';
-    if (/^\s*user_(?:fix_feedback|revert):/m.test(gc)) phaseOverride = 'user_fix';
+    const gc = /^globalContext:\s*[|>][+-]?\n([\s\S]*?)(?=\n[^\s])/m.exec(stateRaw)?.[1] || '';
+    if (/^\s*user_(?:fix_feedback|revert|apply_patch):/m.test(gc)) phaseOverride = 'user_fix';
   } catch { /* 直跑脚本时无指令 */ }
+  // 检视建议等待决策检测：本 run 已生成建议（review-suggestion.json）且 PR head 未变 → 等用户决策，不重新生成
+  // （仅在正常分类为 ai_review_pending 时生效：用户自己推送过修复 → 意见已 stale → 走正常流程）
+  let reviewSuggestion = null;
+  try {
+    reviewSuggestion = JSON.parse(await readFile(resolve(outDir, 'review-suggestion.json'), 'utf8'));
+  } catch { /* 无建议标记 → 正常流程 */ }
+  const reviewPendingDecision = detectReviewPendingDecision(reviewSuggestion, String(pull?.head?.sha || pull?.head?.id || '').trim());
   const ownPr = manualStartBy
     ? manualStartBy === author.toLowerCase()      // 手动模式：PR 作者必须 = 手动开启者
     : (allowedAuthors.length === 0
@@ -220,9 +242,17 @@ async function main() {
 
   if (phaseOverride && !closed && ownPr) {
     classified.phase = phaseOverride;
-    classified.summary = 'AIWeb 用户人工指令（按反馈修改/回退修复），跳过门禁分类直达检视修复';
+    classified.summary = 'AIWeb 用户人工指令（按反馈修改/回退修复/应用建议），跳过门禁分类直达检视修复';
   }
 
+  // 检视建议等待决策：建议已生成且 PR head 未变 → 挂起等用户在 AIWeb 决策，不要重新生成建议
+  // （不依赖 phase=ai_review_pending：检视路由由分流检视步骤的 fetch-ai-review 驱动，
+  //   check-pr-gates 的 phase 可能是 green/running 等；此处直接覆盖为 review_pending_decision，
+  //   由 等待门禁→挂起 一步收口，避免唤醒后重走分流链重新生成建议烧 token）
+  if (!phaseOverride && reviewPendingDecision && !closed && ownPr) {
+    classified.phase = 'review_pending_decision';
+    classified.summary = '检视建议修复已生成（未推送），等待用户在 AIWeb 面板决策：应用 / 驳回 / 反馈';
+  }
   const result = {
     ...classified,
     pr_url: prUrl || `https://gitcode.com/${owner}/${repo}/merge_requests/${number}`,
@@ -244,7 +274,18 @@ async function main() {
   if (result.verdict === 'fail' && (closed || !ownPr)) process.exit(2);
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error.message || error}\n`);
-  process.exit(1);
-});
+function isDirectRun() {
+  // realpath 双向解析符号链接（skills 目录经 .aceharness 链接调用时 argv 与 import.meta.url 路径不一致）
+  try {
+    return realpathSync(resolve(process.argv[1] || '')) === realpathSync(resolve(new URL(import.meta.url).pathname));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectRun()) {
+  main().catch((error) => {
+    process.stderr.write(`${error.message || error}\n`);
+    process.exit(1);
+  });
+}

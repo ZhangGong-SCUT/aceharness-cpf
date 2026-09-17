@@ -3,7 +3,6 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { commentBelongsToPull, commentTimeLE, selectActionableReviews } from './ohos-pr-gates.mjs';
 import { resolveGitcodeToken } from './gitcode-token.mjs';
-
 const API_ROOT = process.env.GITCODE_API_ROOT || 'https://gitcode.com/api/v5';
 
 function arg(name, fallback = '') {
@@ -78,6 +77,21 @@ function markdownList(items, startIndex = 1) {
   ]);
 }
 
+/**
+ * 驳回标记检测：评论里存在【AI检视处理】开头的标记评论，且最新的标记晚于全部待处理意见
+ * → { dismissed: true, dismissedAt }。驳回之后新出现的检视意见不受影响。
+ */
+export function detectReviewDismissal(comments, actionable = []) {
+  const markers = (Array.isArray(comments) ? comments : []).filter((c) => /^\s*【AI检视处理】/.test(String(c?.body || '')));
+  if (!markers.length) return { dismissed: false, dismissedAt: null };
+  const latest = markers.reduce((a, b) => (commentTimeLE(String(a.created_at || ''), String(b.created_at || '')) ? b : a));
+  const markerAt = String(latest.created_at || '');
+  if (!markerAt) return { dismissed: false, dismissedAt: null };
+  const pending = actionable.length ? actionable : comments;
+  const dismissed = pending.every((c) => commentTimeLE(String(c.created_at || ''), markerAt));
+  return { dismissed, dismissedAt: dismissed ? markerAt : null };
+}
+
 async function main() {
   const prUrl = arg('--pr-url');
   const parsed = parsePrUrl(prUrl);
@@ -131,13 +145,28 @@ async function main() {
   });
   const comments = [...merged.values()];
 
-  const { actionable, stale, noise, counts } = selectActionableReviews(comments, {
+  let { actionable, stale, noise, counts } = selectActionableReviews(comments, {
     include_stale: includeStale,
     include_conversation: includeConversation,
     last_pushed_at: lastPushedAt,
   });
 
-  const summary = counts.actionable_count
+  // 驳回标记：AIWeb 用户在面板「驳回」后发的处理评论（【AI检视处理】开头）。
+  // 晚于全部待处理意见 → 本轮意见视为已处理（用户不采纳），不再生成建议修复。
+  // 驳回后又出现的新检视意见（重新检视）不受影响，仍正常处理。
+  const dismissal = detectReviewDismissal(comments, actionable);
+  let dismissed = dismissal.dismissed;
+  let dismissedAt = dismissal.dismissedAt;
+  if (dismissed) {
+    actionable = [];
+    counts.actionable_count = 0;
+    counts.ai_review_count = 0;
+    counts.human_diff_comment_count = 0;
+  }
+
+  const summary = dismissed
+    ? `检视意见已被用户在 AIWeb 面板驳回（${dismissedAt}），用户自行处理代码，不要据此修改。`
+    : counts.actionable_count
     ? `共 ${counts.actionable_count} 条检视意见需按意见修改（AI 检视 ${counts.ai_review_count} 条、人工行内评论 ${counts.human_diff_comment_count} 条）。`
     : aiReviewed
       ? '没有需要处理的检视意见，无需按检视改代码。'
@@ -166,6 +195,8 @@ async function main() {
     stale_count: counts.stale_count,
     noise_filtered_count: counts.noise_filtered_count,
     last_pushed_at: lastPushedAt || null,
+    dismissed,
+    dismissed_at: dismissedAt,
     comments: actionable.map(toArtifactComment),
     stale_comments: stale.map(toArtifactComment),
     fetched_at: new Date().toISOString(),

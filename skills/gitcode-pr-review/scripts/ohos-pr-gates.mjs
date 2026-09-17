@@ -16,6 +16,7 @@ export const GATE_PHASES = [
 export const CLASSIFY_ROUTES = {
   分类处置: {
     user_fix: { verdict: 'fail', next_state: '检视修复' },
+    review_pending_decision: { verdict: 'conditional_pass', next_state: '挂起' },
     dco_failed: { verdict: 'fail', next_state: 'DCO修复' },
     running: { verdict: 'conditional_pass', next_state: '挂起' },
     default: { verdict: 'pass', next_state: '分流静态' },
@@ -40,6 +41,7 @@ export const CLASSIFY_ROUTES = {
   分流检视: {
     ai_review_pending: { verdict: 'fail', next_state: '检视修复' },
     ai_unreviewed: { verdict: 'fail', next_state: '同步修复' },
+    review_pending_decision: { verdict: 'conditional_pass', next_state: '挂起' },
     running: { verdict: 'conditional_pass', next_state: '挂起' },
     default: { verdict: 'pass', next_state: '分流触发' },
   },
