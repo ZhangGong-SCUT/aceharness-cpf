@@ -57,6 +57,26 @@ function closeSdkServerEntry(entry: SdkServerEntry): void {
   try { entry.server?.close(); } catch { /* best-effort */ }
 }
 
+/**
+ * 存活探测：池命中时先确认 serve 进程还在。
+ * 背景：serve 进程被杀/崩溃后池条目仍持有死连接（连接拒绝瞬时失败），
+ * 引擎快速重试会连续打中死 serve → "引擎连续失败"整个 run 挂掉（实测复现）。
+ * 探测用短超时 fetch，任何 HTTP 响应（含 404）都算活。
+ */
+async function isSdkServerAlive(entry: SdkServerEntry): Promise<boolean> {
+  if (!entry.server) return false;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    const res = await fetch(`${entry.server.url.replace(/\/$/, '')}/__pool_probe__`, { signal: controller.signal });
+    return res.status < 500; // 404 也算活
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function evictIdleSdkServers(): void {
   const now = Date.now();
   for (const [key, entry] of serverPool) {
@@ -153,8 +173,13 @@ async function ensureServer(userId?: string): Promise<{ client: OpenCodeHttpClie
 
   const existing = serverPool.get(key);
   if (existing && !existing.starting && existing.fingerprint === nextFingerprint) {
-    existing.lastActiveAt = Date.now();
-    return { client: existing.client!, url: existing.server!.url };
+    if (await isSdkServerAlive(existing)) {
+      existing.lastActiveAt = Date.now();
+      return { client: existing.client!, url: existing.server!.url };
+    }
+    console.log(`[opencode-sdk] pooled server unreachable (pool key=${key || '(default)'}), evicting and respawning...`);
+    closeSdkServerEntry(existing);
+    serverPool.delete(key);
   }
 
   // 同用户 env 变化（罕见）→ 只重启该用户自己的池条目，不影响其他用户
