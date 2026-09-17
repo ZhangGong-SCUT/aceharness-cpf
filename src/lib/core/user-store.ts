@@ -3,7 +3,7 @@
  * User records are persisted in data/users.json.
  */
 
-import { mkdir, writeFile, readFile } from 'fs/promises';
+import { mkdir, writeFile, readFile, rename, unlink, copyFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomBytes, createHash, randomUUID } from 'crypto';
 import { getWorkspaceDataFile, getWorkspaceDataDir } from '@/lib/core/app-paths';
@@ -95,20 +95,56 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
   return prev.then(fn).finally(() => resolve());
 }
 
-export async function loadUsers(): Promise<User[]> {
-  if (!existsSync(USERS_FILE)) return [];
+/**
+ * users.json 损坏（读取/解析失败或非数组）时，把原文件备份为 users.json.corrupt-<ts>，
+ * 避免后续 saveUsers 用空列表覆盖导致数据永久丢失。
+ */
+async function backupCorruptUsersFile(reason: string): Promise<void> {
   try {
-    const content = await readFile(USERS_FILE, 'utf-8');
-    const users = JSON.parse(content);
-    return Array.isArray(users) ? users.map(normalizeLoadedUser) : [];
-  } catch {
-    return [];
+    const backupPath = `${USERS_FILE}.corrupt-${Date.now()}`;
+    await copyFile(USERS_FILE, backupPath);
+    console.error(`[user-store] users.json 损坏（${reason}），已备份至 ${backupPath}，本次按空用户列表处理`);
+  } catch (backupError: any) {
+    console.error(`[user-store] users.json 损坏（${reason}）且备份失败: ${backupError?.message || backupError}`);
   }
 }
 
+export async function loadUsers(): Promise<User[]> {
+  if (!existsSync(USERS_FILE)) return [];
+  let content: string;
+  try {
+    content = await readFile(USERS_FILE, 'utf-8');
+  } catch (error: any) {
+    await backupCorruptUsersFile(`读取失败: ${error?.message || error}`);
+    return [];
+  }
+  let users: unknown;
+  try {
+    users = JSON.parse(content);
+  } catch (error: any) {
+    await backupCorruptUsersFile(`JSON 解析失败: ${error?.message || error}`);
+    return [];
+  }
+  if (!Array.isArray(users)) {
+    await backupCorruptUsersFile(`内容不是数组（${typeof users}，长度 ${content.length}）`);
+    return [];
+  }
+  return users.map(normalizeLoadedUser);
+}
+
+/**
+ * 原子写入：先写临时文件再 rename，避免进程被 kill 时留下 0 字节/半截文件。
+ */
 async function saveUsers(users: User[]): Promise<void> {
   await mkdir(getWorkspaceDataDir(), { recursive: true });
-  await writeFile(USERS_FILE, JSON.stringify(users, null, 2), 'utf-8');
+  const tmpPath = `${USERS_FILE}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    await writeFile(tmpPath, JSON.stringify(users, null, 2), 'utf-8');
+    await rename(tmpPath, USERS_FILE);
+  } catch (error) {
+    await unlink(tmpPath).catch(() => {});
+    throw error;
+  }
 }
 
 export async function getUserById(id: string): Promise<User | undefined> {
@@ -318,9 +354,15 @@ export async function deleteUser(id: string): Promise<void> {
     if (idx === -1) throw new Error('用户不存在');
     users.splice(idx, 1);
     await saveUsers(users);
+    loadTokensSync();
+    let tokensChanged = false;
     for (const [token, info] of tokenStore.entries()) {
-      if (info.userId === id) tokenStore.delete(token);
+      if (info.userId === id) {
+        tokenStore.delete(token);
+        tokensChanged = true;
+      }
     }
+    if (tokensChanged) persistTokens();
   });
 }
 
@@ -356,6 +398,17 @@ export async function resetPasswordByQuestion(email: string, answer: string, new
     if (hashAnswer(answer, user.salt) !== user.answerHash) {
       throw new Error('密保答案错误');
     }
+    user.passwordHash = hashPassword(newPwd, user.salt);
+    await saveUsers(users);
+  });
+}
+
+/** 通过邮箱直接重置密码（验证码验证通过后调用，不校验密保） */
+export async function resetPasswordByEmail(email: string, newPwd: string): Promise<void> {
+  return withLock(async () => {
+    const users = await loadUsers();
+    const user = users.find((u) => u.email === email);
+    if (!user) throw new Error('用户不存在');
     user.passwordHash = hashPassword(newPwd, user.salt);
     await saveUsers(users);
   });
