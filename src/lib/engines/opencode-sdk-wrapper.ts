@@ -33,14 +33,40 @@ import {
 } from './opencode-http-adapter';
 import { registerOpenCodeNativeAgent, registerOpenCodeVisionInspector } from './opencode-native-agent';
 
-/** Singleton server instance shared across all sessions */
-let serverInstance: { url: string; close: () => void } | null = null;
-let serverEnvFingerprint: string | null = null;
-let serverStarting: Promise<{ url: string; close: () => void }> | null = null;
-let serverStartingFingerprint: string | null = null;
-let clientInstance: OpenCodeHttpClient | null = null;
+/**
+ * Per-user 常驻 server 池。
+ * 旧实现是全局单例 + env 指纹比对：不同 userId 的引擎交替执行时触发
+ * "configured env changed, restarting HTTP server"，杀掉共享 serve 冷启动重启——
+ * 多 run 并发时所有 HTTP 路径步骤全部阻塞（派发空转根因之一）。
+ * 现改为 userId → 常驻 serve 池：各用户独立 serve 互不干扰，2 小时闲置自动回收
+ * （opencode 会话存于共享存储，跨 serve 实例可 resume）。
+ */
+interface SdkServerEntry {
+  server: { url: string; close: () => void } | null;
+  client: OpenCodeHttpClient | null;
+  fingerprint: string;
+  starting: Promise<void> | null;
+  lastActiveAt: number;
+}
+const serverPool = new Map<string, SdkServerEntry>();
+const SDK_SERVER_IDLE_TTL_MS = 2 * 60 * 60 * 1000;
 let activeExecutions = 0;
 const OPENCODE_SERVER_STARTUP_TIMEOUT_MS = 20_000;
+
+function closeSdkServerEntry(entry: SdkServerEntry): void {
+  try { entry.server?.close(); } catch { /* best-effort */ }
+}
+
+function evictIdleSdkServers(): void {
+  const now = Date.now();
+  for (const [key, entry] of serverPool) {
+    if (!entry.starting && now - entry.lastActiveAt > SDK_SERVER_IDLE_TTL_MS) {
+      console.log(`[opencode-sdk] evicting idle server (pool key=${key || '(default)'}, idle=${Math.round((now - entry.lastActiveAt) / 60000)}min)`);
+      closeSdkServerEntry(entry);
+      serverPool.delete(key);
+    }
+  }
+}
 const IGNORABLE_OPENCODE_SDK_ERROR_PATTERNS = [
   /ECONNRESET/i,
   /child exited early code=1 signal=null; stderr tail:\s*<empty>/i,
@@ -61,13 +87,6 @@ async function runtimeImport<T = any>(moduleName: string): Promise<T> {
     }
     throw error;
   }
-}
-
-function requireClient(): OpenCodeHttpClient {
-  if (!clientInstance) {
-    throw new Error('[opencode-sdk] client not initialized');
-  }
-  return clientInstance;
 }
 
 function configuredEnvOptions(userId?: string): { userId: string } | undefined {
@@ -119,42 +138,52 @@ async function withTemporaryProcessEnv<T>(env: NodeJS.ProcessEnv, action: () => 
 }
 
 async function ensureServer(userId?: string): Promise<{ client: OpenCodeHttpClient; url: string }> {
+  const key = userId || '';
   const serverEnv = buildConfiguredProcessEnvSync(
     undefined,
     process.env,
     configuredEnvOptions(userId),
   );
   const nextFingerprint = JSON.stringify({
-    userId: userId || '',
+    userId: key,
     env: fingerprintEnv(serverEnv),
   });
 
-  if (clientInstance && serverInstance && serverEnvFingerprint === nextFingerprint) {
-    return { client: clientInstance, url: serverInstance.url };
+  evictIdleSdkServers();
+
+  const existing = serverPool.get(key);
+  if (existing && !existing.starting && existing.fingerprint === nextFingerprint) {
+    existing.lastActiveAt = Date.now();
+    return { client: existing.client!, url: existing.server!.url };
   }
 
-  if (serverStarting && serverStartingFingerprint === nextFingerprint) {
-    const server = await serverStarting;
-    return { client: requireClient(), url: server.url };
+  // 同用户 env 变化（罕见）→ 只重启该用户自己的池条目，不影响其他用户
+  if (existing && !existing.starting && existing.fingerprint !== nextFingerprint) {
+    console.log(`[opencode-sdk] user=${key || '(default)'} env changed, restarting its HTTP server...`);
+    closeSdkServerEntry(existing);
+    serverPool.delete(key);
   }
 
-  if (serverStarting) {
-    try {
-      await serverStarting;
-    } catch {
-      // ignore: we are about to start a fresh server below
+  // 并发去重：同 key 启动中 → 等它完成后复用
+  if (existing?.starting) {
+    await existing.starting.catch(() => { /* 启动失败则走下方新建 */ });
+    const ready = serverPool.get(key);
+    if (ready && ready.client && ready.fingerprint === nextFingerprint) {
+      ready.lastActiveAt = Date.now();
+      return { client: ready.client, url: ready.server!.url };
     }
   }
 
-  if (serverInstance && serverEnvFingerprint !== nextFingerprint) {
-    console.log('[opencode-sdk] configured env changed, restarting HTTP server...');
-    OpenCodeSdkEngineWrapper.shutdown();
-  }
-
-  serverStartingFingerprint = nextFingerprint;
-  serverStarting = (async () => {
+  const entry: SdkServerEntry = {
+    server: null,
+    client: null,
+    fingerprint: nextFingerprint,
+    starting: null,
+    lastActiveAt: Date.now(),
+  };
+  const starting = (async () => {
     const { createOpencodeClient, createOpencodeServer } = await runtimeImport<typeof import('@opencode-ai/sdk')>('@opencode-ai/sdk');
-    console.log(`[opencode-sdk] starting HTTP server with command ${getOpencodeCommand(userId)}...`);
+    console.log(`[opencode-sdk] starting HTTP server (pool key=${key || '(default)'}) with command ${getOpencodeCommand(userId)}...`);
 
     const server = await withTemporaryProcessEnv(serverEnv, async () => {
       return await createOpencodeServer({
@@ -164,20 +193,26 @@ async function ensureServer(userId?: string): Promise<{ client: OpenCodeHttpClie
       } as any);
     });
 
-    serverInstance = server;
-    serverEnvFingerprint = nextFingerprint;
-    clientInstance = createOpencodeClient({
+    entry.server = server;
+    entry.client = createOpencodeClient({
       baseUrl: server.url,
     }) as unknown as OpenCodeHttpClient;
-    console.log(`[opencode-sdk] server started at ${server.url}`);
-    return server;
-  })().finally(() => {
-    serverStarting = null;
-    serverStartingFingerprint = null;
-  });
-
-  const server = await serverStarting;
-  return { client: requireClient(), url: server.url };
+    console.log(`[opencode-sdk] server started at ${server.url} (pool key=${key || '(default)'})`);
+  })();
+  entry.starting = starting;
+  serverPool.set(key, entry);
+  try {
+    await starting;
+  } catch (error) {
+    if (serverPool.get(key) === entry) {
+      closeSdkServerEntry(entry);
+      serverPool.delete(key);
+    }
+    throw error;
+  } finally {
+    entry.starting = null;
+  }
+  return { client: entry.client!, url: entry.server!.url };
 }
 
 function parseProviderModel(modelId: string | undefined): { model: { providerID: string; modelID: string }; variant?: string } | null {
@@ -240,7 +275,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
   }
 
   async isAvailable(): Promise<boolean> {
-    return !!serverInstance || !!serverStarting || !!findCommand('opencode', getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
+    return serverPool.size > 0 || !!findCommand('opencode', getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
   }
 
   async execute(options: EngineOptions): Promise<EngineResult> {
@@ -261,18 +296,24 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
     });
 
     try {
+      const stepTimingExecStart = Date.now();
+      const stepTimingTag = options.step || '-';
+      const stepTimingMark = (point: string) =>
+        console.log(`[StepTiming] exec ${point} ts=${Date.now()} step=${stepTimingTag} +${Date.now() - stepTimingExecStart}ms`);
       this.emitDiagnosticLog({
         message: 'Ensuring OpenCode SDK server/client',
         detail: options.workingDirectory,
         verbose: true,
       });
       const { client, url } = await ensureServer(options.userId);
+      stepTimingMark('server-ready');
       this.emitDiagnosticLog({
         message: 'OpenCode SDK server ready',
         detail: url,
         verbose: true,
       });
       await ensureOpenCodeCompatibleMcpServers(client as any, options.workingDirectory, options.mcpServers as any);
+      stepTimingMark('mcp-ensured');
 
       let resolvedModelId = String(options.model || '').trim();
       if (resolvedModelId && !resolvedModelId.includes('/')) {
@@ -296,6 +337,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
           userId: options.userId,
         })
         : '';
+      stepTimingMark('agent-registered');
       await registerOpenCodeVisionInspector({
         client,
         workingDirectory: options.workingDirectory,
@@ -307,12 +349,14 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
           verbose: true,
         });
       });
+      stepTimingMark('vision-registered');
       const sessionQuery = options.workingDirectory ? { directory: options.workingDirectory } : undefined;
 
       // Create or resume a session bound to the OpenCode native agent.
       if (options.sessionId) {
         this.currentSessionId = options.sessionId;
         console.log(`[opencode-sdk] resuming session: ${this.currentSessionId}`);
+        console.log(`[StepTiming] session-created ts=${Date.now()} step=${options.step || '-'} agent=${options.agent || '-'} sessionId=${this.currentSessionId} resumed=yes`);
         this.emitDiagnosticLog({
           message: 'Resuming OpenCode session',
           detail: this.currentSessionId,
@@ -338,6 +382,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         }
         this.currentSessionId = getSessionId(sessionResult.data);
         console.log(`[opencode-sdk] session created: ${this.currentSessionId}${nativeAgentName ? `, agent=${nativeAgentName}` : ''}`);
+        console.log(`[StepTiming] session-created ts=${Date.now()} step=${options.step || '-'} agent=${options.agent || '-'} sessionId=${this.currentSessionId} resumed=no`);
         this.emitDiagnosticLog({
           message: 'OpenCode session created',
           detail: this.currentSessionId || '',
@@ -416,6 +461,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         });
       }
 
+      console.log(`[StepTiming] prompt-sent ts=${Date.now()} step=${options.step || '-'} agent=${options.agent || '-'} sessionId=${this.currentSessionId} promptLen=${fullPrompt.length}`);
       console.log(`[opencode-sdk] sendPrompt: sessionId=${this.currentSessionId}, promptLength=${fullPrompt.length}`);
       this.emitDiagnosticLog({
         message: 'OpenCode SDK prompt start',
@@ -512,19 +558,15 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
 
   cleanup(): void {
     this.cancel();
-    if (activeExecutions === 0) {
-      OpenCodeSdkEngineWrapper.shutdown();
-    }
+    // 不再回收共享 serve：per-user 池 + 2h 闲置清理自行管理生命周期。
+    // 旧实现在 activeExecutions===0 时杀 serve → 下一次 execute 冷启动（派发空转根因之一）。
   }
 
-  /** Clean up the shared server (call on app shutdown) */
+  /** Clean up all pooled servers (call on app shutdown) */
   static shutdown(): void {
-    if (serverInstance) {
-      serverInstance.close();
-      serverInstance = null;
+    for (const [key, entry] of serverPool) {
+      closeSdkServerEntry(entry);
     }
-    serverEnvFingerprint = null;
-    serverStartingFingerprint = null;
-    clientInstance = null;
+    serverPool.clear();
   }
 }

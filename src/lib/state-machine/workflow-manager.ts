@@ -122,6 +122,7 @@ import { importWorkspaceArtifactsIntoRunSpecCoding } from '@/lib/run/runtime-spe
 import {
   OHOS_FLUTTER_SDK_PIN_FILE,
   buildOhosFlutterSdkPrompt,
+  extractBaseBranch,
   extractRepoBranch,
   loadOhosFlutterSdkPinFile,
   readRepoBranchFromDisk,
@@ -3925,6 +3926,8 @@ try {
     model: string,
     options: any
   ): Promise<EngineJsonResult> {
+    // [StepTiming] 打点③：进入引擎执行（拿到 per-run 锁之后）
+    console.log(`[StepTiming] engine-enter ts=${Date.now()} run=${this.currentRunId || '-'} step=${step} agent=${agent} engine=${options?.engineType || this.engineType}`);
     return this.withEngineExecutionLock(async () => {
       await this.ensureEngineForExecution(options.engineType);
       if (!this.currentEngine) {
@@ -6250,6 +6253,10 @@ try {
       step: step.name,
       agent: runtimeAgentName,
     });
+    // [StepTiming] 打点①：步骤派发。后续打点：context-done(②)/engine-enter(③)/session-created+prompt-sent(④，引擎层)
+    const stepTimingStartMs = Date.now();
+    const stepTimingTag = `${state.name}/${step.name}`;
+    console.log(`[StepTiming] step-start ts=${stepTimingStartMs} run=${this.currentRunId || '-'} step=${stepTimingTag} agent=${runtimeAgentName}`);
     await this.appendSupervisorChatEvent({
       type: 'step-start',
       title: `步骤开始：${state.name} / ${step.name}`,
@@ -6283,6 +6290,7 @@ try {
 
       // Build context (now async)
       const context = await this.buildStepContext(step, state, config, requirements, extraContext);
+      console.log(`[StepTiming] context-done ts=${Date.now()} run=${this.currentRunId || '-'} step=${stepTimingTag} elapsed=${Date.now() - stepTimingStartMs}ms ctxLen=${context.length}`);
       this.logRunDiagnostic('step.prompt', {
         agent: runtimeAgentName,
         state: state.name,
@@ -6910,6 +6918,7 @@ try {
     try {
       parts.push(`\n${buildOhosFlutterSdkPrompt(this.getOhosFlutterSdkPin() || resolveOhosFlutterSdk({
         branch: extractRepoBranch(this.globalContext) || this.readWorkspaceRepoBranch(),
+        fallbackBranch: extractBaseBranch(this.globalContext),
       }))}`);
     } catch {
       const pin = this.getOhosFlutterSdkPin();
@@ -8472,11 +8481,12 @@ try {
 
   private async refreshOhosFlutterSdkPin(stateName: string, output: string): Promise<void> {
     const branch = extractRepoBranch(output) || this.readWorkspaceRepoBranch() || this.ohosFlutterSdk?.branch;
+    const fallbackBranch = extractBaseBranch(output) || extractBaseBranch(this.globalContext);
     const shouldRefresh = /信息采集|Issue信息采集/.test(stateName)
       || Boolean(extractRepoBranch(output))
       || Boolean(branch && !this.ohosFlutterSdk?.matched);
     if (!shouldRefresh && this.ohosFlutterSdk) return;
-    await this.persistOhosFlutterSdkPin(resolveOhosFlutterSdk({ branch }));
+    await this.persistOhosFlutterSdkPin(resolveOhosFlutterSdk({ branch, fallbackBranch }));
   }
 
   setQueuedApprovalAction(action: 'approve' | 'iterate'): void {

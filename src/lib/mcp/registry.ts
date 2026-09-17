@@ -276,6 +276,25 @@ export function toCodexMcpServers(servers: ManagedMcpServer[]): Record<string, {
   }));
 }
 
+/**
+ * 每个 serve client 实例只对同名 MCP 服务器做一次 add/connect。
+ * 背景：opencode serve 的 mcp.connect 固定耗时 ~30s（失败时也是 30s 超时），
+ * 旧逻辑每次引擎 execute 都重连 → 每步白烧 30~60s（mcp-ensured 打点实证）。
+ * serve 重启后 client 是新对象，会自然重试一次。
+ */
+const mcpConnectAttemptedByClient = new WeakMap<object, Set<string>>();
+
+function markMcpConnectAttempted(client: object, serverName: string): boolean {
+  let attempted = mcpConnectAttemptedByClient.get(client);
+  if (!attempted) {
+    attempted = new Set<string>();
+    mcpConnectAttemptedByClient.set(client, attempted);
+  }
+  if (attempted.has(serverName)) return false;
+  attempted.add(serverName);
+  return true;
+}
+
 export async function ensureOpenCodeCompatibleMcpServers(
   client: any,
   workingDirectory: string | undefined,
@@ -293,6 +312,10 @@ export async function ensureOpenCodeCompatibleMcpServers(
     : {};
 
   for (const server of servers) {
+    // 已连接 → 跳过；本 serve 已尝试过（含失败——重试只会再烧 30s 超时）→ 跳过
+    if (statusMap[server.name]?.status === 'connected') continue;
+    if (!markMcpConnectAttempted(client, server.name)) continue;
+
     if (!statusMap[server.name]) {
       const config = toOpenCodeMcpConfig(server);
       if (!config) continue;
