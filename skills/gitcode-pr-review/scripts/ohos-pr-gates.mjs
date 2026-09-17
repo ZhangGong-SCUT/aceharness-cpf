@@ -468,6 +468,20 @@ function ciMentionsRunning(comments) {
 }
 
 /**
+ * 本轮门禁构建是否包含测试任务（CI 门禁评论里「门禁/构建…测试…」字样）。
+ * 含测试的门禁必须五项全绿（DCO/静态/编译/AI/冒烟测试）才算 green；
+ * 测试没出终态前禁止提前判绿收口（#1958 教训：测试 pending 被判 green，
+ * 工作流收口后无人盯，测试后续失败也不会被唤醒处理）。
+ */
+function ciMentionsTests(comments) {
+  return comments.some((item) => {
+    if (!isCiBotComment(item)) return false;
+    const text = commentBodyText(item);
+    return /门禁|构建/i.test(text) && /测试/i.test(text);
+  });
+}
+
+/**
  * 优先级：DCO → 静态检查 → 编译 → AI 检视 → 测试（人工）
  * 静态检查失败且编译仍 pending 时，phase=static_failed，不能当成编译失败。
  */
@@ -562,7 +576,10 @@ export function classifyOhosPrGates(input = {}) {
       ? `测试失败为平台抖动（ecotest timeout）且抖动重试预算也用完（普通 ${startBuildMax} + 抖动 ${jitterRetryMax}，当前抖动 ${jitterFailCount} 次），持续抖动疑似环境故障，停下人工确认并考虑反馈 DCP`
       : '冒烟/测试失败，默认人工确认，不要自动改代码';
   } else if (dcoOk && staticOk && compileOk && !testFail) {
-    if (aiPendingComments) {
+    if (!testOk && ciMentionsTests(comments)) {
+      phase = 'running';
+      summary = '编译已过，冒烟测试还在跑——含测试的门禁须五项全绿（DCO/静态/编译/AI/冒烟）才算完成，继续等，不要提前收口';
+    } else if (aiPendingComments) {
       phase = 'ai_review_pending';
       summary = '门禁标签已绿，还有未处理的 AI 检视意见';
     } else {
