@@ -161,6 +161,29 @@ describe('classifyOhosPrGates', () => {
     expect(result.phase).toBe('green');
   });
 
+  test('compile-only gate ignores stale test mentions in history (#1536 regression)', () => {
+    // pr1536 教训:engine 仓门禁只含静态+编译,但历史「代码门禁通过」报告
+    // 正文含「测试」字样——扫全历史会把本轮纯编译门禁误判「测试还在跑」
+    // 永不收口。只看最新一条「门禁构建开始」评论。
+    const result = classifyOhosPrGates({
+      labels: ['AI已检视', 'dco检查成功', '编译成功', '静态检查成功'],
+      comments: [
+        { author: 'openharmony_ci', body: '感谢提交 Pull Requests！', created_at: '2026-09-10T10:00:00+08:00' },
+        { author: 'dev', body: 'start build', created_at: '2026-09-10T10:01:00+08:00' },
+        // 旧轮次:构建含测试(历史)
+        { author: 'openharmony_ci', body: '门禁构建开始,包含代码编译和测试【engine编译, engine测试】', created_at: '2026-09-11T17:27:46+08:00' },
+        { author: 'openharmony_ci', body: '代码门禁通过 门禁报告含编译和测试结果详情 http://dcp.openharmony.cn/x/runlist', created_at: '2026-09-11T18:00:00+08:00' },
+        // 本轮:纯编译
+        { author: 'dev', body: 'start build', created_at: '2026-09-17T09:00:31+08:00' },
+        { author: 'openharmony_ci', body: '上次构建已超过12小时,重新全量验证,重置所有关联PR的验证状态 门禁构建开始,包含静态检查、代码编译【flutter_3.7.12-dev_engine编译】,预计在60分钟内完成', created_at: '2026-09-17T09:01:01+08:00' },
+        { author: 'openharmony_ci', body: '代码门禁通过 http://dcp.openharmony.cn/x/runlist', created_at: '2026-09-17T09:42:49+08:00' },
+      ],
+      state: 'open',
+      own_pr: true,
+    });
+    expect(result.phase).toBe('green');
+  });
+
   test('static failure with retry budget left reruns start build instead of fixing', () => {
     const result = classifyOhosPrGates({
       labels: ['dco检查成功', '静态检查失败'],

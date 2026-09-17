@@ -468,17 +468,24 @@ function ciMentionsRunning(comments) {
 }
 
 /**
- * 本轮门禁构建是否包含测试任务（CI 门禁评论里「门禁/构建…测试…」字样）。
+ * 本轮门禁构建是否包含测试任务。
+ * 只看**最新一条「门禁构建开始」CI 评论**是否列出测试任务——
+ * 不能扫全部历史评论：历史轮次（或「代码门禁通过」报告正文）里出现
+ * 「测试」字样，会把本轮纯编译门禁误判成「测试还在跑」
+ * （pr1536/1537 教训：engine 仓门禁只含静态+编译，四绿却因旧评论
+ * 含「测试」被判 running 永不收口）。
  * 含测试的门禁必须五项全绿（DCO/静态/编译/AI/冒烟测试）才算 green；
- * 测试没出终态前禁止提前判绿收口（#1958 教训：测试 pending 被判 green，
- * 工作流收口后无人盯，测试后续失败也不会被唤醒处理）。
+ * 测试没出终态前禁止提前判绿收口（#1958 教训）。
  */
 function ciMentionsTests(comments) {
-  return comments.some((item) => {
-    if (!isCiBotComment(item)) return false;
-    const text = commentBodyText(item);
-    return /门禁|构建/i.test(text) && /测试/i.test(text);
-  });
+  const sorted = [...comments].sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+  const startComments = sorted.filter((item) => (
+    isCiBotComment(item)
+    && /门禁构建开始|开始构建|已触发构建/.test(commentBodyText(item))
+  ));
+  const latestStart = startComments[startComments.length - 1];
+  if (!latestStart) return false;
+  return /测试/i.test(commentBodyText(latestStart));
 }
 
 /**
