@@ -75,8 +75,9 @@ workflow:
             2. 读 outputs/gate-check.json 的 phase
             3. phase=running → conditional_pass，准备挂起等 Webhook，禁止 sleep 空等
             4. phase=review_pending_decision → conditional_pass 去挂起：检视建议已生成等用户在 AIWeb 决策，不要重新生成建议、不要推送、不要 start build
-            5. 已关闭/不是自己的 PR → fail
-            6. 其余 phase → pass，交给分类处置
+            5. phase=tester_approved → fail：测试人已全部通过（网页"测试人 ✓ 已通过"），PR 等待合入，监控推送代码会重置测试状态——去终止，summary 注明原因
+            6. 已关闭/不是自己的 PR → fail
+            7. 其余 phase → pass，交给分类处置
             欢迎评论没到之前不要 start build。不要等 AI已检视 才往下走。
             输出 JSON：verdict、phase、summary、artifact_path。
         - id: challenge-pr-gates
@@ -85,6 +86,7 @@ workflow:
           role: attacker
           task: |
             质疑是否把 commit status 404 当成通过、是否把静态检查失败当成编译失败、是否在没欢迎评论时抢 start build。
+            tester_approved（测试人已全部通过）与 review_pending_decision（建议等用户决策）是合法结论，不要质疑它们本身。
             输出 <step-conclusion>。
         - id: judge-pr-gates
           name: 门禁裁决

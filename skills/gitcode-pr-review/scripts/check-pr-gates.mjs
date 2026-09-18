@@ -160,6 +160,15 @@ export function detectReviewPendingDecision(suggestion, currentHead) {
   );
 }
 
+/**
+ * 测试人已通过判定：GitCode PR 的 testers 非空且全部 accept=true（网页上"测试人 ✓ 已通过"）。
+ * 测试人通过 = PR 已验证等待合入——监控推送代码会重置测试状态，不应再监控/修改。
+ */
+export function isTesterApproved(testers) {
+  const list = Array.isArray(testers) ? testers : [];
+  return list.length > 0 && list.every((t) => Boolean(t && t.accept));
+}
+
 async function main() {
   const prUrl = arg('--pr-url');
   const parsed = parsePrUrl(prUrl);
@@ -252,6 +261,16 @@ async function main() {
   if (!phaseOverride && reviewPendingDecision && !closed && ownPr) {
     classified.phase = 'review_pending_decision';
     classified.summary = '检视建议修复已生成（未推送），等待用户在 AIWeb 面板决策：应用 / 驳回 / 反馈';
+  }
+
+  // 测试人已通过（网页"测试人 ✓ 已通过"）：PR 已验证等待合入，监控推送代码会重置测试状态 → 终止。
+  // 排序在 review_pending_decision 之后：已生成建议挂起的 run，用户应用建议属知情选择（应用后测试重置），
+  // 不被此规则阻断；新 run（无建议）则直接终止，不再生成建议。
+  const testerApproved = isTesterApproved(pull?.testers);
+  if (!phaseOverride && !reviewPendingDecision && testerApproved && !closed && ownPr) {
+    classified.phase = 'tester_approved';
+    classified.verdict = 'fail';
+    classified.summary = `测试人已全部通过（${(Array.isArray(pull?.testers) ? pull.testers : []).map((t) => t?.login).filter(Boolean).join('、')}），等待合入即可——监控推送代码会重置测试状态`;
   }
   const result = {
     ...classified,
