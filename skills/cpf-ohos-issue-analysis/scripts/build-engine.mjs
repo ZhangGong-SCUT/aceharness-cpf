@@ -13,8 +13,41 @@
  * 工作流约定：修复验证阶段先 --check-only；缺失项原样引用进 step-conclusion（禁止不探测就写"环境性未执行"）。
  */
 import { execFile, spawnSync, execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, copyFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
+import { homedir } from 'node:os';
+
+/** 本机代理自动探测：环境变量优先，其次探测常见本地代理端口（Clash Verge 7897 等）。
+ *  工作流服务进程不带代理环境变量，gclient sync / git 访问 googlesource 必须经代理。 */
+function detectProxy() {
+  if (process.env.https_proxy || process.env.HTTPS_PROXY) return process.env.https_proxy || process.env.HTTPS_PROXY;
+  for (const port of [7897, 7890, 10809, 8118]) {
+    const r = spawnSync('bash', ['-c', `echo >/dev/tcp/127.0.0.1/${port}`], { stdio: 'ignore' });
+    if (r.status === 0) return `http://127.0.0.1:${port}`;
+  }
+  return null;
+}
+const PROXY = detectProxy();
+const CHILD_ENV = { ...process.env, ...(PROXY ? { https_proxy: PROXY, http_proxy: PROXY } : {}) };
+// depot_tools PATH 回退：服务进程 PATH 不含 depot_tools 时补上
+const DEPOT_TOOLS = join(homedir(), 'depot_tools');
+if (!process.env.PATH?.includes('depot_tools') && existsSync(DEPOT_TOOLS)) {
+  CHILD_ENV.PATH = `${DEPOT_TOOLS}:${process.env.PATH}`;
+}
+// OHOS 构建工具链（linux-build-env.md 标准环境；缺失项构建时如实报错）
+const HARMONY_TOOLS = '/home/flutter/harmony-tools';
+const OHOS_BUILD_ENV = {
+  PATH: [
+    `${HARMONY_TOOLS}/command-line-tools/bin`,
+    `${HARMONY_TOOLS}/command-line-tools/tool/node/bin`,
+    `${HARMONY_TOOLS}/ohos-sdk/26/toolchains`,
+    CHILD_ENV.PATH,
+  ].join(':'),
+  DEVECO_SDK_HOME: `${HARMONY_TOOLS}/command-line-tools/sdk`,
+  OHOS_SDK_HOME: `${HARMONY_TOOLS}/ohos-sdk`,
+  NODE_HOME: `${HARMONY_TOOLS}/command-line-tools/tool/node`,
+};
+const withOhosEnv = (env = CHILD_ENV) => ({ ...env, ...OHOS_BUILD_ENV, PATH: `${OHOS_BUILD_ENV.PATH}` });
 
 const args = process.argv.slice(2);
 const arg = (name, def = '') => {
@@ -45,13 +78,18 @@ function fail(stage, missing, detail) {
 
 /** 探测一个命令是否可用（PATH 查找，不执行） */
 function commandExists(cmd) {
-  return spawnSync('sh', ['-c', `command -v ${cmd} >/dev/null 2>&1`], { stdio: 'ignore' }).status === 0;
+  return spawnSync('sh', ['-c', `command -v ${cmd} >/dev/null 2>&1`], { stdio: 'ignore', env: CHILD_ENV }).status === 0;
 }
 
 function run(cmd, cmdArgs, opts = {}) {
   return new Promise((res) => {
-    execFile(cmd, cmdArgs, { cwd: opts.cwd || repo, timeout: opts.timeoutMs || 30_000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
-      res({ ok: !err, code: err?.code ?? 0, stdout: String(stdout || ''), stderr: String(stderr || '') });
+    execFile(cmd, cmdArgs, { cwd: opts.cwd || repo, timeout: opts.timeoutMs || 30_000, maxBuffer: 8 * 1024 * 1024, env: opts.env || CHILD_ENV }, (err, stdout, stderr) => {
+      res({
+        ok: !err,
+        code: err?.code ?? 0,
+        stdout: String(stdout || ''),
+        stderr: String(stderr || '') || (err ? `${err.code || ''} ${err.message || ''}` : ''),
+      });
     });
   });
 }
@@ -92,8 +130,8 @@ async function preflight() {
   const gclientTpl = join(repo, 'engine', 'scripts', 'ohos.gclient');
   if (!existsSync(gclientTpl)) missing.push(`engine/scripts/ohos.gclient 模板缺失（${gclientTpl}）`);
 
-  // 源码同步状态：指南 gclient sync 后 engine/src 及 third_party 完整；粗判 third_party 子目录数
-  const tp = join(repo, 'src', 'flutter', 'third_party');
+  // 源码同步状态：指南 gclient sync 后依赖齐备；粗判 third_party 子目录数（实际布局 engine/src/flutter/third_party）
+  const tp = join(repo, 'engine', 'src', 'flutter', 'third_party');
   let tpCount = 0;
   try { tpCount = readdirSync(tp).length; } catch { /* 未同步 */ }
   detail.third_party_subdirs = tpCount;
@@ -121,7 +159,8 @@ async function preflight() {
   }
   detail.allowed_hosts = hosts;
   detail.unreachable_hosts = unreachable;
-  if (unreachable.length) missing.push(`网络不可达（需代理，指南 §1.3）：${unreachable.join('、')}`);
+  detail.proxy = PROXY || 'none';
+  if (unreachable.length) missing.push(`网络不可达（需代理，指南 §1.3）：${unreachable.join('、')}${PROXY ? '' : '（未检测到本地代理）'}`);
 
   return { missing, detail };
 }
@@ -137,14 +176,48 @@ async function sync() {
 }
 
 async function build() {
-  log('build.start', { cmd: `./ohos -t ${mode}` });
-  const r = await run('./ohos', ['-t', mode], { timeoutMs: 150 * 60_000 });
-  if (!r.ok) fail('build', [], `./ohos -t ${mode} 失败: ${(r.stderr || r.stdout).slice(-500)}`);
-  return log('build.done');
+  log('build.start', { cmd: `cd engine && ./ohos -t ${mode} --unuse-bisheng` });
+  // --unuse-bisheng：本机无 BiSheng 编译器（hms/native/BiSheng 缺失），用 SDK 自带 llvm clang
+  const r = await run('./ohos', ['-t', mode, '--unuse-bisheng'], { cwd: join(repo, 'engine'), timeoutMs: 150 * 60_000, env: withOhosEnv() });
+  const outDir = join(repo, 'engine', 'src', 'out', outName);
+  const soOk = existsSync(join(outDir, 'libflutter.so'));
+  const harOk = existsSync(join(outDir, 'flutter.har'));
+  if (!r.ok && !soOk) {
+    fail('build', [], `./ohos -t ${mode} 失败且无 libflutter.so: ${(r.stderr || r.stdout).slice(-500)}`);
+  }
+  // HAR 兜底：ninja 的 flutter_embedding_release.har 步骤用 hvigor 编 ArkTS embedding，
+  // 生成目录的 build-profile 默认 5.0.0(12)/HarmonyOS——本机只有 ohos-sdk/26（OpenHarmony API 26）。
+  // 产物 libflutter.so 已成时，补丁 profile 为 26/OpenHarmony（demo 工程同款配置）后手动编 HAR。
+  if (soOk && !harOk) {
+    log('build.har-rescue', { note: 'libflutter.so 已产出，HAR 走 26/OpenHarmony 兜底' });
+    const harDir = join(outDir, 'obj', 'ohos', 'flutter_embedding_har');
+    const bp = join(harDir, 'build-profile.json5');
+    try {
+      let profile = readFileSync(bp, 'utf8');
+      profile = profile
+        .replace(/"compatibleSdkVersion":\s*"5\.0\.0\(12\)"/g, '"compatibleSdkVersion": 26')
+        .replace(/"targetSdkVersion":\s*"5\.0\.0\(12\)"/g, '"targetSdkVersion": 26')
+        .replace('"runtimeOS": "HarmonyOS"', '"runtimeOS": "OpenHarmony"');
+      if (!profile.includes('"compileSdkVersion"')) {
+        profile = profile.replace('"compatibleSdkVersion": 26,', '"compatibleSdkVersion": 26,\n        "compileSdkVersion": 26,');
+      }
+      writeFileSync(bp, profile, 'utf8');
+      writeFileSync(join(harDir, 'local.properties'), `sdk.dir=${HARMONY_TOOLS}/ohos-sdk\n`, 'utf8');
+    } catch (e) {
+      fail('build.har-rescue', [], `HAR build-profile 补丁失败: ${e.message}`);
+    }
+    const hv = await run('hvigorw', ['clean', '--mode', 'module', '-p', 'module=flutter@default', '-p', 'product=default', `-p`, `buildMode=${mode}`, 'assembleHar', '--no-daemon'], { cwd: harDir, timeoutMs: 30 * 60_000, env: withOhosEnv() });
+    const produced = [join(harDir, 'flutter', 'build', 'default', 'outputs', 'default', 'flutter.har')].find(existsSync);
+    if (!hv.ok || !produced) {
+      fail('build.har-rescue', [], `hvigor 编 HAR 失败: ${(hv.stderr || hv.stdout).slice(-400)}`);
+    }
+    copyFileSync(produced, join(outDir, 'flutter.har'));
+  }
+  return log('build.done', { libflutter_so: soOk, flutter_har: existsSync(join(outDir, 'flutter.har')) });
 }
 
 async function verify() {
-  const outDir = join(repo, 'src', 'out');
+  const outDir = join(repo, 'engine', 'src', 'out');
   const target = join(outDir, outName);
   const artifacts = {};
   for (const f of ['libflutter.so', 'flutter.har']) {
@@ -158,7 +231,7 @@ async function verify() {
     try { actual = readdirSync(outDir); } catch { /* 无 out */ }
     fail('verify', [`产物不完整（期望 src/out/${outName}/ 含 ${Object.keys(artifacts).join('、')}）`], `out/ 实际目录: ${actual.join(', ') || '无'}`);
   }
-  return log('verify.done', { artifacts: `src/out/${outName}/{libflutter.so,flutter.har}`, outName });
+  return log('verify.done', { artifacts: `engine/src/out/${outName}/{libflutter.so,flutter.har}`, outName });
 }
 
 async function main() {
