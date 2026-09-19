@@ -1,6 +1,7 @@
 import { getChannelIntegration, listChannelBindings, type ChannelIntegration, type ChannelSessionBinding } from '@/lib/channel/store';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { sendHumanReviewEmailNotification } from '@/lib/notify/human-review-email';
+import { sendWorkflowRunFailureEmailNotification } from '@/lib/notify/workflow-event-email';
 import { loadRunState } from '@/lib/run/state-persistence';
 
 export interface OutboundChannelMessage {
@@ -257,6 +258,10 @@ function getWorkflowDeliveryDedupeKey(type: string, ids: { configFile: string; r
 }
 
 export async function deliverWorkflowEventToChannels(type: string, payload: any): Promise<void> {
+  // 邮件钩子先于 formatWorkflowEvent 的类型过滤：status 事件不进渠道分发，但 failed/crashed 要发失败邮件
+  if (type === 'status' && payload?.status) {
+    void sendWorkflowRunFailureEmailNotification(payload).catch(() => {});
+  }
   const formatted = formatWorkflowEvent(type, payload);
   if (!formatted) return;
   if (type === 'human-question-required' && payload?.question) {
@@ -295,7 +300,7 @@ export function ensureChannelEventBridgeRegistered(): void {
   if (bridgeRegistered) return;
   bridgeRegistered = true;
 
-  const eventTypes = ['human-question-required', 'human-approval-required', 'state-change', 'step-complete', 'transition', 'feedback-injected'];
+  const eventTypes = ['human-question-required', 'human-approval-required', 'state-change', 'step-complete', 'transition', 'feedback-injected', 'status'];
   for (const type of eventTypes) {
     workflowRegistry.on(type, async (payload: any) => {
       void deliverWorkflowEventToChannels(type, payload);

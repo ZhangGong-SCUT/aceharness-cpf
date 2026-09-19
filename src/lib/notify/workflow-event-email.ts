@@ -222,3 +222,92 @@ export async function sendWorkflowStateEmailNotification(
   deliveredStateKeys.add(dedupeKey);
   return { ok: true };
 }
+
+/** run 级失败终态（status 事件）：引擎异常 / 硬门禁拒绝 / 崩溃。
+ *  这类失败不产生 state-change（state 可能停在任意非终态），且属于"必须知晓"的安全网事件——
+ *  不经 notifyStates 过滤，邮件启用即必发。 */
+const RUN_FAILURE_STATUSES = new Set(['failed', 'crashed']);
+const deliveredRunFailureKeys = new Set<string>();
+
+export async function sendWorkflowRunFailureEmailNotification(payload: {
+  status?: string;
+  message?: string;
+  runId?: string;
+  __configFile?: string;
+  configFile?: string;
+  currentConfigFile?: string;
+}): Promise<WorkflowStateEmailResult> {
+  const status = String(payload?.status || '').trim();
+  if (!RUN_FAILURE_STATUSES.has(status)) return { ok: false, reason: 'status-not-failure' };
+
+  const settings = await loadSystemSettings();
+  const emailSettings = settings.emailNotifications;
+  if (!emailSettings?.enabled) return { ok: false, reason: 'email-disabled' };
+  if (!emailSettings.smtpHost || !emailSettings.smtpPort || !emailSettings.fromEmail) {
+    return { ok: false, reason: 'email-config-incomplete' };
+  }
+
+  const runId = String(payload?.runId || '').trim();
+  const configFile = String(
+    payload?.__configFile || payload?.configFile || payload?.currentConfigFile || '',
+  ).trim();
+  if (!runId) return { ok: false, reason: 'missing-run-id' };
+  const dedupeKey = `${runId}:run-${status}`;
+  if (deliveredRunFailureKeys.has(dedupeKey)) return { ok: true, reason: 'already-sent' };
+
+  const runState = runId ? await loadRunState(runId).catch(() => null) : null;
+  const ownerId = String(runState?.runOwnerId || runState?.createdBy || '').trim();
+  const owner = ownerId ? await getUserById(ownerId).catch(() => undefined) : undefined;
+  const ownerEmail = String(owner?.email || '').trim();
+  const cc = splitEmailList(emailSettings.ccEmails);
+  if (!ownerEmail && cc.length === 0) return { ok: false, reason: 'no-recipients' };
+
+  const stateLabel = status === 'crashed' ? '运行崩溃' : '运行失败';
+  const prUrl = extractPrUrl(runState?.globalContext);
+  const gate = /gitcode-pr-review/i.test(configFile) && runId ? loadGateSummary(runId) : null;
+  const subject = buildWorkflowEmailSubject(emailSettings.subjectPrefix, { configFile, prUrl });
+  const threadKey = resolveEmailThreadKey({ runId, globalContext: runState?.globalContext });
+  const thread = buildThreadHeaders(threadKey, emailSettings.smtpHost);
+  const text = buildBody({
+    state: stateLabel,
+    message: String(payload?.message || ''),
+    configFile,
+    runId,
+    prUrl,
+    ownerEmail: ownerEmail || '(仅抄送)',
+    gate,
+  });
+
+  try {
+    await sendMailViaSmtp(
+      {
+        host: emailSettings.smtpHost,
+        port: Number(emailSettings.smtpPort),
+        secure: Boolean(emailSettings.smtpSecure),
+        tlsInsecure: Boolean(emailSettings.smtpTlsInsecure),
+        username: emailSettings.smtpUsername,
+        password: emailSettings.smtpPassword,
+        fromEmail: emailSettings.fromEmail,
+        fromName: emailSettings.fromName,
+        replyTo: emailSettings.replyTo,
+      },
+      {
+        to: ownerEmail ? [ownerEmail] : [],
+        cc: cc.length ? cc : undefined,
+        subject,
+        text,
+        messageId: thread.messageId,
+        inReplyTo: thread.inReplyTo,
+        references: thread.references,
+        threadIndex: thread.threadIndex,
+      },
+    );
+  } catch (err: any) {
+    console.error(`[email] 运行失败邮件投递失败: to=${ownerEmail || '-'} cc=${cc.join(',') || '-'} subject="${subject}" error=${err?.message || err}`);
+    throw err;
+  }
+  console.log(`[email] 运行失败邮件已投递: to=${ownerEmail || '-'}${cc.length ? ` cc=${cc.join(',')}` : ''} subject="${subject}" status=${status}`);
+
+  deliveredRunFailureKeys.add(dedupeKey);
+  return { ok: true };
+}
