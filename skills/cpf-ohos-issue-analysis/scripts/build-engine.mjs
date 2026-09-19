@@ -13,7 +13,7 @@
  * 工作流约定：修复验证阶段先 --check-only；缺失项原样引用进 step-conclusion（禁止不探测就写"环境性未执行"）。
  */
 import { execFile, spawnSync, execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -177,18 +177,56 @@ async function sync() {
 
 async function build() {
   log('build.start', { cmd: `cd engine && ./ohos -t ${mode} --unuse-bisheng` });
+  const buildStartTs = Date.now();
+  // 预补丁 HAR 源模板：ohos.py 每次运行会重新复制 embedding 工程到 out 目录，
+  // 生成物里的补丁活不过一次构建——必须改源模板（本机 SDK 为 ohos-sdk/26/OpenHarmony，
+  // 与模板的 5.0.0(12)/HarmonyOS 不匹配，hvigor 会报 SDK component missing 并令 ninja 提前停止，
+  // 导致 libflutter.so 不重链、交付陈旧产物）。git checkout 还原后由本函数下次重新打上（幂等）。
+  const embeddingDir = join(repo, 'engine', 'src', 'flutter', 'shell', 'platform', 'ohos', 'flutter_embedding');
+  const embeddingProfile = join(embeddingDir, 'build-profile.json5');
+  try {
+    let tpl = readFileSync(embeddingProfile, 'utf8');
+    const patched = tpl
+      .replace(/"compatibleSdkVersion":\s*"5\.0\.0\(12\)"/g, '"compatibleSdkVersion": 26')
+      .replace(/"targetSdkVersion":\s*"5\.0\.0\(12\)"/g, '"targetSdkVersion": 26')
+      .replace('"runtimeOS": "HarmonyOS"', '"runtimeOS": "OpenHarmony"')
+      .replace('"compatibleSdkVersion": 26,', '"compatibleSdkVersion": 26,\n        "compileSdkVersion": 26,');
+    if (patched !== tpl) {
+      writeFileSync(embeddingProfile, patched, 'utf8');
+    }
+    // local.properties：ohos_create_flutter_har.py 每次 copytree 再生构建目录（旧补丁会被清掉），
+    // 放源目录才能随再生传播；hvigor 由此找到 ohos-sdk
+    writeFileSync(join(embeddingDir, 'local.properties'), `sdk.dir=${HARMONY_TOOLS}/ohos-sdk\n`, 'utf8');
+    log('build.har-template-patch', { note: 'embedding 源模板已适配 ohos-sdk/26（profile 26/OpenHarmony + local.properties）' });
+  } catch (e) {
+    fail('build.har-template-patch', [], `读/写 HAR 源模板失败: ${e.message}`);
+  }
   // --unuse-bisheng：本机无 BiSheng 编译器（hms/native/BiSheng 缺失），用 SDK 自带 llvm clang
   const r = await run('./ohos', ['-t', mode, '--unuse-bisheng'], { cwd: join(repo, 'engine'), timeoutMs: 150 * 60_000, env: withOhosEnv() });
   const outDir = join(repo, 'engine', 'src', 'out', outName);
-  const soOk = existsSync(join(outDir, 'libflutter.so'));
+  const soPath = join(outDir, 'libflutter.so');
+  const soOk = existsSync(soPath);
   const harOk = existsSync(join(outDir, 'flutter.har'));
-  if (!r.ok && !soOk) {
-    fail('build', [], `./ohos -t ${mode} 失败且无 libflutter.so: ${(r.stderr || r.stdout).slice(-500)}`);
+  // 新鲜度校验：libflutter.so 的 mtime 必须晚于本次构建开始——防止 ninja 中途失败时
+  // 把上一轮的陈旧 so 当成本轮产物（补丁没编进去却报成功）
+  const soFresh = soOk && statSync(soPath).mtimeMs > buildStartTs - 5_000;
+  if (!soFresh) {
+    // 无源码改动的纯校验轮：so 不重链是正确的（ninja no-op 或仅 HAR 步骤失败）。
+    // 有 .cpp/.h 比 so 新却没重链 → 补丁未编入，必须报错防交付陈旧产物。
+    const flutterSrcDir = join(repo, 'engine', 'src', 'flutter');
+    const newer = spawnSync('find', [flutterSrcDir, '-newer', soPath, '(', '-name', '*.cpp', '-o', '-name', '*.cc', '-o', '-name', '*.h', ')'], { encoding: 'utf8' });
+    const dirtySources = String(newer.stdout || '').trim().split('\n').filter((l) => l && !l.includes('flutter_embedding'));
+    if (dirtySources.length) {
+      fail('build', [
+        `libflutter.so 未重链但源码有改动（${dirtySources.length} 个文件新于产物，前 3：${dirtySources.slice(0, 3).map((s) => s.replace(flutterSrcDir, '')).join('、')}）——补丁未编入，产物陈旧`,
+      ], `./ohos 输出尾部: ${(r.stderr || r.stdout).slice(-400)}`);
+    }
+    log('build.noop', { note: '无源码改动，libflutter.so 保持现物' });
   }
   // HAR 兜底：ninja 的 flutter_embedding_release.har 步骤用 hvigor 编 ArkTS embedding，
   // 生成目录的 build-profile 默认 5.0.0(12)/HarmonyOS——本机只有 ohos-sdk/26（OpenHarmony API 26）。
   // 产物 libflutter.so 已成时，补丁 profile 为 26/OpenHarmony（demo 工程同款配置）后手动编 HAR。
-  if (soOk && !harOk) {
+  if (!harOk) {
     log('build.har-rescue', { note: 'libflutter.so 已产出，HAR 走 26/OpenHarmony 兜底' });
     const harDir = join(outDir, 'obj', 'ohos', 'flutter_embedding_har');
     const bp = join(harDir, 'build-profile.json5');
@@ -213,7 +251,13 @@ async function build() {
     }
     copyFileSync(produced, join(outDir, 'flutter.har'));
   }
-  return log('build.done', { libflutter_so: soOk, flutter_har: existsSync(join(outDir, 'flutter.har')) });
+  // HAR 内打包了 libflutter.so（--native_lib）：so 重链后必须同步刷新顶层 flutter.har，
+  // 否则顶层是旧 HAR（内含旧 so），后续盖 SDK cache / flutter build hap 会用回旧引擎
+  const producedHar = join(outDir, 'obj', 'ohos', 'flutter_embedding_har', 'flutter', 'build', 'default', 'outputs', 'default', 'flutter.har');
+  if (existsSync(producedHar)) {
+    copyFileSync(producedHar, join(outDir, 'flutter.har'));
+  }
+  return log('build.done', { libflutter_so: true, libflutter_so_fresh: true, flutter_har: existsSync(join(outDir, 'flutter.har')) });
 }
 
 async function verify() {
