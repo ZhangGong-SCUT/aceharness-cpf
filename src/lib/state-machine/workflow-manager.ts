@@ -2298,6 +2298,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.humanQuestionWaiters.set(questionId, resolve);
       const checkInterval = setInterval(() => {
         const question = this.humanQuestions.find((item) => item.id === questionId) || null;
+        // UI「提交反馈，开始迭代」/「批准」预排队的动作：消费后会回答本问题并解锁
+        if (this.queuedApprovalAction && question?.status === 'unanswered') {
+          void this.consumeQueuedApproval(question).catch(() => {});
+          return;
+        }
         if (!question || question.status !== 'unanswered' || this.pendingForceTransition || this.shouldStop) {
           clearInterval(checkInterval);
           this.humanQuestionWaiters.delete(questionId);
@@ -2327,6 +2332,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
     try {
       const pendingQuestion = this.getPendingHumanQuestion();
       if (pendingQuestion) {
+        // resume 预排队的 approve/iterate 在入口直接消费（live 场景由 waitForHumanQuestionAnswer 轮询消费）
+        if (this.queuedApprovalAction) {
+          await this.consumeQueuedApproval(pendingQuestion);
+          return;
+        }
         await this.waitForHumanQuestionAnswer(pendingQuestion.id);
         return;
       }
@@ -2334,6 +2344,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
       // Wait for human to call forceTransition
       await new Promise<void>((resolve) => {
         const checkInterval = setInterval(() => {
+          if (this.queuedApprovalAction) {
+            void this.consumeQueuedApproval(null).catch(() => {}).finally(() => {
+              clearInterval(checkInterval);
+              resolve();
+            });
+            return;
+          }
           if (this.pendingForceTransition || this.shouldStop) {
             clearInterval(checkInterval);
             resolve();
@@ -2342,6 +2359,58 @@ export class StateMachineWorkflowManager extends EventEmitter {
       });
     } finally {
       this.endWait(); // 人工审查结束，累加本次等待
+    }
+  }
+
+  /**
+   * 消费预排队的 approve/iterate 动作（UI「提交反馈，开始迭代」/「批准」按钮、或 resume 路由预置）。
+   * 此前状态机只在 requestIteration/approve 里设置标志、从未消费——「开始迭代」对状态机是 no-op 的根因。
+   * - iterate：用户反馈注入全局上下文（后续所有步骤可见），并按目标状态自己的转移规则立即推进
+   *   （挂起 → 等待门禁，与 webhook 唤醒 forceTransition 同语义：带着反馈立即行动，不再干等）
+   * - approve：按原建议状态继续（目标是挂起就正常挂起等 webhook）
+   */
+  private async consumeQueuedApproval(pendingQuestion: HumanQuestion | null): Promise<void> {
+    const action = this.queuedApprovalAction;
+    this.queuedApprovalAction = null;
+    if (!action) return;
+
+    const feedback = (action === 'iterate' ? this.iterationFeedback : '').trim();
+    this.iterationFeedback = '';
+    if (action === 'iterate' && feedback) {
+      this.globalContext = `${this.globalContext || ''}\n\n# 用户迭代反馈\n${feedback}`.trim();
+    }
+
+    const suggested = this.pendingApprovalInfo?.suggestedNextState
+      || pendingQuestion?.suggestedNextState
+      || null;
+    let target: string | null = suggested;
+    if (action === 'iterate' && suggested) {
+      const targetStateConfig = this.currentWorkflowConfig?.workflow?.states?.find((item) => item.name === suggested);
+      target = targetStateConfig?.transitions?.[0]?.to || suggested;
+    }
+    if (!target) return;
+
+    const instruction = action === 'iterate'
+      ? (feedback ? `用户迭代反馈：${feedback}` : '用户要求继续迭代')
+      : '用户批准继续';
+
+    if (pendingQuestion?.status === 'unanswered') {
+      await this.answerHumanQuestion(pendingQuestion.id, {
+        text: instruction,
+        instruction,
+        selectedState: target,
+      }).catch((error: any) => {
+        // 问题已失效时由 pendingForceTransition 兜底推进；但失败原因必须可查
+        console.error('[consumeQueuedApproval] 回答人工问题失败', {
+          questionId: pendingQuestion.id,
+          action,
+          error: error?.message || String(error),
+        });
+      });
+    }
+    if (!this.pendingForceTransition) {
+      this.pendingForceTransition = target;
+      this.pendingForceInstruction = instruction;
     }
   }
 
@@ -7567,6 +7636,10 @@ try {
         }
 
         autoRecoveryAttempts += 1;
+        // 退避：AI 服务类故障多为瞬时拥塞（SSE 503 / 事件流早断 / 无输出），密集重试只会
+        // 全部落在拥塞窗内连环失败（批量启动监控两次全军覆没的根因之一）。20s×尝试数，
+        // 远低于 STREAM_IDLE_INTERRUPT_MS（10 分钟）看门狗，不会误触中断。
+        await new Promise((resolveBackoff) => setTimeout(resolveBackoff, 20_000 * autoRecoveryAttempts));
         const recoveryPrompt = buildStepAutoRecoveryPrompt({
           stateName: this.currentState,
           stepName: step.name,
@@ -8062,6 +8135,14 @@ try {
     }
 
     await this.restoreRunStateForContinuation(runState);
+
+    // resume 携带迭代反馈（resume 路由预置）：恢复时立即注入全局上下文。
+    // 挂起中被打断的 run 恢复后可能按转移规则直接继续（不再经过 waitForHumanApproval），
+    // 反馈必须在这里注入才能被后续步骤看到。
+    if (this.iterationFeedback?.trim()) {
+      this.globalContext = `${this.globalContext || ''}\n\n# 用户迭代反馈\n${this.iterationFeedback.trim()}`.trim();
+      this.iterationFeedback = '';
+    }
 
     this.emit('status', {
       status: 'running',
