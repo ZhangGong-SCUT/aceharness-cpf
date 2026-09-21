@@ -1768,7 +1768,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
       const workspaceMode = workflowConfig.context?.workspaceMode || 'isolated-copy';
 
       // === Preparing phase: directory isolation (cp for independence) ===
-      if (workspaceMode === 'isolated-copy' && this._userPersonalDir && workflowConfig.context?.projectRoot) {
+      // personalDir 为空的用户（普通注册账号默认空）此前会跳过隔离、共享模板目录——
+      // 并发 run 在同一 opencode 项目上互相 config.update 触发项目重载，abort 掉彼此
+      // 生成中的消息（SSE 流断开 + MessageAbortedError，批量启动全军覆没的根因）。
+      // 回退到工作区级 run-workspaces/<runId>，保证任何用户都有独立工作目录。
+      if (workspaceMode === 'isolated-copy' && workflowConfig.context?.projectRoot) {
         await reportPreparingProgress('准备中：复制工作目录...', '复制工作目录');
         // Resolve projectRoot relative to personalDir or runtime root, not install cwd
         const srcDir = this.resolveProjectRootPath(workflowConfig.context.projectRoot);
@@ -1776,7 +1780,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         if (!existsSync(srcDir)) {
           this.emit('log', { message: `项目目录不存在: ${srcDir}，跳过目录隔离` });
         } else {
-          const isoDir = resolve(this._userPersonalDir, runId);
+          const isoDir = resolve(this._userPersonalDir || join(getWorkspaceRoot(), 'run-workspaces'), runId);
           try {
             await mkdir(isoDir, { recursive: true });
             // Persist target working directory early so cleanup can find it
