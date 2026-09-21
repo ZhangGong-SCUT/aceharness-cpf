@@ -497,6 +497,10 @@ workflow:
                禁止改写历史 commit 的 author 邮箱后 force push——那是顶替他人提交身份，永远不做；DCO 邮箱问题只能由作者本人在线签署对应邮箱的 DCO 协议解决。
                提交身份必须复用 fork 历史提交的作者（git -C repo log -1 --format='%an <%ae>' 取原 PR 提交人），禁止编造邮箱——DCO 校验 Signed-off-by 邮箱必须与 GitCode 账号一致，用错邮箱必挂 DCO
             4. push 到 head_repo 的 head_ref（fork remote），禁止 --force。远程用 https://{author}@gitcode.com/{head_repo}.git，使用该作者自己的凭据。记录 push 完成时间
+               作者凭据获取（按序）：① 进程 env 的 GITCODE_TOKEN_<author小写替换非法字符为_>；② env 没有时运行
+               node skills/gitcode-pr-review/scripts/gitcode-token.mjs --print-token <author小写>
+               （服务端令牌库回退，打印令牌值供 remote URL 使用，exit 1=确实无凭据才转人工确认）。
+               「作者 Token 未注入」的结论必须在 ①② 都失败后才能下。
             5. 推送成功后，或 phase=need_start_build：node skills/gitcode-pr-review/scripts/post-pr-comment.mjs --pr-url <PR_URL> --author <author> --body "start build" --out outputs。
                刚 push 过的必须加 --wait-push-ack --since <push完成时间ISO>：GitCode 的 MR 更新事件异步滞后（实测 ~70s），等「监测到PR/代码有更新/感谢提交」确认评论出现再发，否则构建会被中止
             6. 禁止评论 submit，禁止合入
