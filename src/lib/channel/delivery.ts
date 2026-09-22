@@ -1,7 +1,7 @@
 import { getChannelIntegration, listChannelBindings, type ChannelIntegration, type ChannelSessionBinding } from '@/lib/channel/store';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { sendHumanReviewEmailNotification } from '@/lib/notify/human-review-email';
-import { sendWorkflowRunFailureEmailNotification } from '@/lib/notify/workflow-event-email';
+import { sendWorkflowStateEmailNotification, sendWorkflowRunFailureEmailNotification } from '@/lib/notify/workflow-event-email';
 import { loadRunState } from '@/lib/run/state-persistence';
 
 export interface OutboundChannelMessage {
@@ -266,6 +266,9 @@ export async function deliverWorkflowEventToChannels(type: string, payload: any)
   if (!formatted) return;
   if (type === 'human-question-required' && payload?.question) {
     void sendHumanReviewEmailNotification(payload.question).catch(() => {});
+  }
+  if (type === 'state-change') {
+    void sendWorkflowStateEmailNotification(payload).catch(() => {});
   }
   const ids = getWorkflowEventIds(type, payload);
   if (!shouldDeliverWorkflowEvent(type, ids)) return;

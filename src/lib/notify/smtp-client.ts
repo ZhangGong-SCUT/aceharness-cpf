@@ -8,6 +8,8 @@ export interface SmtpTransportConfig {
   host: string;
   port: number;
   secure?: boolean;
+  /** 内部邮件中继常见私有 CA 证书：true 时不校验证书链（仅建议内网使用） */
+  tlsInsecure?: boolean;
   username?: string;
   password?: string;
   fromEmail: string;
@@ -21,6 +23,14 @@ export interface SmtpSendMailInput {
   cc?: string[];
   subject: string;
   text: string;
+  /** 自定义 Message-ID（线程根），缺省随机生成 */
+  messageId?: string;
+  /** 会话线程：回复的上封邮件 ID（RFC 5322 In-Reply-To） */
+  inReplyTo?: string;
+  /** 会话线程：引用链（RFC 5322 References），客户端据此折叠会话 */
+  references?: string;
+  /** Outlook/Exchange 原生会话头（Thread-Index）：经典桌面版只认它做归组 */
+  threadIndex?: string;
 }
 
 type SmtpResponse = {
@@ -56,8 +66,12 @@ function buildMessage(config: SmtpTransportConfig, input: SmtpSendMailInput): st
     input.cc?.length ? `Cc: ${input.cc.map((item) => formatAddress(item)).join(', ')}` : '',
     config.replyTo ? `Reply-To: ${config.replyTo.trim()}` : '',
     `Subject: ${encodeHeader(input.subject)}`,
+    `Thread-Topic: ${encodeHeader(input.subject)}`,
     `Date: ${new Date().toUTCString()}`,
-    `Message-ID: <${randomUUID()}@${config.host}>`,
+    `Message-ID: ${input.messageId || `<${randomUUID()}@${config.host}>`}`,
+    input.inReplyTo ? `In-Reply-To: ${input.inReplyTo}` : '',
+    input.references ? `References: ${input.references}` : '',
+    input.threadIndex ? `Thread-Index: ${input.threadIndex}` : '',
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset=UTF-8',
     'Content-Transfer-Encoding: base64',
@@ -208,6 +222,7 @@ function connectSocket(config: SmtpTransportConfig): Promise<SocketLike> {
         host: config.host,
         port: config.port,
         servername: config.host,
+        rejectUnauthorized: !config.tlsInsecure,
       }, () => resolve(socket))
       : net.connect({
         host: config.host,
@@ -225,6 +240,7 @@ async function upgradeToTls(connection: SmtpConnection, config: SmtpTransportCon
   const tlsSocket = tls.connect({
     socket: currentSocket,
     servername: config.host,
+    rejectUnauthorized: !config.tlsInsecure,
   });
   await new Promise<void>((resolve, reject) => {
     tlsSocket.once('secureConnect', () => resolve());

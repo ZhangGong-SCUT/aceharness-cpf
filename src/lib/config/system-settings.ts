@@ -26,6 +26,8 @@ export interface SystemSettings {
     smtpHost?: string;
     smtpPort?: number;
     smtpSecure?: boolean;
+    /** 内部邮件中继私有 CA：true 时不校验 SMTP TLS 证书链（仅内网） */
+    smtpTlsInsecure?: boolean;
     smtpUsername?: string;
     smtpPassword?: string;
     fromEmail?: string;
@@ -33,6 +35,8 @@ export interface SystemSettings {
     replyTo?: string;
     ccEmails?: string;
     subjectPrefix?: string;
+    /** 进入这些状态时发邮件通知 run 所属人（逗号/顿号分隔）。缺省：就绪,完成,终止 */
+    notifyStates?: string;
   };
 }
 
