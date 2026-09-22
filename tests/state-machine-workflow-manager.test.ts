@@ -3381,3 +3381,116 @@ describe('escalation on unmatched verdict', () => {
     expect(nextState).toBe('实施'); // human selected via forceTransition mock
   });
 });
+
+// ============================================================
+// consumeQueuedApproval（UI「提交反馈，开始迭代」/「批准」的消费逻辑）
+// ============================================================
+describe('consumeQueuedApproval', () => {
+  function makeQuestion(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'hq-test-1',
+      runId: 'test-run-001',
+      configFile: 'test.yaml',
+      status: 'unanswered',
+      kind: 'approval',
+      title: '等待人工审查',
+      message: '等待确认',
+      createdAt: new Date().toISOString(),
+      answerSchema: { type: 'approval-transition', required: true, options: [] },
+      suggestedNextState: '挂起',
+      requiresWorkflowPause: true,
+      ...overrides,
+    };
+  }
+
+  async function setup() {
+    const engine = new MockEngine();
+    const manager = await createManagerForTest(engine);
+    (manager as any).appendSupervisorChatEvent = vi.fn().mockResolvedValue(undefined);
+    (manager as any).recordSubworkflowAudit = vi.fn();
+    (manager as any).currentState = '__human_approval__';
+    (manager as any).currentWorkflowConfig = {
+      workflow: {
+        states: [
+          { name: '挂起', transitions: [{ to: '等待门禁' }] },
+          { name: '等待门禁', transitions: [{ to: '分类处置' }] },
+          { name: '分类处置', transitions: [{ to: '分流静态' }] },
+        ],
+      },
+    };
+    return manager;
+  }
+
+  test('iterate：反馈注入全局上下文并按挂起自己的转移规则推进到等待门禁（不再干等）', async () => {
+    const manager = await setup();
+    const question = makeQuestion();
+    (manager as any).humanQuestions = [question];
+    (manager as any).pendingHumanQuestionId = question.id;
+    (manager as any).pendingApprovalInfo = { suggestedNextState: '挂起', availableStates: ['挂起'] };
+    (manager as any).iterationFeedback = '我已评论 start build，请去检查门禁';
+    (manager as any).queuedApprovalAction = 'iterate';
+
+    await (manager as any).consumeQueuedApproval(question);
+
+    expect((manager as any).globalContext).toContain('# 用户迭代反馈');
+    expect((manager as any).globalContext).toContain('我已评论 start build，请去检查门禁');
+    // answerHumanQuestion 是不可变替换：从数组取最新对象断言
+    expect((manager as any).humanQuestions.find((q: any) => q.id === question.id)?.status).toBe('answered');
+    // 挂起 的第一转移目标是 等待门禁：带着反馈立即行动，与 webhook 唤醒同语义
+    expect((manager as any).pendingForceTransition).toBe('等待门禁');
+    expect((manager as any).pendingForceInstruction).toContain('用户迭代反馈');
+    expect((manager as any).queuedApprovalAction).toBeNull();
+    expect((manager as any).iterationFeedback).toBe('');
+  });
+
+  test('approve：按原建议状态继续（不跳过建议状态自身的执行）', async () => {
+    const manager = await setup();
+    const question = makeQuestion({ suggestedNextState: '分类处置' });
+    (manager as any).humanQuestions = [question];
+    (manager as any).pendingHumanQuestionId = question.id;
+    (manager as any).pendingApprovalInfo = { suggestedNextState: '分类处置', availableStates: ['分类处置'] };
+    (manager as any).queuedApprovalAction = 'approve';
+
+    await (manager as any).consumeQueuedApproval(question);
+
+    expect((manager as any).pendingForceTransition).toBe('分类处置');
+    expect((manager as any).globalContext || '').not.toContain('用户迭代反馈');
+    expect((manager as any).humanQuestions.find((q: any) => q.id === question.id)?.status).toBe('answered');
+  });
+
+  test('无挂起问题时兜底直接设置强制转移', async () => {
+    const manager = await setup();
+    (manager as any).pendingApprovalInfo = { suggestedNextState: '挂起' };
+    (manager as any).iterationFeedback = '继续';
+    (manager as any).queuedApprovalAction = 'iterate';
+
+    await (manager as any).consumeQueuedApproval(null);
+
+    expect((manager as any).pendingForceTransition).toBe('等待门禁');
+    expect((manager as any).globalContext).toContain('用户迭代反馈');
+  });
+
+  test('waitForHumanQuestionAnswer 轮询消费实时到达的 iterate（live 场景：run 已挂起，用户点迭代）', async () => {
+    const manager = await setup();
+    const question = makeQuestion();
+    (manager as any).humanQuestions = [question];
+    (manager as any).pendingHumanQuestionId = question.id;
+    (manager as any).pendingApprovalInfo = { suggestedNextState: '挂起' };
+
+    const answerPromise = (manager as any).waitForHumanQuestionAnswer(question.id);
+    // 100ms 后用户点击「提交反馈，开始迭代」
+    setTimeout(() => {
+      (manager as any).requestIteration('实时迭代反馈');
+    }, 100);
+
+    const resolved = await Promise.race([
+      answerPromise.then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 4000)),
+    ]);
+
+    expect(resolved).toBe(true);
+    expect((manager as any).humanQuestions.find((q: any) => q.id === question.id)?.status).toBe('answered');
+    expect((manager as any).pendingForceTransition).toBe('等待门禁');
+    expect((manager as any).globalContext).toContain('实时迭代反馈');
+  }, 8000);
+});

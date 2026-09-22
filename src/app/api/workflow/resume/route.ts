@@ -70,7 +70,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    manager.resume(runId).catch(() => {});
+    manager.resume(runId).catch((error: any) => {
+      // 恢复失败此前被静默吞掉（UI 显示"正在恢复运行"但实际无任何动作）——必须留下可查的日志
+      console.error('[workflow/resume] 恢复运行失败', {
+        runId,
+        configFile: runState.configFile,
+        error: error?.message || String(error),
+      });
+    });
 
     return NextResponse.json({
       success: true,
