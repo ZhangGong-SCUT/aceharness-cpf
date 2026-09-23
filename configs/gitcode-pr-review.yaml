@@ -10,11 +10,13 @@ workflow:
   supervisor:
     enabled: true
     agent: default-supervisor
+    # PR 规则判定由 GitCode/DCP 脚本负责，代码修复仍保留独立质疑与裁决；
+    # 关闭重复的状态级监督、人工确认建议和结束评分，减少额外 LLM 请求与终态延迟。
     stageReviewAsync: true
-    stageReviewEnabled: true
-    checkpointAdviceEnabled: true
-    scoringEnabled: true
-    experienceEnabled: true
+    stageReviewEnabled: false
+    checkpointAdviceEnabled: false
+    scoringEnabled: false
+    experienceEnabled: false
 
   states:
     - name: 识别
@@ -108,100 +110,59 @@ workflow:
           label: 不再等待
 
     - name: 分类处置
-      description: 脚本分流。优先级 DCO → 静态检查 → 编译 → AI 检视 → 测试。
+      description: 脚本一次性分流确定性门禁。优先级 DCO → 静态检查 → 编译 → 测试；通过后再检查 AI 检视。
       maxSelfTransitions: 1
       position: { x: 380, y: 380 }
       steps:
         - id: route-phase
-          name: 按phase分流
+          name: 脚本分流门禁
           agent: developer
           role: defender
           task: |
-            只跑脚本，不要猜 phase。
+            只跑脚本，不要猜 phase。脚本会按 DCO → 静态 → 编译 → 测试的优先级一次算出 next_state。
             node skills/gitcode-pr-review/scripts/route-pr-phase.mjs --from 分类处置 --in outputs/gate-check.json
-            把脚本输出的 verdict / next_state 原样写入结尾 JSON。禁止改 phase。
-      transitions:
-        - to: 分流静态
-          condition: { verdict: pass }
-          priority: 1
-          label: 不是 DCO 失败，继续看静态检查
-        - to: 挂起
-          condition: { verdict: conditional_pass }
-          priority: 2
-          label: 仍在跑
-        - to: DCO修复
-          condition: { verdict: fail }
-          priority: 3
-          label: DCO 失败
-
-    - name: 分流静态
-      description: phase=static_failed 则进静态修复。
-      maxSelfTransitions: 1
-      position: { x: 740, y: 380 }
-      steps:
-        - id: route-static
-          name: 分流静态检查
-          agent: developer
-          role: defender
-          task: |
-            node skills/gitcode-pr-review/scripts/route-pr-phase.mjs --from 分流静态 --in outputs/gate-check.json
-            原样输出 verdict / next_state。静态检查失败时即使编译 pending 也 fail。
-      transitions:
-        - to: 分流编译
-          condition: { verdict: pass }
-          priority: 1
-        - to: 挂起
-          condition: { verdict: conditional_pass }
-          priority: 2
-        - to: 静态修复
-          condition: { verdict: fail }
-          priority: 3
-
-    - name: 分流编译
-      description: phase=compile_failed 则进编译修复。
-      maxSelfTransitions: 1
-      position: { x: 1100, y: 380 }
-      steps:
-        - id: route-compile
-          name: 分流编译
-          agent: developer
-          role: defender
-          task: |
-            node skills/gitcode-pr-review/scripts/route-pr-phase.mjs --from 分流编译 --in outputs/gate-check.json
-            原样输出 verdict / next_state。
-      transitions:
-        - to: 分流测试
-          condition: { verdict: pass }
-          priority: 1
-        - to: 挂起
-          condition: { verdict: conditional_pass }
-          priority: 2
-        - to: 编译修复
-          condition: { verdict: fail }
-          priority: 3
-
-    - name: 分流测试
-      description: 测试失败或说不清则人工确认，不要自动改。
-      maxSelfTransitions: 1
-      position: { x: 1460, y: 380 }
-      steps:
-        - id: route-test
-          name: 分流测试
-          agent: developer
-          role: defender
-          task: |
-            node skills/gitcode-pr-review/scripts/route-pr-phase.mjs --from 分流测试 --in outputs/gate-check.json
-            原样输出 verdict / next_state。test_failed / unknown / blocked_no_issue 必须 fail。
+            把脚本输出的 verdict / next_state 原样写入结尾 JSON。禁止改 phase 或 next_state。
       transitions:
         - to: 分流检视
-          condition: { verdict: pass }
+          condition: { verdict: pass, fieldEquals: { next_state: 分流检视 } }
           priority: 1
-        - to: 挂起
-          condition: { verdict: conditional_pass }
+          label: 门禁修复项均无失败，检查 AI 检视
+        - to: DCO修复
+          condition: { verdict: fail, fieldEquals: { next_state: DCO修复 } }
           priority: 2
+          label: DCO 失败
+        - to: 检视修复
+          condition: { verdict: fail, fieldEquals: { next_state: 检视修复 } }
+          priority: 3
+          label: 用户指令直接进入检视修复
+        - to: 静态修复
+          condition: { verdict: fail, fieldEquals: { next_state: 静态修复 } }
+          priority: 4
+          label: 静态检查失败
+        - to: 编译修复
+          condition: { verdict: fail, fieldEquals: { next_state: 编译修复 } }
+          priority: 5
+          label: 编译失败
+        - to: 人工确认
+          condition: { verdict: fail, fieldEquals: { next_state: 人工确认 } }
+          priority: 6
+          label: 测试失败或门禁状态不明
+        - to: 挂起
+          condition: { verdict: conditional_pass, fieldEquals: { next_state: 挂起 } }
+          priority: 7
+          label: 等待门禁更新
+        - to: 人工确认
+          condition: { verdict: pass }
+          priority: 90
+          label: 分流输出缺失时转人工确认
+        - to: 人工确认
+          condition: { verdict: conditional_pass }
+          priority: 91
+          label: 分流输出缺失时转人工确认
         - to: 人工确认
           condition: { verdict: fail }
-          priority: 3
+          priority: 92
+          label: 分流输出缺失时转人工确认
 
     - name: 分流检视
       description: 有未处理的 AI 检视意见才进检视修复。
@@ -379,6 +340,9 @@ workflow:
           agent: developer
           role: defender
           task: |
+            先检查 state.yaml 的 globalContext 是否包含 user_fix_feedback: / user_revert: / user_apply_patch:。
+            命中任一用户人工指令时，模式C优先：直接执行指令，不要先用目标 PR 的 ai_reviewed 标签或 actionable_count=0 短路；
+            也不要重新检视或改动指令范围以外的文件。未命中用户指令时，才运行 fetch-ai-review 并进入模式A/B。
             运行 skills/gitcode-pr-review/scripts/fetch-ai-review.mjs --pr-url <PR_URL> --author <author> --out outputs
             读 outputs/ai-review-comments.json，按以下顺序判断执行模式：
 
@@ -412,10 +376,10 @@ workflow:
             4. 输出 JSON：verdict、summary、applied_issues、synced_from（兄弟 PR 编号或 null）。
             本状态不要 git commit / git push。
 
-            【模式C：用户人工指令（globalContext 含指令行时优先）】
-            - user_fix_feedback: 行及后续缩进行为用户修改指令：在 repo/ 按指令修改，只改指令涉及的文件。applied_issues 填「用户反馈：<指令摘要>」。
-            - user_apply_patch: run-<id> 行：用户在 AIWeb 面板确认应用建议修复。checkout fork head_ref 后读取 ~/.aceharness/runs/run-<id>/outputs/fix.patch，
-              git -C repo apply --check 通过后 git -C repo apply；apply 冲突说明 PR 基线已漂移（用户等待期间又推送过），verdict=conditional_pass 并注明需在面板重新生成建议。applied_issues 填「应用建议修复（源 run-<id>）」。此模式用户已确认，改完正常走推送。
+            【模式C：用户人工指令（优先级最高；命中时跳过上方模式A/B判断）】
+            - user_fix_feedback: 行及后续缩进行为用户修改指令：按指令修改，只改指令涉及的文件；即使目标 PR 已有 AI已检视标签且无本地待处理意见，也必须执行。applied_issues 填「用户反馈：<指令摘要>」。
+            - user_apply_patch: run-<id> 行：用户已确认应用建议修复。读取 ~/.aceharness/runs/run-<id>/outputs/fix.patch，
+              git -C repo apply --check 通过后 git -C repo apply；apply 冲突说明 PR 基线已漂移，verdict=conditional_pass 并注明需在面板重新生成建议。applied_issues 填「应用建议修复（源 run-<id>）」。此模式改完正常走推送。
             - user_revert: from <sha> to <sha> 行：在 repo/ 执行 git revert --no-commit <sha>..<sha>（无变更则 verdict=pass 并说明无可回退）。applied_issues 填「回退 AI 检视修复」。
         - id: challenge-ai-review
           name: 质疑检视修复
