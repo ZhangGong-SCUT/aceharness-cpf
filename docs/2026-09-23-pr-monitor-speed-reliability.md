@@ -5,3 +5,4 @@
 - 方案：`route-pr-phase.mjs` 从“分类处置”一次执行确定性的门禁优先级映射，工作流按 `next_state` 直接转入修复、等待、人工确认或检视；关闭该 PR 工作流重复的状态监督、checkpoint 建议及终态评分/经验生成。检视修复先处理 AIWeb 的 `user_fix_feedback`、`user_apply_patch`、`user_revert` 指令，不再由目标 PR 的 AI 检视标签短路。
 - 安全边界：保留 DCO/静态/编译修复后的质疑和裁决，也保留检视修复的质疑和裁决；自动化只替代身份、门禁与状态映射判断。
 - 验证：脚本语法检查、工作流 YAML 解析和本次涉及文件的 `git diff --check` 通过；未运行测试套件。
+- 追加问题：PR #2107 的应用操作已记录 `applied` 并分配新 run，但该 run 目录只有 config snapshot，没有 `state.yaml` / `summary.json`；同一工作流的启动校验日志报告「识别」缺少 `conditional_pass` 转移，与该 run 未进入状态执行相符。为该状态增加通往「人工确认」的兜底出口，避免身份校验不确定时直接丢失流程。

@@ -43,6 +43,10 @@ workflow:
           condition: { verdict: fail }
           priority: 2
           label: 身份或输入校验失败
+        - to: 人工确认
+          condition: { verdict: conditional_pass }
+          priority: 3
+          label: 身份校验结果不确定，人工确认后再继续
 
     - name: 等待门禁
       description: 拉标签和 openharmony_ci 评论，写出 gate-check.json。还在跑则挂起，不要空转。
