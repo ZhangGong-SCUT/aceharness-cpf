@@ -104,6 +104,27 @@ describe('workflow registry', () => {
     expect(first).not.toBe(second);
   });
 
+  test('historical PR lookup does not reuse another running PR manager', async () => {
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    (loadRunState as any).mockImplementation(async (runId: string) => ({ runId, configFile: 'pr.yaml', workflowMode: 'state-machine' }));
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+    const active = await workflowRegistry.getManager('pr.yaml');
+    vi.spyOn(active, 'getStatus').mockReturnValue({ runId: 'run-active', status: 'running' } as any);
+    const historical = await workflowRegistry.getManagerByRunId('run-old');
+    expect(historical).not.toBe(active);
+    expect(await workflowRegistry.getManagerByRunId('run-other')).not.toBe(historical);
+  });
+
+  test('a reused manager cannot retain an old run mapping', async () => {
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    (loadRunState as any).mockResolvedValue({ runId: 'run-old', configFile: 'pr.yaml', workflowMode: 'state-machine' });
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+    const active = await workflowRegistry.getManager('pr.yaml');
+    (active as any).emitForTest('status', { runId: 'run-old', status: 'running' });
+    vi.spyOn(active, 'getStatus').mockReturnValue({ runId: 'run-new', status: 'running' } as any);
+    expect(await workflowRegistry.getManagerByRunId('run-old')).not.toBe(active);
+  });
+
   test('indexes managers by run id after receiving manager events', async () => {
     const { readFile } = await import('fs/promises');
     (readFile as any).mockResolvedValue('workflow:\n  mode: state-machine\n');

@@ -171,7 +171,9 @@ class WorkflowRegistry extends EventEmitter {
     const managerKey = this.managerKeysByRunId.get(runId);
     if (managerKey) {
       const entry = this.managers.get(managerKey);
-      if (entry) return entry.manager;
+      const managedRunId = entry?.manager.getStatus().runId;
+      if (entry && (!managedRunId || managedRunId === runId)) return entry.manager;
+      this.managerKeysByRunId.delete(runId);
     }
 
     const runState = await loadRunState(runId);
@@ -192,7 +194,9 @@ class WorkflowRegistry extends EventEmitter {
     }
 
     if (!runState?.configFile) return null;
-    const restoredManagerKey = runState.parentRunId ? `run:${runId}` : this.topLevelManagerKey(runState.configFile);
+    // Historical/paused PRs using the same config must never resolve to another
+    // PR's live manager. Resume will load this run's persisted state explicitly.
+    const restoredManagerKey = `run:${runId}`;
     const existing = this.managers.get(restoredManagerKey);
     if (existing) {
       if (existing.isStateMachine === expectedIsStateMachine && this.managerMatchesMode(existing.manager, expectedIsStateMachine)) {

@@ -4,6 +4,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { executePrScript } from '@/lib/workflow/pr-script-step';
 import { randomUUID } from 'crypto';
 import { readFile, readdir, stat, mkdir, rm, writeFile, copyFile } from 'fs/promises';
 import { resolve, join, dirname } from 'path';
@@ -675,6 +676,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private resumeStateName: string | null = null;
   private resumeStepKey: string | null = null;
   private currentProcesses: PersistedProcessInfo[] = [];
+  private scriptControllers = new Set<AbortController>();
   private currentSupervisorAgent: string = DEFAULT_SUPERVISOR_NAME;
   private latestSupervisorReview: {
     type: 'state-review' | 'checkpoint-advice' | 'chat-revision' | 'human-question';
@@ -2952,6 +2954,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   private cancelCurrentProcesses(): boolean {
+    const hadScripts = this.scriptControllers.size > 0;
+    for (const controller of this.scriptControllers) controller.abort();
     const processIds = new Set(this.currentProcesses.map((proc) => proc.id).filter(Boolean));
     const stepIds = new Set(this.currentProcesses.map((proc) => proc.stepId).filter(Boolean) as string[]);
     const running = processManager.getAllProcesses().filter((p: any) =>
@@ -2980,7 +2984,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       cancelledViaEngine = true;
     }
 
-    return running.length > 0 || cancelledViaEngine;
+    return hadScripts || running.length > 0 || cancelledViaEngine;
   }
 
   private async persistState(finalStatus?: 'completed' | 'failed' | 'stopped'): Promise<void> {
@@ -6362,7 +6366,7 @@ try {
       }
 
       // Build context (now async)
-      const context = await this.buildStepContext(step, state, config, requirements, extraContext);
+      const context = step.prScript ? '' : await this.buildStepContext(step, state, config, requirements, extraContext);
       console.log(`[StepTiming] context-done ts=${Date.now()} run=${this.currentRunId || '-'} step=${stepTimingTag} elapsed=${Date.now() - stepTimingStartMs}ms ctxLen=${context.length}`);
       this.logRunDiagnostic('step.prompt', {
         agent: runtimeAgentName,
@@ -6376,7 +6380,7 @@ try {
       // Execute step (reuse existing process manager logic)
       let stepResult = await this.runAgentStep(step, context, config, stepId);
       let output = stepResult.output;
-      if (this.shouldRequireFinalVerdict(step, state) && !this.hasRequiredVerdictJson(output)) {
+      if (!step.prScript && this.shouldRequireFinalVerdict(step, state) && !this.hasRequiredVerdictJson(output)) {
         const repairContext = this.buildMissingFinalVerdictPrompt(context, output, state, step);
         const repairResult = await this.runAgentStep(step, repairContext, config, stepId);
         output = [output, repairResult.output].filter(Boolean).join('\n\n---\n\n');
@@ -7346,6 +7350,22 @@ try {
     config: StateMachineWorkflowConfig,
     stepId?: string
   ): Promise<{ output: string; lastRoundOutput: string; costUsd: number; durationMs: number; sessionId?: string; tokenUsage: TokenUsage }> {
+    if (step.prScript) {
+      if (!this.currentRunId) throw new Error('脚本步骤缺少 runId');
+      const started = Date.now();
+      const controller = new AbortController();
+      this.scriptControllers.add(controller);
+      try {
+        const output = await executePrScript({
+          operation: step.prScript, stateName: this.currentState || '',
+          workingDirectory: this.getWorkingDirectory() || this.resolveProjectRootPath(),
+          runDirectory: resolve(getWorkspaceRunsDir(), this.currentRunId),
+          globalContext: this.globalContext, userId: this._createdBy, signal: controller.signal,
+        });
+        return { output, lastRoundOutput: output, costUsd: 0, durationMs: Date.now() - started,
+          tokenUsage: toPersistedTokenUsage(ZERO_ENGINE_USAGE) };
+      } finally { this.scriptControllers.delete(controller); }
+    }
     // Find agent config for system prompt and model
     const roleConfig = this.agentConfigs.find(r => r.name === step.agent)
       || config.roles?.find(r => r.name === step.agent);

@@ -79,9 +79,8 @@ async function fetchDcpDefectCount(comments, labels, outDir) {
 }
 
 async function gitcodeGet(path, token) {
-  const separator = path.includes('?') ? '&' : '?';
-  const url = `${API_ROOT}${path}${token ? `${separator}access_token=${encodeURIComponent(token)}` : ''}`;
-  const response = await fetch(url, { headers: { Accept: 'application/json' } });
+  const url = `${API_ROOT}${path}`;
+  const response = await fetch(url, { headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, signal: AbortSignal.timeout(12000) });
   const text = await response.text();
   let json = null;
   try {
@@ -90,7 +89,7 @@ async function gitcodeGet(path, token) {
     json = null;
   }
   if (!response.ok) {
-    const error = new Error(`${response.status} ${url} ${text.slice(0, 300)}`);
+    const error = new Error(`${response.status} GitCode ${path}`);
     error.status = response.status;
     error.body = json;
     throw error;
@@ -186,10 +185,10 @@ async function main() {
 
   const pullPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(number)}`;
   const issuePath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(number)}`;
-  const pull = await gitcodeGet(pullPath, token);
-  const issue = await gitcodeGetOptional(issuePath, token);
-  const labelPayload = await gitcodeGetOptional(`${issuePath}/labels`, token);
-  const [issueComments, pullComments] = await Promise.all([
+  const [pull, issue, labelPayload, issueComments, pullComments] = await Promise.all([
+    gitcodeGet(pullPath, token),
+    gitcodeGetOptional(issuePath, token),
+    gitcodeGetOptional(`${issuePath}/labels`, token),
     fetchCommentPages(`${issuePath}/comments`, token),
     fetchCommentPages(`${pullPath}/comments`, token),
   ]);
@@ -200,7 +199,7 @@ async function main() {
   // 白名单（ACE_GITCODE_PR_AUTHOR）只约束 webhook 自动启动；手动模式校验"PR 作者 = 手动开启者"。
   let manualStartBy = '';
   try {
-    const stateRaw = await readFile(resolve(outDir, '..', 'state.yaml'), 'utf8');
+    const stateRaw = await readFile(resolve(arg('--state', resolve(outDir, '..', 'state.yaml'))), 'utf8');
     // 允许缩进（globalContext 下的嵌套键），但排除列表项 "- " 前缀
     const m = stateRaw.match(/^(?!- )[ \t]*manual-start-by:[ \t]*(\S+)[ \t]*$/m);
     if (m) manualStartBy = m[1].toLowerCase();
@@ -209,8 +208,8 @@ async function main() {
   // （只在 globalContext 段内匹配，避免误中步骤结论文本里的字样；块样式 |- / >- 均可）
   let phaseOverride = '';
   try {
-    const stateRaw = await readFile(resolve(outDir, '..', 'state.yaml'), 'utf8');
-    const gc = /^globalContext:\s*[|>][+-]?\n([\s\S]*?)(?=\n[^\s])/m.exec(stateRaw)?.[1] || '';
+    const stateRaw = await readFile(resolve(arg('--state', resolve(outDir, '..', 'state.yaml'))), 'utf8');
+    const gc = /^globalContext:\s*[|>][+-]?\n([\s\S]*?)(?=\n[^\s]|(?![\s\S]))/m.exec(stateRaw)?.[1] || '';
     if (/^\s*user_(?:fix_feedback|revert|apply_patch):/m.test(gc)) phaseOverride = 'user_fix';
   } catch { /* 直跑脚本时无指令 */ }
   // 检视建议等待决策检测：本 run 已生成建议（review-suggestion.json）且 PR head 未变 → 等用户决策，不重新生成

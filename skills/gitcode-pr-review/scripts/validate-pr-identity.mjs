@@ -12,7 +12,7 @@ function clean(value) {
 }
 
 function parseContext(raw) {
-  const block = /^globalContext:\s*[|>]\s*[+-]?\s*\n([\s\S]*?)(?=\n[^\s]|$)/m.exec(raw)?.[1] || '';
+  const block = /^globalContext:\s*[|>]\s*[+-]?\s*\n([\s\S]*?)(?=\n[^\s]|(?![\s\S]))/m.exec(raw)?.[1] || '';
   const fields = {};
   for (const line of block.split(/\r?\n/)) {
     const match = /^\s*([A-Za-z][\w-]*):\s*(.*?)\s*$/.exec(line);
@@ -38,7 +38,7 @@ async function main() {
   const outDir = resolve(arg('--out', 'outputs'));
   let fields = {};
   try {
-    fields = parseContext(await readFile(resolve(outDir, '..', 'state.yaml'), 'utf8'));
+    fields = parseContext(await readFile(resolve(arg('--state', resolve(outDir, '..', 'state.yaml'))), 'utf8'));
   } catch {
     // Run context is mandatory; a direct invocation without state.yaml must fail closed.
   }

@@ -18,13 +18,12 @@ function parsePrUrl(url) {
 }
 
 async function gitcodeGet(path, token) {
-  const separator = path.includes('?') ? '&' : '?';
-  const url = `${API_ROOT}${path}${token ? `${separator}access_token=${encodeURIComponent(token)}` : ''}`;
-  const response = await fetch(url, { headers: { Accept: 'application/json' } });
+  const url = `${API_ROOT}${path}`;
+  const response = await fetch(url, { headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, signal: AbortSignal.timeout(12000) });
   const text = await response.text();
   if (!response.ok) {
     if (response.status === 404) return [];
-    throw new Error(`${response.status} ${url} ${text.slice(0, 300)}`);
+    throw new Error(`${response.status} GitCode ${path}`);
   }
   try {
     return text ? JSON.parse(text) : [];

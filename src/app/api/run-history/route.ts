@@ -15,6 +15,8 @@ import {
   type TokenRankingDimension,
   type TokenRankingSortKey,
 } from '@/lib/run/history';
+import { ensureRunSummaryCache } from '@/lib/run/summary-cache';
+import { getConfigMeta } from '@/lib/config/metadata';
 import { listUsers } from '@/lib/core/user-store';
 
 export const dynamic = 'force-dynamic';
@@ -60,6 +62,19 @@ export async function GET(request: NextRequest) {
     const requestedRunId = searchParams.get('runId')?.trim() || '';
     const keyword = searchParams.get('keyword')?.trim().toLowerCase() || '';
     const dimension = readTokenRankingDimension(searchParams.get('dimension'));
+
+    // A card's ownership check must not enumerate every run, config and user.
+    if (requestedRunId && view === 'runs') {
+      if (!/^run-[A-Za-z0-9-]+$/.test(requestedRunId)) return NextResponse.json({ error: '无效 runId' }, { status: 400 });
+      const summary = await ensureRunSummaryCache(requestedRunId);
+      const meta = summary && !summary.ownerId ? await getConfigMeta(summary.configFile) : null;
+      const summaryOwner = summary?.ownerId || meta?.createdBy;
+      const accessible = summary && (auth.role === 'admin' || summaryOwner === auth.id);
+      const matches = accessible && (!keyword || `${summary.configName} ${summary.configFile}`.toLowerCase().includes(keyword))
+        && (auth.role !== 'admin' || !ownerId || ownerId === 'all' || summaryOwner === ownerId);
+      const runs = matches && page === 1 ? [{ ...summary, id: summary.runId, ownerId: summaryOwner, ...summary.tokenUsage }] : [];
+      return NextResponse.json({ view, runs, pagination: { total: matches ? 1 : 0, totalPages: 1, page, pageSize }, filters: { runId: requestedRunId } });
+    }
 
     const [configNameMap, runsResult, users] = await Promise.all([
       readAccessibleConfigNameMap(auth.id, auth.role),

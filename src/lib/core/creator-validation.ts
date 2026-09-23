@@ -80,6 +80,10 @@ function hasAdvancedTransitionFilters(transition: any): boolean {
     || transition?.condition?.severities?.length
     || transition?.condition?.minIssueCount !== undefined
     || transition?.condition?.maxIssueCount !== undefined
+    || Object.keys(transition?.condition?.fieldEquals || {}).length
+    || Object.keys(transition?.condition?.fieldNotEquals || {}).length
+    || Object.keys(transition?.condition?.fieldMatch || {}).length
+    || transition?.condition?.fieldAbsent?.length
     || transition?.condition?.custom?.trim()
   );
 }

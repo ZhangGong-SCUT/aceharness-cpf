@@ -26,6 +26,7 @@ workflow:
       position: { x: 30, y: 80 }
       steps:
         - id: identify-pr
+          prScript: identity
           name: 脚本校验PR身份
           agent: developer
           role: defender
@@ -54,6 +55,7 @@ workflow:
       position: { x: 380, y: 80 }
       steps:
         - id: check-pr-gates
+          prScript: gates
           name: 检查门禁
           agent: developer
           role: defender
@@ -91,6 +93,7 @@ workflow:
       position: { x: 740, y: 80 }
       steps:
         - id: park-gate-wait
+          prScript: park
           name: 记录挂起
           agent: documentation-writer
           role: defender
@@ -119,6 +122,7 @@ workflow:
       position: { x: 380, y: 380 }
       steps:
         - id: route-phase
+          prScript: route
           name: 脚本分流门禁
           agent: developer
           role: defender
@@ -174,6 +178,7 @@ workflow:
       position: { x: 1820, y: 380 }
       steps:
         - id: route-review
+          prScript: review
           name: 分流检视
           agent: developer
           role: defender
@@ -439,7 +444,10 @@ workflow:
             5. 推送成功后，或 phase=need_start_build：node skills/gitcode-pr-review/scripts/post-pr-comment.mjs --pr-url <PR_URL> --author <author> --body "start build" --out outputs。
                刚 push 过的必须加 --wait-push-ack --since <push完成时间ISO>：GitCode 的 MR 更新事件异步滞后（实测 ~70s），等「监测到PR/代码有更新/感谢提交」确认评论出现再发，否则构建会被中止
             6. 禁止评论 submit，禁止合入
-            7. 推送失败则 conditional_pass
+            7. 推送失败时不得声明完成：403/无写权限直接 verdict=fail 去人工确认；网络暂时失败可 conditional_pass。
+            8. 写 outputs/push-result.json：push_status=success/failed/not_attempted、commit_sha、remote_head_sha、error（不得包含令牌）。
+               仅当 git ls-remote 对 head_repo/head_ref 返回的 SHA 与本地待推送 commit 一致时，才允许 push_status=success。
+               工作区干净不等于推送完成：必须检查 PR 原始 head 到本地 HEAD 是否还有未推送提交，有则继续推送，不得跳过。
             输出 JSON：verdict、summary、push_status、start_build、start_build_count、wait_ack、dco。
         - id: challenge-push
           name: 质疑推送

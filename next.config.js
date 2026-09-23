@@ -39,6 +39,7 @@ const baseUrlConfig = normalizeBaseUrl(process.env.BASEURL || process.env.BASE_U
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  typescript: { tsconfigPath: 'tsconfig.build.json' },
   ...(baseUrlConfig.basePath ? { basePath: baseUrlConfig.basePath } : {}),
   ...(baseUrlConfig.assetPrefix ? { assetPrefix: baseUrlConfig.assetPrefix } : {}),
   env: {
