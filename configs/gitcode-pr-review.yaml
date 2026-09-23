@@ -24,39 +24,23 @@ workflow:
       position: { x: 30, y: 80 }
       steps:
         - id: identify-pr
-          name: 识别PR
+          name: 脚本校验PR身份
           agent: developer
           role: defender
           task: |
-            从 globalContext 解析 pr_url / owner / repo / number / author / head_ref / head_repo / base_ref。禁止编造。
-            作者准入（满足其一）：在 ACE_GITCODE_PR_AUTHOR 白名单；或 globalContext 含 manual-start-by 且 PR 作者 = manual-start-by 本人（AIWeb 手动开启）。仓必须在 ACE_GITCODE_WATCH_REPOS（若已配置）。
-            已关闭或已合入 → fail。缺字段 → conditional_pass。齐全 → pass。
-            输出 JSON：verdict、summary、pr_url、author、head_repo、head_ref、own_pr。
-        - id: challenge-identify
-          name: 质疑识别
-          agent: code-hunter
-          role: attacker
-          task: 质疑是否编造了 PR 号、是否把别人的 PR 当成自己的、是否漏了 head_repo。输出 <step-conclusion>。
-        - id: judge-identify
-          name: 识别裁决
-          agent: code-judge
-          role: judge
-          task: |
-            pass：进入等待门禁。conditional_pass：继续识别。fail：终止。
-            输出 <step-conclusion>：verdict、summary、next_state。
+            运行 node skills/gitcode-pr-review/scripts/validate-pr-identity.mjs --out outputs，读取 outputs/pr-identity.json。
+            该脚本只解析本次 run 的 globalContext，并确定性校验 URL、必需字段、作者准入和监听仓；不要重新推断或改写脚本结论。
+            字段缺失、身份不匹配或仓库不在监听范围时按脚本 verdict 终止，不要补造信息。PR 是否仍 open/是否合入交给下一状态的门禁脚本实时检查。
+            原样输出 JSON：verdict、summary、pr_url、author、head_repo、head_ref、own_pr。
       transitions:
         - to: 等待门禁
           condition: { verdict: pass }
           priority: 1
           label: 是自己的 PR（白名单或手动开启者本人）且开着
-        - to: 识别
-          condition: { verdict: conditional_pass }
-          priority: 2
-          label: 字段不全，补解析
         - to: 终止
           condition: { verdict: fail }
-          priority: 3
-          label: 他人 PR / 已关闭 / 未监听仓
+          priority: 2
+          label: 身份或输入校验失败
 
     - name: 等待门禁
       description: 拉标签和 openharmony_ci 评论，写出 gate-check.json。还在跑则挂起，不要空转。
@@ -80,23 +64,6 @@ workflow:
             7. 其余 phase → pass，交给分类处置
             欢迎评论没到之前不要 start build。不要等 AI已检视 才往下走。
             输出 JSON：verdict、phase、summary、artifact_path。
-        - id: challenge-pr-gates
-          name: 质疑门禁
-          agent: code-hunter
-          role: attacker
-          task: |
-            质疑是否把 commit status 404 当成通过、是否把静态检查失败当成编译失败、是否在没欢迎评论时抢 start build。
-            tester_approved（测试人已全部通过）与 review_pending_decision（建议等用户决策）是合法结论，不要质疑它们本身。
-            输出 <step-conclusion>。
-        - id: judge-pr-gates
-          name: 门禁裁决
-          agent: code-judge
-          role: judge
-          task: |
-            pass：有可分类结论，去分类处置。
-            conditional_pass：还在跑，去挂起。
-            fail：已关闭或不是自己的 PR，终止。
-            输出 <step-conclusion>：verdict、phase、next_state。
       transitions:
         - to: 分类处置
           condition: { verdict: pass }

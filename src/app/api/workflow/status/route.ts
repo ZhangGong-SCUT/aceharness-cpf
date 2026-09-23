@@ -596,7 +596,11 @@ export async function GET(request: NextRequest) {
     }
 
     if (compact) {
-      return NextResponse.json(await resolveWorkflowLiveStatusPayload(configFile, requestedRunId));
+      const status = await resolveWorkflowLiveStatusPayload(configFile, requestedRunId);
+      const finalReview = requestedRunId
+        ? await loadWorkflowFinalReview(requestedRunId).catch(() => null)
+        : null;
+      return NextResponse.json({ ...status, finalReview });
     }
 
     return NextResponse.json(await resolveWorkflowStatusPayload(configFile, requestedRunId));

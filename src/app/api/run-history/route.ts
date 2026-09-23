@@ -57,6 +57,7 @@ export async function GET(request: NextRequest) {
     const view = readView(searchParams.get('view'));
     const sortDirection = readSortDirection(searchParams.get('sortDirection'));
     const ownerId = searchParams.get('ownerId')?.trim() || '';
+    const requestedRunId = searchParams.get('runId')?.trim() || '';
     const keyword = searchParams.get('keyword')?.trim().toLowerCase() || '';
     const dimension = readTokenRankingDimension(searchParams.get('dimension'));
 
@@ -73,6 +74,10 @@ export async function GET(request: NextRequest) {
 
     if (auth.role === 'admin' && ownerId && ownerId !== 'all') {
       runs = runs.filter((run) => run.ownerId === ownerId);
+    }
+
+    if (requestedRunId) {
+      runs = runs.filter((run) => run.id === requestedRunId);
     }
 
     if (keyword) {
@@ -105,6 +110,7 @@ export async function GET(request: NextRequest) {
           sortKey,
           sortDirection,
           ownerId: auth.role === 'admin' ? ownerId || 'all' : 'all',
+          runId: requestedRunId || '',
           keyword,
         },
         userOptions: auth.role === 'admin'
@@ -136,6 +142,7 @@ export async function GET(request: NextRequest) {
         sortKey,
         sortDirection,
         ownerId: auth.role === 'admin' ? ownerId || 'all' : 'all',
+        runId: requestedRunId || '',
         keyword,
       },
       userOptions: auth.role === 'admin'
