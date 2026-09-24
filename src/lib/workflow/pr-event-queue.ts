@@ -96,10 +96,46 @@ export class PrEventQueue {
   async status() {
     return this.exclusive(async () => {
       await this.load();
+      const now = this.now();
       const jobs = [...this.jobs.values()];
-      return { pending: jobs.length, retrying: jobs.filter(j => j.attempts > 0).length,
-        oldestWaitMs: jobs.length ? this.now() - Math.min(...jobs.map(j => j.receivedAt)) : 0,
-        recentDispatchMs: this.receipts.slice(-20).map(r => r.delayMs) };
+      const recent = this.receipts.filter(r => now - r.finishedAt < 86400000);
+      const delays = recent.map(r => r.delayMs).sort((a, b) => a - b);
+      const percentile = (p: number) => delays.length ? delays[Math.min(delays.length - 1, Math.floor(p * (delays.length - 1)))] : 0;
+      const failed = recent.filter(r => r.status >= 400).length;
+      return {
+        pending: jobs.length, retrying: jobs.filter(j => j.attempts > 0).length,
+        oldestWaitMs: jobs.length ? now - Math.min(...jobs.map(j => j.receivedAt)) : 0,
+        recentDispatchMs: this.receipts.slice(-20).map(r => r.delayMs),
+        samples24h: recent.length,
+        p50ms: percentile(0.5), p95ms: percentile(0.95),
+        failureRate24h: recent.length ? Number((failed / recent.length).toFixed(4)) : 0,
+        prs: this.prHealth(jobs, now),
+      };
     });
+  }
+
+  /** Per-PR (per queue key) health: whether still queued, next attempt, most recent result. */
+  private prHealth(jobs: Job[], now: number) {
+    const empty = () => ({ pending: 0, retrying: 0, attempts: 0, oldestReceivedAt: null as number | null,
+      nextDueAt: null as number | null, lastStatus: null as number | null, lastError: null as string | null,
+      lastSuccessAt: null as number | null, lastFinishedAt: null as number | null, lastDelayMs: null as number | null });
+    const prs: Record<string, ReturnType<typeof empty>> = {};
+    for (const job of jobs) {
+      const item = prs[job.key] ||= empty();
+      item.pending += 1;
+      item.attempts = Math.max(item.attempts, job.attempts);
+      if (job.attempts > 0) item.retrying += 1;
+      item.oldestReceivedAt = item.oldestReceivedAt === null ? job.receivedAt : Math.min(item.oldestReceivedAt, job.receivedAt);
+      item.nextDueAt = item.nextDueAt === null ? job.dueAt : Math.min(item.nextDueAt, job.dueAt);
+    }
+    for (const r of this.receipts.slice(-500)) {
+      const item = prs[r.key] ||= empty();
+      item.lastStatus = r.status;
+      item.lastDelayMs = r.delayMs;
+      item.lastFinishedAt = r.finishedAt;
+      if (r.status < 400) item.lastSuccessAt = Math.max(item.lastSuccessAt || 0, r.finishedAt);
+      else item.lastError = `HTTP ${r.status}`;
+    }
+    return prs;
   }
 }
