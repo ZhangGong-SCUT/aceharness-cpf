@@ -12,6 +12,7 @@ import { cpus } from 'os';
 import { parse } from 'yaml';
 import { fenced } from '@/lib/core/markdown-utils';
 import { processManager } from '@/lib/core/process-manager';
+import { isPersistedHumanWait } from '@/lib/workflow/pr-monitor-state';
 import type { EngineJsonResult, EngineResultMetadata, EngineTokenUsage } from '@/lib/engines/engine-interface';
 import { createRun, updateRun } from '@/lib/run/store';
 import type { RunRecord } from '@/lib/run/store';
@@ -1215,6 +1216,7 @@ try {
     try {
       const runningRuns = await findRunningRuns();
       for (const runState of runningRuns) {
+        if (isPersistedHumanWait(runState)) continue;
         const anyAlive = runState.processes.some(p => isProcessAlive(p.pid));
         if (!anyAlive) {
           runState.status = 'crashed';

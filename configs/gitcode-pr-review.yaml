@@ -191,6 +191,10 @@ workflow:
             检视修复状态会识别 ai_reviewed=false 并执行「同主题跨分支修复同步」而非常规检视修复。
             否则（actionable_count=0 且 ai_reviewed=true，检视过无问题）跑 route-pr-phase.mjs --from 分流检视，原样输出。只有 AI已检视 标签没有意见正文时不要空改。
       transitions:
+        - to: 人工确认
+          condition: { verdict: fail, fieldEquals: { next_state: 人工确认 } }
+          priority: 0
+          label: 检视接口权限不足，需要更新凭据
         - to: 分流触发
           condition: { verdict: pass }
           priority: 1
@@ -207,6 +211,7 @@ workflow:
       position: { x: 2180, y: 380 }
       steps:
         - id: route-trigger
+          prScript: route
           name: 分流触发
           agent: developer
           role: defender
@@ -450,11 +455,13 @@ workflow:
                工作区干净不等于推送完成：必须检查 PR 原始 head 到本地 HEAD 是否还有未推送提交，有则继续推送，不得跳过。
             输出 JSON：verdict、summary、push_status、start_build、start_build_count、wait_ack、dco。
         - id: challenge-push
+          prScript: push-audit
           name: 质疑推送
           agent: code-hunter
           role: attacker
           task: 检查是否推错成上游仓、是否 force push、是否漏 DCO、是否误评论了 submit。输出 <step-conclusion>。
         - id: judge-push
+          prScript: push-audit
           name: 推送裁决
           agent: code-judge
           role: judge
@@ -477,6 +484,7 @@ workflow:
       position: { x: 2540, y: 80 }
       steps:
         - id: mark-ready
+          prScript: ready
           name: 标记就绪
           agent: documentation-writer
           role: defender
@@ -503,6 +511,7 @@ workflow:
       position: { x: 1460, y: 980 }
       steps:
         - id: ask-human
+          prScript: human
           name: 记录需人工确认
           agent: documentation-writer
           role: defender
@@ -527,6 +536,7 @@ workflow:
       position: { x: 2900, y: 80 }
       steps:
         - id: complete-pr-self-heal
+          prScript: finish
           name: 汇总结果
           agent: documentation-writer
           role: defender
@@ -541,6 +551,7 @@ workflow:
       position: { x: 30, y: 980 }
       steps:
         - id: abort-pr-self-heal
+          prScript: finish
           name: 记录终止原因
           agent: documentation-writer
           role: defender

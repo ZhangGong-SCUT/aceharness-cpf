@@ -151,7 +151,7 @@ export interface WorkflowStep {
   name: string;
   agent: string;
   task: string;
-  prScript?: 'identity' | 'gates' | 'route' | 'review' | 'park';
+  prScript?: 'identity' | 'gates' | 'route' | 'review' | 'park' | 'ready' | 'human' | 'finish' | 'push-audit';
   preCommands?: string[];
   type?: 'agent' | 'subworkflow';
   workflow?: string;
@@ -179,7 +179,7 @@ export const workflowStepSchema: z.ZodType<WorkflowStep> = z.object({
   // 可选：在执行 Agent 之前，由系统自动执行的一组预命令（通常是编译 / 测试命令）
   // 注意：这些命令在后端 Node 环境中串行执行，stdout/stderr 会被收集并注入上下文，
   // 不会中断整个步骤（即使命令本身返回非 0 退出码）。
-  prScript: z.enum(['identity', 'gates', 'route', 'review', 'park']).optional(),
+  prScript: z.enum(['identity', 'gates', 'route', 'review', 'park', 'ready', 'human', 'finish', 'push-audit']).optional(),
   preCommands: z.array(z.string()).optional(),
   type: z.enum(['agent', 'subworkflow']).optional(),
   workflow: z.string().optional(),

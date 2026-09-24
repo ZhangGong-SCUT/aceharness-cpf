@@ -56,6 +56,13 @@ export async function runNodejsInstrumentation() {
   }
 
   try {
+    const { startPrMonitorWorker } = await import('@/lib/workflow/pr-monitor');
+    startPrMonitorWorker();
+  } catch (error) {
+    console.error('[ACEHarness] PR monitor restore failed:', error);
+  }
+
+  try {
     const { scheduler } = await import('@/lib/core/scheduler');
     await scheduler.init();
   } catch (error) {

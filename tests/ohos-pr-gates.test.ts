@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { classifyOhosPrGates, commentBelongsToPull, isFlakyTestFailure, routeClassifyState } from '../skills/gitcode-pr-review/scripts/ohos-pr-gates.mjs';
 import { findQuoteCandidates, parsePatchAddedLines } from '../skills/gitcode-pr-review/scripts/scan-same-rule-defects.mjs';
-import { decideGitcodeWebhookRun } from '@/lib/workflow/gitcode-pr-wake';
+import { decideGitcodeWebhookRun } from '@/lib/workflow/pr-monitor-policy';
 import { parseGitcodeWebhookPayload } from '@/lib/workflow/pr-review-input';
 import { PR1978_GATE_FAIL_COMMENT } from './fixtures/pr1978-gate-comment';
 
@@ -705,7 +705,7 @@ describe('decideGitcodeWebhookRun', () => {
     const mk = (runId: string, number: string) => ({
       runId,
       status: 'running',
-      currentState: '挂起',
+      currentState: '静态修复',
       globalContext: `owner: CPF-Flutter\nrepo: flutter_flutter\nnumber: ${number}`,
     });
     const decision = decideGitcodeWebhookRun({

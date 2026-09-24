@@ -3,8 +3,8 @@ import {
   extractGitcodeWebhookSecret,
   resolveGitcodeWebhookSecret,
   secretsMatch,
-  startPrReviewFromWebhook,
 } from '@/lib/workflow/gitcode-webhook';
+import { enqueuePrWebhook, startPrMonitorWorker } from '@/lib/workflow/pr-monitor';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,13 +59,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Webhook 密钥不匹配' }, { status: 401 });
     }
 
-    const result = await startPrReviewFromWebhook({
-      payload,
-      requestOrigin: request.nextUrl.origin,
-    });
+    const result = await enqueuePrWebhook(payload);
+    startPrMonitorWorker();
     const body = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
     console.log(
-      `[gitcode-webhook] accepted=${result.accepted} started=${result.started} woken=${result.woken ? 'true' : 'false'} reason=${result.reason} action=${result.action} event=${result.event} author=${result.author || ''} pr=${result.prUrl || ''} keys=${Object.keys(body).slice(0, 12).join(',')}`,
+      `[gitcode-webhook] accepted=${result.accepted} reason=${result.reason} action=${result.action} event=${result.event} author=${result.author || ''} pr=${result.prUrl || ''} keys=${Object.keys(body).slice(0, 12).join(',')}`,
     );
     return NextResponse.json(result, { status: result.status });
   } catch (error: any) {

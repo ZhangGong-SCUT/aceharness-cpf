@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { commentBelongsToPull, commentTimeLE, selectActionableReviews } from './ohos-pr-gates.mjs';
+import { gitcodeRead, gitcodeReadPages } from './gitcode-read.mjs';
 import { resolveGitcodeToken } from './gitcode-token.mjs';
-const API_ROOT = process.env.GITCODE_API_ROOT || 'https://gitcode.com/api/v5';
 
 function arg(name, fallback = '') {
   const index = process.argv.indexOf(name);
@@ -17,32 +17,8 @@ function parsePrUrl(url) {
   return { owner: match[1], repo: match[2].replace(/\.git$/i, ''), number: match[3] };
 }
 
-async function gitcodeGet(path, token) {
-  const url = `${API_ROOT}${path}`;
-  const response = await fetch(url, { headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, signal: AbortSignal.timeout(12000) });
-  const text = await response.text();
-  if (!response.ok) {
-    if (response.status === 404) return [];
-    throw new Error(`${response.status} GitCode ${path}`);
-  }
-  try {
-    return text ? JSON.parse(text) : [];
-  } catch {
-    return [];
-  }
-}
-
-/** GitCode 默认每页 20 条，不翻页会漏早期检视意见（1914 实际 69+ 条只取到 20 条）。 */
-async function gitcodeGetAll(path, token) {
-  const items = [];
-  for (let page = 1; page <= 10; page++) {
-    const batch = await gitcodeGet(`${path}${path.includes('?') ? '&' : '?'}page=${page}&per_page=100`, token);
-    if (!Array.isArray(batch) || batch.length === 0) break;
-    items.push(...batch);
-    if (batch.length < 100) break;
-  }
-  return items;
-}
+const gitcodeGet = gitcodeRead;
+const gitcodeGetAll = (path, token) => gitcodeReadPages(path, token, { optional: true });
 
 function normalizeComment(item, source) {
   return {
@@ -106,12 +82,19 @@ async function main() {
     throw new Error('缺少 owner/repo/number，或传入 --pr-url');
   }
 
+  let snapshot = null;
+  try {
+    const saved = JSON.parse(await readFile(resolve(outDir, 'gate-source.json'), 'utf8'));
+    const age = Date.now() - Date.parse(saved.checked_at);
+    if (saved.owner === owner && saved.repo === repo && String(saved.number) === String(number)
+      && age >= 0 && age < 15000) snapshot = saved;
+  } catch { /* fetch a fresh snapshot */ }
   const [reviewComments, issueComments, reviews, commits, pullDetail] = await Promise.all([
-    gitcodeGetAll(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(number)}/comments`, token),
-    gitcodeGetAll(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(number)}/comments`, token),
+    snapshot ? snapshot.pullComments : gitcodeGetAll(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(number)}/comments`, token),
+    snapshot ? snapshot.issueComments : gitcodeGetAll(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(number)}/comments`, token),
     gitcodeGetAll(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(number)}/reviews`, token),
     gitcodeGetAll(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(number)}/commits`, token),
-    gitcodeGet(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(number)}`, token),
+    snapshot ? snapshot.pull : gitcodeGet(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(number)}`, token),
   ]);
 
   // AI 检视覆盖判断：PR 标签是否含「AI已检视」（区分"未检视"与"检视无问题"）

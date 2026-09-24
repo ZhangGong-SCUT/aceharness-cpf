@@ -15,6 +15,8 @@ export const GATE_PHASES = [
 
 export const CLASSIFY_ROUTES = {
   分类处置: {
+    read_error: { verdict: 'conditional_pass', next_state: '挂起' },
+    blocked_permission: { verdict: 'fail', next_state: '人工确认' },
     user_fix: { verdict: 'fail', next_state: '检视修复' },
     review_pending_decision: { verdict: 'conditional_pass', next_state: '挂起' },
     dco_failed: { verdict: 'fail', next_state: 'DCO修复' },
@@ -148,7 +150,8 @@ function dcoFailIsCurrent(comments) {
   let lastWelcomeIdx = -1;
   let lastDcoFailIdx = -1;
   for (let i = 0; i < comments.length; i++) {
-    if (isWelcomeComment(comments[i])) lastWelcomeIdx = i;
+    if (!isCiBotComment(comments[i])) continue;
+    if (isWelcomeComment(comments[i]) || isRevisionResetComment(comments[i])) lastWelcomeIdx = i;
     if (isDcoFailWelcome(comments[i])) lastDcoFailIdx = i;
   }
   return lastDcoFailIdx !== -1 && lastDcoFailIdx >= lastWelcomeIdx;
@@ -272,6 +275,13 @@ export function classifyPrComment(comment) {
  * 字典序比较会错（'07:44Z' < '14:08+08:00' 但实际 07:44Z=15:44+08:00 更晚），
  * 必须解析成时间戳比。解析失败回退字典序。
  */
+function compareCommentTime(a, b) {
+  const left = String(a.created_at || '');
+  const right = String(b.created_at || '');
+  const delta = Date.parse(left) - Date.parse(right);
+  return Number.isFinite(delta) ? delta : left.localeCompare(right);
+}
+
 export function commentTimeLE(a, b) {
   const ta = Date.parse(String(a || ''));
   const tb = Date.parse(String(b || ''));
@@ -295,7 +305,7 @@ export function commentTimeLE(a, b) {
  */
 export function selectActionableReviews(comments, options = {}) {
   const sorted = [...(Array.isArray(comments) ? comments : [])]
-    .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+    .sort((a, b) => compareCommentTime(a, b));
   const includeStale = Boolean(options.include_stale);
   const includeConversation = Boolean(options.include_conversation);
   const lastPushedAt = String(options.last_pushed_at || '');
@@ -451,7 +461,6 @@ export function hasAssociatedIssue(pull, comments) {
   if (pull?.issue || pull?.issue_id || pull?.issue_iid || pull?.issue_url) return true;
   if (Array.isArray(pull?.issues) && pull.issues.length > 0) return true;
   if (Array.isArray(pull?.related_issues) && pull.related_issues.length > 0) return true;
-  if (comments.some(isNeedIssueComment)) return false;
   const blob = `${pull?.title || ''}\n${pull?.body || pull?.description || ''}`;
   return /#\d+/.test(blob);
 }
@@ -480,7 +489,7 @@ function ciMentionsRunning(comments) {
  * 测试没出终态前禁止提前判绿收口（#1958 教训）。
  */
 function ciMentionsTests(comments) {
-  const sorted = [...comments].sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+  const sorted = [...comments].sort((a, b) => compareCommentTime(a, b));
   const startComments = sorted.filter((item) => (
     isCiBotComment(item)
     && /门禁构建开始|开始构建|已触发构建/.test(commentBodyText(item))
@@ -497,7 +506,7 @@ function ciMentionsTests(comments) {
 export function classifyOhosPrGates(input = {}) {
   const labels = normalizeLabels(input.labels);
   const rawComments = normalizeComments(input.comments);
-  const comments = [...rawComments].sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+  const comments = [...rawComments].sort((a, b) => compareCommentTime(a, b));
   const state = String(input.state || '').toLowerCase();
   const merged = Boolean(input.merged) || state === 'merged';
   const closed = Boolean(input.closed) || merged || state === 'closed';
@@ -518,7 +527,8 @@ export function classifyOhosPrGates(input = {}) {
   const startBuildPosted = attempts.start_build_posted;
   // 能从 DCP 报告拉到真实缺陷（文件/行/规则）时，失败不是抖动，重试无意义，直接进修复。
   const knownRealDefects = Number(input.dcp_defect_count || 0) > 0;
-  const dcoFail = hasLabel(labels, LABEL_ALIASES.dco_fail) || dcoFailIsCurrent(comments);
+  const dcoFail = hasLabel(labels, LABEL_ALIASES.dco_fail)
+    || (!hasLabel(labels, LABEL_ALIASES.dco_ok) && dcoFailIsCurrent(comments));
   const dcoOk = hasLabel(labels, LABEL_ALIASES.dco_ok) && !dcoFail;
   const staticFail = hasLabel(labels, LABEL_ALIASES.static_fail);
   const staticOk = hasLabel(labels, LABEL_ALIASES.static_ok) && !staticFail;

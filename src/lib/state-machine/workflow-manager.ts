@@ -1822,7 +1822,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
       await reportPreparingProgress('准备中：构建 Agent 视图...', '构建 Agent 视图');
       this.initializeAgents(workflowConfig);
       await reportPreparingProgress('准备中：初始化执行引擎...', '初始化执行引擎');
-        await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
+        await this.initializeEngine(
+        resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine,
+        workflowConfig.workflow.states.some(state => state.steps.some(step => step.prScript)),
+      );
       if (this.shouldStop) return;
       await reportPreparingProgress('准备中：加载 MCP 配置...', '加载 MCP 配置');
       await this.resolveWorkflowMcpServers(workflowConfig);
@@ -3930,7 +3933,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   /**
    * Initialize the AI engine based on workflow config first, then global config.
    */
-  private async initializeEngine(workflowEngine?: string): Promise<void> {
+  private async initializeEngine(workflowEngine?: string, deferCreation = false): Promise<void> {
     try {
       const requestedEngine = workflowEngine?.trim();
 try {
@@ -3944,6 +3947,8 @@ try {
       }
       this.emit('log', `使用引擎: ${this.engineType}`);
 
+      // Resolve the engine for skill paths, but read-only PR scripts need no model service.
+      if (deferCreation) return;
       // Always initialize currentEngine for the selected engine, including claude-code.
       this.currentEngine = await createEngine(this.engineType);
       if (!this.currentEngine) {
@@ -7344,6 +7349,17 @@ try {
     }
   }
 
+  private async waitBeforeEngineRetry(delayMs: number): Promise<boolean> {
+    const generation = this.runtimeGeneration;
+    const deadline = Date.now() + delayMs;
+    do {
+      if (this.shouldStop || this.interruptFlag || this.runtimeGeneration !== generation) return false;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return true;
+      await new Promise(resolveDelay => setTimeout(resolveDelay, Math.min(remaining, 100)));
+    } while (true);
+  }
+
   private async runAgentStep(
     step: WorkflowStep,
     context: string,
@@ -7642,7 +7658,7 @@ try {
             level: 'warning',
             message: `步骤 "${streamStepName}" 出现临时引擎异常，${retryDelayMs}ms 后重试 ${transientEngineRetryAttempts}/${TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS}: ${errorMsg}`,
           });
-          await new Promise((resolveRetry) => setTimeout(resolveRetry, retryDelayMs));
+          if (!await this.waitBeforeEngineRetry(retryDelayMs)) throw new Error('步骤重试等待已取消');
           currentProcessId = stepId || currentProcessId;
           currentProcessStreamLength = 0;
           lastStreamAt = Date.now();
@@ -7660,10 +7676,10 @@ try {
         }
 
         autoRecoveryAttempts += 1;
-        // 退避：AI 服务类故障多为瞬时拥塞（SSE 503 / 事件流早断 / 无输出），密集重试只会
-        // 全部落在拥塞窗内连环失败（批量启动监控两次全军覆没的根因之一）。20s×尝试数，
-        // 远低于 STREAM_IDLE_INTERRUPT_MS（10 分钟）看门狗，不会误触中断。
-        await new Promise((resolveBackoff) => setTimeout(resolveBackoff, 20_000 * autoRecoveryAttempts));
+        // File/tool errors need an immediate corrected instruction, not a network
+        // congestion delay. Service failures retain bounded backoff, cancellable by stop/jump.
+        const recoveryDelay = isStepToolFailure(errorMsg) ? 0 : 20_000 * autoRecoveryAttempts;
+        if (!await this.waitBeforeEngineRetry(recoveryDelay)) throw new Error('步骤重试等待已取消');
         const recoveryPrompt = buildStepAutoRecoveryPrompt({
           stateName: this.currentState,
           stepName: step.name,
@@ -8226,7 +8242,10 @@ try {
     }
 
     // Initialize engine
-    await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
+    await this.initializeEngine(
+        resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine,
+        workflowConfig.workflow.states.some(state => state.steps.some(step => step.prScript)),
+      );
     await this.resolveWorkflowMcpServers(workflowConfig);
     if (workflowConfig.context?.gitBaselineEnabled !== false) {
       await this.ensureWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
@@ -8404,6 +8423,9 @@ try {
     this.latestSupervisorReview = runState.latestSupervisorReview || null;
     this.humanQuestions = runState.humanQuestions || [];
     this.pendingHumanQuestionId = runState.pendingHumanQuestionId || runState.pendingCheckpoint?.humanQuestionId || null;
+    // An explicit restored jump supersedes the old wait. Its question remains in
+    // history, but must not make the actively executing run look idle again.
+    if (targetState) this.pendingHumanQuestionId = null;
     this.humanAnswersContext = runState.humanAnswersContext || [];
     this.specRevisionVote = runState.specRevisionVote || null;
     this.specRevisionVoteHistory = runState.specRevisionVoteHistory || [];
@@ -8993,7 +9015,10 @@ try {
         agent.sessionId = persistedAgent.sessionId;
       }
     }
-    await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
+    await this.initializeEngine(
+        resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine,
+        workflowConfig.workflow.states.some(state => state.steps.some(step => step.prScript)),
+      );
     await this.resolveWorkflowMcpServers(workflowConfig);
     if (workflowConfig.context?.gitBaselineEnabled !== false) {
       await this.ensureWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);

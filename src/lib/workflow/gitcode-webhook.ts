@@ -1,5 +1,9 @@
 import { randomUUID } from 'crypto';
-import { readdirSync, readFileSync, existsSync } from 'fs';
+import { readFile, readdir } from 'node:fs/promises';
+import { basename } from 'node:path';
+import { loadRunState } from '@/lib/run/state-persistence';
+import { mergePrEventContext } from '@/lib/workflow/pr-monitor-state';
+import { executePrScript } from '@/lib/workflow/pr-script-step';
 import { join, resolve } from 'path';
 import { loadSystemSettings } from '@/lib/config/system-settings';
 import { loadUsers, storeToken, type User } from '@/lib/core/user-store';
@@ -9,11 +13,13 @@ import {
   parseGitcodeWebhookPayload,
   parseNameList,
 } from '@/lib/workflow/pr-review-input';
-import { decideGitcodeWebhookRun, formatWakeInstruction, resolveGitcodeMaxParallel, WAIT_WAKE_STATES, FIX_STATES, identityFromPrInput, identityFromGlobalContext, type RunningPrSnapshot } from '@/lib/workflow/gitcode-pr-wake';
+import { formatWakeInstruction, identityFromPrInput, identityFromGlobalContext } from '@/lib/workflow/gitcode-pr-wake';
+import { decideGitcodeWebhookRun, resolveGitcodeMaxParallel, isPrGateWait, type RunningPrSnapshot } from '@/lib/workflow/pr-monitor-policy';
 import { isStateMachineManagerLike, workflowRegistry } from '@/lib/workflow/registry';
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
 
 export const GITCODE_PR_REVIEW_CONFIG = DEFAULT_PR_REVIEW_CONFIG;
+const startingRuns = new Map<string, { until: number; snapshot: RunningPrSnapshot }>();
 
 export function extractGitcodeWebhookSecret(input: {
   query?: Record<string, string | string[] | undefined>;
@@ -113,7 +119,7 @@ export async function startPrReviewFromWebhook(input: {
   author?: string | null;
   prUrl?: string | null;
 }> {
-  const parsed = parseGitcodeWebhookPayload(input.payload);
+  const parsed = parseGitcodeWebhookPayload(input.payload, { includeClosed: true });
   const configFile = input.configFile || process.env.ACE_GITCODE_REVIEW_CONFIG?.trim() || GITCODE_PR_REVIEW_CONFIG;
   if (!parsed.accepted) {
     return {
@@ -132,7 +138,11 @@ export async function startPrReviewFromWebhook(input: {
   // 既有活跃监控（挂起/等待门禁等）的唤醒不受启动白名单约束：
   // manual-start-by 豁免启动的监控（作者不在 ACE_GITCODE_PR_AUTHOR 白名单）同样依赖
   // webhook 唤醒推进流程，若此处被白名单拦截，挂起的 run 将永久休眠（pr1958 教训）。
-  const running = snapshotRunningPrs(configFile);
+  const running = await snapshotRunningPrs(configFile);
+  for (const [id, reservation] of startingRuns) {
+    if (reservation.until < Date.now() || running.some(item => item.runId === id)) startingRuns.delete(id);
+    else running.push(reservation.snapshot);
+  }
   const incomingIdentity = identityFromPrInput(parsed.input);
   const hasActiveRunForPr = !!incomingIdentity && running.some((item) => {
     const status = String(item?.status || '');
@@ -140,6 +150,12 @@ export async function startPrReviewFromWebhook(input: {
       && String(item?.runId || '').trim()
       && identityFromGlobalContext(item.globalContext) === incomingIdentity;
   });
+
+  if (!hasActiveRunForPr && (/^(close|closed|merge|merged)$/.test(parsed.action)
+    || /^state:\s*(closed|merged)\s*$/m.test(parsed.context))) {
+    return { accepted: false, started: false, status: 202, reason: '已结束的 PR 不新建监控',
+      configFile, action: parsed.action, event: parsed.event };
+  }
 
   const ignored = hasActiveRunForPr ? null : describeIgnoredPr({
     author: parsed.input.author,
@@ -211,6 +227,12 @@ export async function startPrReviewFromWebhook(input: {
     };
   }
   if (decision.action === 'wake') {
+    const snapshot = running.find(item => item.runId === decision.runId);
+    if (decision.mode === 'resume-wait' && snapshot?.workingDirectory) {
+      const probe = await probePrGateWait(snapshot);
+      if (!probe.wake) return { accepted: true, started: false, woken: false, status: probe.status,
+        reason: probe.reason, runId: decision.runId, configFile, action: parsed.action, event: parsed.event };
+    }
     const woke = await wakeExistingPrRun({
       runId: decision.runId,
       mode: decision.mode,
@@ -225,8 +247,8 @@ export async function startPrReviewFromWebhook(input: {
     return {
       accepted: true,
       started: false,
-      woken: true,
-      status: 202,
+      woken: woke.ok,
+      status: woke.ok ? 202 : 503,
       reason: woke.ok ? decision.reason : woke.reason,
       runId: decision.runId,
       configFile,
@@ -237,18 +259,28 @@ export async function startPrReviewFromWebhook(input: {
     };
   }
 
+  // Reserve before awaiting user/token resolution; concurrent deliveries share the cap.
+  const executingReservations = [...startingRuns.values()].filter(r => r.until > Date.now()
+    && !running.some(item => item.runId === r.snapshot.runId));
+  if ((decision.activeCount || 0) + executingReservations.length >= resolveGitcodeMaxParallel()) {
+    return { accepted: true, started: false, status: 409, reason: '启动名额已满，保留排队',
+      configFile, action: parsed.action, event: parsed.event };
+  }
+  const prNumber = String(parsed.input.number || '').replace(/[^0-9A-Za-z_-]/g, '');
+  const runId = `run-${Date.now()}${prNumber ? `-pr${prNumber}` : ''}-${randomUUID().slice(0, 8)}`;
+  startingRuns.set(runId, { until: Date.now() + 30000, snapshot: {
+    runId, status: 'preparing', currentState: '识别', globalContext: parsed.context,
+  } });
   const user = await resolveWebhookRunUser();
   const token = randomUUID();
   storeToken(token, user.id);
-  // runId 带 PR 编号（run-<ts>-pr<number>-<rand>），运行列表/目录里能直观定位是哪条 PR
-  const prNumber = String(parsed.input.number || '').replace(/[^0-9A-Za-z_-]/g, '');
-  const runId = `run-${Date.now()}${prNumber ? `-pr${prNumber}` : ''}-${randomUUID().slice(0, 8)}`;
   const response = await fetch(`${getInternalWorkflowBaseUrl(input.requestOrigin)}/api/workflow/start`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
+    signal: AbortSignal.timeout(15000),
     body: JSON.stringify({
       configFile,
       runId,
@@ -262,6 +294,7 @@ export async function startPrReviewFromWebhook(input: {
 
   const data = await readJsonResponse(response);
   if (!response.ok) {
+    startingRuns.delete(runId);
     return {
       accepted: true,
       started: false,
@@ -293,68 +326,81 @@ export async function startPrReviewFromWebhook(input: {
  * 同一配置可并行多个 PR run（每 run 独立 manager / 工作区）。
  * 快照全部活跃 run，事件按 PR 身份精确匹配唤醒；没匹配到且未达并发上限就新起 run。
  */
-function snapshotRunningPrs(configFile: string): RunningPrSnapshot[] {
-  const memSnapshot = workflowRegistry.getRunningManagers()
-    .filter((item) => item.configFile === configFile)
-    .map((item) => {
-      const status = item.manager.getStatus() as {
-        runId?: string;
-        status?: string;
-        currentState?: string | null;
-        globalContext?: string;
-        pendingHumanQuestion?: RunningPrSnapshot['pendingHumanQuestion'];
-      };
-      return {
-        runId: status.runId,
-        status: status.status,
-        currentState: status.currentState,
-        globalContext: status.globalContext,
-        pendingHumanQuestion: status.pendingHumanQuestion
-          || (typeof (item.manager as { getPendingHumanQuestion?: () => RunningPrSnapshot['pendingHumanQuestion'] }).getPendingHumanQuestion === 'function'
-            ? (item.manager as { getPendingHumanQuestion: () => RunningPrSnapshot['pendingHumanQuestion'] }).getPendingHumanQuestion()
-            : null),
-      };
-    });
+let diskSnapshots: { at: number; items: RunningPrSnapshot[]; config: string } | null = null;
 
-  // 服务重启后，挂起/等待门禁的 run 没有内存 manager，仅靠内存快照会让 webhook 决策把它们当成"新 PR"
-  // 而不是 wake 目标（pr1978 教训）。补扫磁盘 runs 目录：非终态 + 等待类状态的 run 一并纳入快照（内存优先去重）。
-  // ACE_WEBHOOK_DISK_SNAPSHOT=0 可关闭（单测隔离用，避免读到真实 runs 目录破坏测试确定性）。
-  if (String(process.env.ACE_WEBHOOK_DISK_SNAPSHOT ?? '1') !== '1') return memSnapshot;
-  try {
+function waitingFor(question: any): 'webhook' | 'user_decision' {
+  return /"waiting_for"\s*:\s*"user_decision"/.test((question?.result?.stepOutputs || []).join('\n'))
+    ? 'user_decision' : 'webhook';
+}
+
+async function annotatePrWait(snapshot: RunningPrSnapshot): Promise<RunningPrSnapshot> {
+  if (snapshot.pendingHumanQuestion?.previousState !== '挂起' || !snapshot.runId) return snapshot;
+  // Step output bodies are compacted on persistence; never rely on them alone
+  // to distinguish CI waits from approval of an unpushed suggestion.
+  const paths = [join(getWorkspaceRoot(), 'runs', snapshot.runId, 'outputs', 'review-suggestion.json')];
+  if (snapshot.workingDirectory && basename(snapshot.workingDirectory) === snapshot.runId) {
+    paths.unshift(join(snapshot.workingDirectory, 'outputs', 'review-suggestion.json'));
+  }
+  for (const file of paths) {
+    try {
+      const suggestion = JSON.parse(await readFile(file, 'utf8'));
+      if (suggestion.mode === 'suggestion') return { ...snapshot, waitingFor: 'user_decision' };
+    } catch { /* optional artifact */ }
+  }
+  return snapshot;
+}
+
+export async function snapshotRunningPrs(configFile: string): Promise<RunningPrSnapshot[]> {
+  const snapshots: RunningPrSnapshot[] = workflowRegistry.getRunningManagers()
+    .filter(item => item.configFile === configFile)
+    .map(({ manager }) => {
+      const status = manager.getStatus() as any;
+      // getStatus may have a compact question. The full question carries previousState.
+      const question = { ...status.pendingHumanQuestion, ...(manager as any).getPendingHumanQuestion?.() };
+      return { runId: status.runId, status: status.status, currentState: status.currentState,
+        globalContext: status.globalContext, pendingHumanQuestion: question.id ? question : null,
+        waitingFor: waitingFor(question), workingDirectory: status.workingDirectory,
+        userId: (manager as any)._createdBy };
+    });
+  if (String(process.env.ACE_WEBHOOK_DISK_SNAPSHOT ?? '1') !== '1') return snapshots;
+  const seen = new Set(snapshots.map(item => item.runId));
+  if (!diskSnapshots || diskSnapshots.config !== configFile || Date.now() - diskSnapshots.at > 5000) {
+    const items: RunningPrSnapshot[] = [];
     const runsDir = resolve(getWorkspaceRoot(), 'runs');
-    const seen = new Set(memSnapshot.map((s) => String(s.runId || '')));
-    for (const name of readdirSync(runsDir)) {
-      if (!name.startsWith('run-') || !/-pr\d+(-|$)/.test(name)) continue;
-      const summaryPath = join(runsDir, name, 'summary.json');
-      const statePath = join(runsDir, name, 'state.yaml');
-      if (!existsSync(summaryPath) || !existsSync(statePath)) continue;
-      let summary: { runId?: string; configFile?: string; status?: string; currentPhase?: string } | null = null;
-      try { summary = JSON.parse(readFileSync(summaryPath, 'utf8')); } catch { continue; }
-      if (!summary || summary.configFile !== configFile) continue;
-      if (['completed', 'failed', 'crashed', 'stopped'].includes(String(summary.status))) continue;
-      const runId = String(summary.runId || name);
-      if (seen.has(runId)) continue;
-      // 从 state.yaml 文本提取 pr_url 构造 globalContext 身份（classifyPrReviewInput 能从中解析 owner/repo/number）
-      let globalContext = '';
+    const entries = await readdir(runsDir).catch(() => []);
+    // Async I/O: large historical directories must not block webhook and detail HTTP requests.
+    for (const name of entries) {
+      if (!name.startsWith('run-') || seen.has(name)) continue;
       try {
-        const raw = readFileSync(statePath, 'utf8');
-        const m = raw.match(/pr_url:\s*(\S+)/);
-        globalContext = m ? `GitCode 自己的 PR 自修任务\npr_url: ${m[1]}` : '';
-      } catch { continue; }
-      if (!globalContext) continue;
-      const currentState = String(summary.currentPhase || '');
-      if (!WAIT_WAKE_STATES.has(currentState) && !FIX_STATES.has(currentState)) continue;
-      seen.add(runId);
-      memSnapshot.push({
-        runId,
-        status: summary.status,
-        currentState: currentState || null,
-        globalContext,
-        pendingHumanQuestion: currentState === '__human_approval__' ? {} : null,
-      });
+        const summary = JSON.parse(await readFile(join(runsDir, name, 'summary.json'), 'utf8'));
+        if (summary.configFile !== configFile || !['running', 'preparing'].includes(summary.status)) continue;
+        const state = await loadRunState(name);
+        if (!state || !['running', 'preparing'].includes(state.status)) continue;
+        const question = state.humanQuestions?.find(q => q.id === state.pendingHumanQuestionId && q.status === 'unanswered');
+        items.push({ runId: name, status: state.status, currentState: state.currentState || state.currentPhase,
+          globalContext: state.globalContext, pendingHumanQuestion: question || null,
+          waitingFor: waitingFor(question), workingDirectory: (state as any).workingDirectory,
+          userId: state.createdBy || state.runOwnerId });
+      } catch { /* one unreadable run must not block other PRs */ }
     }
-  } catch { /* 磁盘扫描失败时退回纯内存快照 */ }
-  return memSnapshot;
+    diskSnapshots = { at: Date.now(), items, config: configFile };
+  }
+  snapshots.push(...diskSnapshots.items.filter(item => !seen.has(item.runId)));
+  return Promise.all(snapshots.map(annotatePrWait));
+}
+
+async function probePrGateWait(snapshot: RunningPrSnapshot): Promise<{ wake: boolean; status: number; reason: string }> {
+  // Old shared template workspaces cannot be probed safely alongside another PR.
+  if (!snapshot.runId || !snapshot.workingDirectory || basename(snapshot.workingDirectory) !== snapshot.runId) {
+    return { wake: false, status: 202, reason: '历史任务工作区未隔离，需要重新开启监控' };
+  }
+  const text = await executePrScript({ operation: 'gates', stateName: '等待门禁',
+    workingDirectory: snapshot.workingDirectory, runDirectory: join(getWorkspaceRoot(), 'runs', snapshot.runId),
+    globalContext: snapshot.globalContext || '', userId: snapshot.userId });
+  const gate = JSON.parse(text.replace(/^```json\n|\n```$/g, ''));
+  if (gate.read_failed && gate.phase === 'read_error') return { wake: false, status: 503, reason: gate.summary };
+  if (['running', 'review_pending_decision'].includes(gate.phase)) return { wake: false, status: 202, reason: gate.summary };
+  return { wake: true, status: 202, reason: '门禁已发生可处理的变化' };
 }
 
 async function wakeExistingPrRun(input: {
@@ -369,20 +415,40 @@ async function wakeExistingPrRun(input: {
     return { ok: false, reason: `找不到运行中的工作流 ${input.runId}` };
   }
 
-  const status = manager.getStatus() as {
-    globalContext?: string;
-    currentState?: string | null;
-    pendingHumanQuestion?: { id?: string; answerSchema?: { type?: string } } | null;
-  };
-  const mergedContext = [status.globalContext, input.context].filter(Boolean).join('\n\n--- webhook ---\n\n');
-  if (typeof manager.setContext === 'function') {
-    manager.setContext('global', mergedContext);
+  const status = manager.getStatus() as any;
+  if (!status.runId || status.status !== 'running') {
+    const persisted = await loadRunState(input.runId);
+    const question = persisted?.humanQuestions?.find(q => q.id === persisted.pendingHumanQuestionId && q.status === 'unanswered');
+    if (!persisted || persisted.status !== 'running' || !isPrGateWait({
+      currentState: persisted.currentState, pendingHumanQuestion: question, waitingFor: waitingFor(question),
+    }) || !isStateMachineManagerLike(manager)) return { ok: false, reason: '任务状态已变化，不能自动恢复' };
+    // A restored manager has no execution loop. forceTransition alone silently does nothing.
+    await new Promise<void>((resolveReady, reject) => {
+      const onStatus = (next: any) => {
+        if (next.runId === input.runId && next.status === 'running') { cleanup(); resolveReady(); }
+      };
+      const timer = setTimeout(() => { cleanup(); reject(new Error('恢复等待任务超时')); }, 15000);
+      const cleanup = () => { clearTimeout(timer); manager.off('status', onStatus); };
+      manager.on('status', onStatus);
+      void manager.forceJumpToState(input.runId, '等待门禁', input.instruction,
+        { id: 'gitcode-webhook', name: 'gitcode-webhook' }).then(() => { cleanup(); resolveReady(); }, error => {
+          cleanup(); reject(error);
+        });
+    });
+    diskSnapshots = null;
+    return { ok: true, reason: 'restored-wait' };
   }
+  const pending = { ...status.pendingHumanQuestion, ...(manager as any).getPendingHumanQuestion?.() };
+  if (input.mode === 'resume-wait' && !isPrGateWait({
+    currentState: status.currentState, pendingHumanQuestion: pending.id ? pending : null, waitingFor: waitingFor(pending),
+  })) return { ok: false, reason: '任务已不处于可自动唤醒的门禁等待' };
+  const mergedContext = mergePrEventContext(status.globalContext || '', input.context);
+  manager.setContext?.('global', mergedContext);
 
   if (input.mode === 'queue') {
-    const sm = manager as { enqueueLiveFeedback?: (message: string) => void };
+    const sm = manager as { enqueueLiveFeedback?: (message: string, options?: { id: string; automatic: boolean }) => void };
     if (typeof sm.enqueueLiveFeedback === 'function') {
-      sm.enqueueLiveFeedback(input.instruction);
+      sm.enqueueLiveFeedback(input.instruction, { id: 'pr-gate-refresh', automatic: true });
       return { ok: true, reason: 'queued' };
     }
     manager.injectLiveFeedback(input.instruction);
@@ -394,8 +460,6 @@ async function wakeExistingPrRun(input: {
     return { ok: true, reason: 'feedback' };
   }
 
-  const pending = status.pendingHumanQuestion
-    || manager.getPendingHumanQuestion?.();
   if (pending?.id && pending.answerSchema?.type === 'approval-transition') {
     await manager.answerHumanQuestion(pending.id, {
       selectedState: '等待门禁',

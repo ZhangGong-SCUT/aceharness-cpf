@@ -4,9 +4,9 @@ import { realpathSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { classifyOhosPrGates, commentBelongsToPull, DEFAULT_START_BUILD_MAX, DEFAULT_JITTER_RETRY_MAX, normalizeComments, normalizeLabels } from './ohos-pr-gates.mjs';
+import { gitcodeRead, gitcodeReadPages } from './gitcode-read.mjs';
 import { resolveGitcodeToken } from './gitcode-token.mjs';
 
-const API_ROOT = process.env.GITCODE_API_ROOT || 'https://gitcode.com/api/v5';
 
 function arg(name, fallback = '') {
   const index = process.argv.indexOf(name);
@@ -36,7 +36,7 @@ function repoFullName(repo) {
  * 从 CI 评论正文里提取带 taskId 的 DCP codeCheck 报告链接（明细入口）。
  */
 function extractCodecheckReportUrl(comments) {
-  const blob = comments.map((item) => String(item.body || '')).join('\n');
+  const blob = [...comments].reverse().map((item) => String(item.body || '')).join('\n');
   const withTask = blob.match(/https?:\/\/dcp\.openharmony\.cn[^\s)'"<>]*taskId=[A-Za-z0-9_]+/i);
   return withTask ? withTask[0] : '';
 }
@@ -50,17 +50,21 @@ function hasStaticFailLabel(labels) {
  * 拉到 defect_count>0 → 真实缺陷，跳过抖动重试直接进静态修复；
  * 拉不到（无 taskId 链接 / 网络失败 / ACE_GITCODE_DCP_REPORT=0）→ 保持重试回退。
  */
-async function fetchDcpDefectCount(comments, labels, outDir) {
+async function fetchDcpDefectCount(comments, labels, outDir, headSha) {
   if (process.env.ACE_GITCODE_DCP_REPORT === '0') return 0;
   if (!hasStaticFailLabel(labels)) return 0;
   const reportUrl = extractCodecheckReportUrl(comments);
   if (!reportUrl) return 0;
   try {
+    const cached = JSON.parse(await readFile(resolve(outDir, 'dcp-report-cache.json'), 'utf8'));
+    if (cached.reportUrl === reportUrl && cached.headSha === headSha && Date.now() - cached.savedAt < 300000) return cached.count;
+  } catch { /* no current report */ }
+  try {
     const script = resolve(new URL(import.meta.url).pathname, '../fetch-dcp-report.mjs');
     await new Promise((fulfil, reject) => {
       const child = spawn(process.execPath, [script, '--report-url', reportUrl, '--out', outDir], {
         stdio: ['ignore', 'ignore', 'pipe'],
-        timeout: 90000,
+        timeout: 25000,
       });
       let err = '';
       child.stderr?.on('data', (chunk) => { err += String(chunk); });
@@ -72,39 +76,16 @@ async function fetchDcpDefectCount(comments, labels, outDir) {
     });
     const raw = await readFile(resolve(outDir, 'dcp-codecheck-defects.json'), 'utf8');
     const parsed = JSON.parse(raw);
-    return Number(parsed?.defect_count || 0);
+    const count = Number(parsed?.defect_count || 0);
+    await writeFile(resolve(outDir, 'dcp-report-cache.json'), JSON.stringify({ reportUrl, headSha, count, savedAt: Date.now() }));
+    return count;
   } catch {
     return 0;
   }
 }
 
-async function gitcodeGet(path, token) {
-  const url = `${API_ROOT}${path}`;
-  const response = await fetch(url, { headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, signal: AbortSignal.timeout(12000) });
-  const text = await response.text();
-  let json = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    json = null;
-  }
-  if (!response.ok) {
-    const error = new Error(`${response.status} GitCode ${path}`);
-    error.status = response.status;
-    error.body = json;
-    throw error;
-  }
-  return json;
-}
-
-async function gitcodeGetOptional(path, token) {
-  try {
-    return await gitcodeGet(path, token);
-  } catch (error) {
-    if (error.status === 404) return null;
-    throw error;
-  }
-}
+const gitcodeGet = gitcodeRead;
+const gitcodeGetOptional = (path, token) => gitcodeRead(path, token, { optional: true });
 
 function collectLabels(...sources) {
   const labels = [];
@@ -117,16 +98,7 @@ function collectLabels(...sources) {
   return normalizeLabels(labels);
 }
 
-async function fetchCommentPages(path, token) {
-  const pages = [];
-  for (const page of [1, 2, 3]) {
-    const batch = await gitcodeGetOptional(`${path}?page=${page}&per_page=100`, token);
-    if (!Array.isArray(batch) || batch.length === 0) break;
-    pages.push(...batch);
-    if (batch.length < 100) break;
-  }
-  return pages;
-}
+const fetchCommentPages = (path, token) => gitcodeReadPages(path, token, { optional: true });
 
 function mergeComments(...groups) {
   const seen = new Set();
@@ -185,10 +157,8 @@ async function main() {
 
   const pullPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(number)}`;
   const issuePath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(number)}`;
-  const [pull, issue, labelPayload, issueComments, pullComments] = await Promise.all([
+  const [pull, issueComments, pullComments] = await Promise.all([
     gitcodeGet(pullPath, token),
-    gitcodeGetOptional(issuePath, token),
-    gitcodeGetOptional(`${issuePath}/labels`, token),
     fetchCommentPages(`${issuePath}/comments`, token),
     fetchCommentPages(`${pullPath}/comments`, token),
   ]);
@@ -231,8 +201,12 @@ async function main() {
     || repoFullName(pull.head)
     || repoFullName(pull.source)
     || '';
-  const labels = collectLabels(pull, issue, labelPayload);
-  const dcpDefectCount = await fetchDcpDefectCount(normalizeComments(commentPages), labels, outDir);
+  // The PR and same-number Issue are different objects. PR labels are authoritative.
+  const labels = Array.isArray(pull.labels) ? collectLabels(pull)
+    : collectLabels(await gitcodeGetOptional(`${issuePath}/labels`, token));
+  await mkdir(outDir, { recursive: true });
+  const dcpDefectCount = closed || !ownPr ? 0
+    : await fetchDcpDefectCount(normalizeComments(commentPages), labels, outDir, pull.head?.sha || '');
   const classified = classifyOhosPrGates({
     labels,
     comments: normalizeComments(commentPages),
@@ -287,6 +261,9 @@ async function main() {
   };
 
   await mkdir(outDir, { recursive: true });
+  await writeFile(resolve(outDir, 'gate-source.json'), JSON.stringify({
+    owner, repo, number, checked_at: result.checked_at, pull, issueComments, pullComments,
+  }));
   await writeFile(resolve(outDir, 'gate-check.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8');
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (result.verdict === 'fail' && (closed || !ownPr)) process.exit(2);

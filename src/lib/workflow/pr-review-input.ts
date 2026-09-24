@@ -302,7 +302,7 @@ export function extractPullRequest(payload: unknown): Record<string, any> | null
     || null;
 }
 
-export function parseGitcodeWebhookPayload(payload: unknown): {
+export function parseGitcodeWebhookPayload(payload: unknown, options: { includeClosed?: boolean } = {}): {
   accepted: boolean;
   reason: string;
   context: string;
@@ -393,7 +393,7 @@ export function parseGitcodeWebhookPayload(payload: unknown): {
     };
   }
 
-  if (!shouldStartPrReview(action, { merged, state })) {
+  if (!shouldStartPrReview(action, { merged, state }) && !(options.includeClosed && (merged || state === 'closed' || /^(close|closed)$/.test(action)))) {
     return {
       accepted: false,
       reason: `忽略事件 action=${action || 'unknown'} state=${state || 'unknown'}`,
