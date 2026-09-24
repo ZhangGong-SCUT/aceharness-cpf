@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "duplicate webhook is merged",
+      "dispatched": 1,
+      "duplicated": 1,
+      "pending": 0,
+      "failureRate24h": 0
+    },
+    {
+      "name": "newer revision supersedes older and only newest is dispatched",
+      "dispatched": 1,
+      "duplicated": 0,
+      "pending": 0,
+      "failureRate24h": 0
+    },
+    {
+      "name": "429 then success is retried",
+      "dispatched": 2,
+      "duplicated": 0,
+      "pending": 0,
+      "failureRate24h": 0.5
+    },
+    {
+      "name": "hard 400 failure is not retried",
+      "dispatched": 1,
+      "duplicated": 0,
+      "pending": 0,
+      "failureRate24h": 1
+    }
+  ],
+  "generatedAt": "2026-09-24T07:18:59.019Z",
+  "note": "离线回放，不发送真实评论或推送；样本为本机模拟。"
+}

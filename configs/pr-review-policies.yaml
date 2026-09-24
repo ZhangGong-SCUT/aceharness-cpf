@@ -1,0 +1,33 @@
+# PR 自动修复策略（R08）
+#
+# 模式：
+#   monitor_only     只监控，不生成/推送修复
+#   suggest_fix      生成建议，等用户在页面决策（默认）
+#   manual_apply     必须有用户确认才应用/推送
+#   auto_fix_limited 受限自动修复（仅在 allowPaths 内、且未超预算时自动推送）
+#
+# 预算：maxRounds 修复轮次 / timeBudgetMs 耗时(毫秒) / aiCallBudget AI 调用数
+# 构建触发：always 总是触发 / on_fix 有修复时 / never 从不
+# 覆盖优先级：仓库+分支精确 > 仓库 > defaults > 内置默认
+# 修改本文件后，运行记录引用的版本（内容哈希）随之变化，可回看当时使用的规则。
+
+defaults:
+  mode: suggest_fix
+  denyPaths:
+    - ".github/**"
+    - "**/*.lock"
+    - "**/package-lock.json"
+  maxRounds: 3
+  timeBudgetMs: 1800000
+  aiCallBudget: 20
+  buildTrigger: on_fix
+
+repos: []
+# 示例：
+# repos:
+#   - owner: CPF-Flutter
+#     repo: flutter_flutter
+#     branch: dev
+#     mode: manual_apply
+#     allowPaths: ["packages/**", "examples/**"]
+#     maxRounds: 2

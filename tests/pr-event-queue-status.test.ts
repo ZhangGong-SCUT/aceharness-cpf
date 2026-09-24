@@ -38,4 +38,34 @@ describe('PrEventQueue status（R04 监控健康与时延）', () => {
     expect(status.prs['cfg:key2'].lastError).toBeTruthy();
     expect(status.prs['cfg:key2'].nextDueAt).toBeGreaterThan(now);
   });
+
+  test('retains failed attempts after success and restart, expires them after 24h', async () => {
+    const file = join(await mkdtemp(join(tmpdir(), 'prq-')), 'q.json');
+    let now = 1000000;
+    let status = 503;
+    const dispatch = async () => ({ status, reason: status === 503 ? 'temporary failure' : 'ok' });
+    const q = new PrEventQueue(file, dispatch, () => now);
+    await q.enqueue('cfg:pr', {}); now += 1000; await q.drain();
+    status = 200; now += 60000; await q.drain();
+    const restarted = new PrEventQueue(file, dispatch, () => now);
+    const health = await restarted.status();
+    expect(health.failureRate24h).toBe(0.5);
+    expect(health.retryAttempts24h).toBe(1);
+    expect(health.prs['cfg:pr'].lastError).toBeNull();
+    now += 86400001;
+    const expired = await restarted.status();
+    expect(expired.attempts24h).toBe(0);
+    expect(expired.retryAttempts24h).toBe(0);
+    expect(expired.prs['cfg:pr']).toBeUndefined();
+  });
+
+  test('capacity waits are visible separately from service failures', async () => {
+    const file = join(await mkdtemp(join(tmpdir(), 'prq-')), 'q.json');
+    let now = 1000000;
+    const q = new PrEventQueue(file, async () => ({ status: 409, reason: 'busy' }), () => now);
+    await q.enqueue('cfg:pr', {}); now += 1000; await q.drain();
+    const health = await q.status();
+    expect(health.capacityWaits24h).toBe(1);
+    expect(health.failureRate24h).toBe(0);
+  });
 });

@@ -6,17 +6,26 @@ import { identityFromPrInput } from '@/lib/workflow/gitcode-pr-wake';
 import { isPrGateWait } from '@/lib/workflow/pr-monitor-policy';
 import { GITCODE_PR_REVIEW_CONFIG, snapshotRunningPrs, startPrReviewFromWebhook } from '@/lib/workflow/gitcode-webhook';
 import { PrEventQueue } from '@/lib/workflow/pr-event-queue';
+import { PrTaskScheduler, classifyDispatchClass, resolveClassLimits } from '@/lib/workflow/pr-task-scheduler';
 
-type Runtime = { queue: PrEventQueue; timer?: ReturnType<typeof setInterval>; poll?: ReturnType<typeof setInterval>; polling?: boolean };
+type Runtime = { queue: PrEventQueue; scheduler: PrTaskScheduler; timer?: ReturnType<typeof setInterval>; poll?: ReturnType<typeof setInterval>; polling?: boolean };
 const shared = globalThis as typeof globalThis & { __prMonitorRuntime?: Runtime };
 function runtime(): Runtime {
-  return shared.__prMonitorRuntime ||= { queue: new PrEventQueue(
+  return shared.__prMonitorRuntime ||= { scheduler: new PrTaskScheduler(resolveClassLimits()), queue: new PrEventQueue(
     join(getWorkspaceRoot(), 'data', 'pr-monitor-events.json'),
     async (job: any) => {
       const start = Date.now();
-      const result = await startPrReviewFromWebhook(job);
-      console.log(`[pr-monitor] status=${result.status} started=${result.started} woken=${!!result.woken} ms=${Date.now() - start} pr=${result.prUrl || ''} reason=${result.reason}`);
-      return result;
+      // R06：按任务类型限流 + 同一 PR 串行 + 公平放行；等待 CI/人工确认的 run 不会走到这里。
+      const klass = classifyDispatchClass(job);
+      const pr = String(job && (job.pull_request?.html_url || job.repository?.full_name || 'unknown'));
+      const release = await runtime().scheduler.acquire(pr, klass, { timeoutMs: 5 * 60 * 1000 });
+      try {
+        const result = await startPrReviewFromWebhook(job);
+        console.log(`[pr-monitor] class=${klass} status=${result.status} started=${result.started} woken=${!!result.woken} ms=${Date.now() - start} pr=${result.prUrl || ''} reason=${result.reason}`);
+        return result;
+      } finally {
+        release();
+      }
     },
   ) };
 }
@@ -79,3 +88,4 @@ export function startPrMonitorWorker() {
 }
 
 export const getPrMonitorQueueStatus = () => runtime().queue.status();
+export const getPrTaskSchedulerStatus = () => runtime().scheduler.status();
