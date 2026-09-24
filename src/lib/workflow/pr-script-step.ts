@@ -67,6 +67,10 @@ export async function executePrScript(input: {
       break;
     case 'gates': {
       const gate = await run('check-pr-gates.mjs', [...common, '--state', stateFile]);
+      // Probes may finish without a state transition; preserve the actual check time for the UI.
+      const archive = resolve(input.runDirectory, 'outputs');
+      await mkdir(archive, { recursive: true });
+      await writeFile(resolve(archive, 'gate-check.json'), JSON.stringify(gate));
       const waiting = ['running', 'review_pending_decision', 'read_error'].includes(gate.phase);
       const terminal = gate.closed || gate.merged || gate.own_pr === false || gate.verdict === 'fail' || gate.phase === 'tester_approved';
       result = { ...gate, verdict: terminal ? 'fail' : waiting ? 'conditional_pass' : 'pass' };
