@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-type Job = { key: string; revision: string; payload: unknown; receivedAt: number; dueAt: number; attempts: number };
+type Job = { key: string; revision: string; payload: unknown; receivedAt: number; dueAt: number; attempts: number;
+  lastStatus?: number; lastError?: string; lastAttemptAt?: number };
 type Result = { status: number; reason: string; started?: boolean; woken?: boolean; runId?: string };
 type Receipt = { key: string; fingerprint: string; finishedAt: number; delayMs: number; status: number };
 
@@ -75,7 +76,8 @@ export class PrEventQueue {
           const receiptsBefore = [...this.receipts];
           if (result.status === 409 || result.status === 429 || result.status >= 500) {
             const attempts = job.attempts + 1;
-            this.jobs.set(job.key, { ...job, attempts,
+            this.jobs.set(job.key, { ...job, attempts, lastStatus: result.status,
+              lastError: result.reason || `HTTP ${result.status}`, lastAttemptAt: this.now(),
               dueAt: this.now() + (result.status === 409 ? 5000 : Math.min(60000, 2000 * 2 ** Math.min(attempts, 5))) });
           } else {
             this.jobs.delete(job.key);
@@ -102,13 +104,19 @@ export class PrEventQueue {
       const delays = recent.map(r => r.delayMs).sort((a, b) => a - b);
       const percentile = (p: number) => delays.length ? delays[Math.min(delays.length - 1, Math.floor(p * (delays.length - 1)))] : 0;
       const failed = recent.filter(r => r.status >= 400).length;
+      // 重试（409/429/5xx）不产生 receipt，但同样是"未成功的一次尝试"，纳入失败率；
+      // 样本量受限时在 notes 说明覆盖范围。
+      const retryAttempts = jobs.reduce((n, j) => n + (j.attempts || 0), 0);
+      const outcomes = recent.length + retryAttempts;
       return {
         pending: jobs.length, retrying: jobs.filter(j => j.attempts > 0).length,
         oldestWaitMs: jobs.length ? now - Math.min(...jobs.map(j => j.receivedAt)) : 0,
         recentDispatchMs: this.receipts.slice(-20).map(r => r.delayMs),
         samples24h: recent.length,
+        retryAttempts24h: retryAttempts,
         p50ms: percentile(0.5), p95ms: percentile(0.95),
-        failureRate24h: recent.length ? Number((failed / recent.length).toFixed(4)) : 0,
+        failureRate24h: outcomes ? Number(((failed + retryAttempts) / outcomes).toFixed(4)) : 0,
+        sampleWindowCapped: this.receipts.length >= 2048,
         prs: this.prHealth(jobs, now),
       };
     });
@@ -118,8 +126,23 @@ export class PrEventQueue {
   private prHealth(jobs: Job[], now: number) {
     const empty = () => ({ pending: 0, retrying: 0, attempts: 0, oldestReceivedAt: null as number | null,
       nextDueAt: null as number | null, lastStatus: null as number | null, lastError: null as string | null,
-      lastSuccessAt: null as number | null, lastFinishedAt: null as number | null, lastDelayMs: null as number | null });
+      lastSuccessAt: null as number | null, lastFinishedAt: null as number | null, lastDelayMs: null as number | null,
+      lastAttemptAt: null as number | null });
     const prs: Record<string, ReturnType<typeof empty>> = {};
+    // 先铺已完成的结果（按时间先后，成功会清除历史错误）
+    for (const r of this.receipts.slice(-500)) {
+      const item = prs[r.key] ||= empty();
+      item.lastStatus = r.status;
+      item.lastDelayMs = r.delayMs;
+      item.lastFinishedAt = r.finishedAt;
+      if (r.status < 400) {
+        item.lastSuccessAt = Math.max(item.lastSuccessAt || 0, r.finishedAt);
+        item.lastError = null;
+      } else {
+        item.lastError = `HTTP ${r.status}`;
+      }
+    }
+    // 仍在队列中的 job 覆盖为当前最新尝试（重试失败也可见）
     for (const job of jobs) {
       const item = prs[job.key] ||= empty();
       item.pending += 1;
@@ -127,14 +150,11 @@ export class PrEventQueue {
       if (job.attempts > 0) item.retrying += 1;
       item.oldestReceivedAt = item.oldestReceivedAt === null ? job.receivedAt : Math.min(item.oldestReceivedAt, job.receivedAt);
       item.nextDueAt = item.nextDueAt === null ? job.dueAt : Math.min(item.nextDueAt, job.dueAt);
-    }
-    for (const r of this.receipts.slice(-500)) {
-      const item = prs[r.key] ||= empty();
-      item.lastStatus = r.status;
-      item.lastDelayMs = r.delayMs;
-      item.lastFinishedAt = r.finishedAt;
-      if (r.status < 400) item.lastSuccessAt = Math.max(item.lastSuccessAt || 0, r.finishedAt);
-      else item.lastError = `HTTP ${r.status}`;
+      if (job.lastAttemptAt && (!item.lastFinishedAt || job.lastAttemptAt >= item.lastFinishedAt)) {
+        if (job.lastStatus !== undefined) item.lastStatus = job.lastStatus;
+        if (job.lastError) item.lastError = job.lastError;
+        item.lastAttemptAt = job.lastAttemptAt;
+      }
     }
     return prs;
   }

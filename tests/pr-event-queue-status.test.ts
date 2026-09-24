@@ -27,12 +27,15 @@ describe('PrEventQueue status（R04 监控健康与时延）', () => {
 
     const status = await q.status();
     expect(status.samples24h).toBe(2);
+    expect(status.retryAttempts24h).toBe(1);
     expect(status.p50ms).toBeGreaterThan(0);
     expect(status.p95ms).toBeGreaterThanOrEqual(status.p50ms);
-    expect(status.failureRate24h).toBeCloseTo(0.5, 5);
+    // 失败率把重试尝试也算入：(1 条失败 receipt + 1 次重试) / (2 条 receipt + 1 次重试)
+    expect(status.failureRate24h).toBeCloseTo(2 / 3, 3);
     expect(status.prs['cfg:key1'].lastStatus).toBe(200);
     expect(status.prs['cfg:key2'].pending).toBe(1);
     expect(status.prs['cfg:key2'].retrying).toBe(1);
+    expect(status.prs['cfg:key2'].lastError).toBeTruthy();
     expect(status.prs['cfg:key2'].nextDueAt).toBeGreaterThan(now);
   });
 });

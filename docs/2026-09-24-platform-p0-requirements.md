@@ -16,3 +16,11 @@
 ## 上线
 
 隔离目录 `.pr-monitor-build` 重新构建并部署；构建 ID `-97mTAWqLtYsEfpnYXVS_`；备份 `/home/flutter/.pr-stability-backups/20260924-143303-monitor`。线上只读实测 `/api/gitcode/monitor` 返回 `p50ms=1665 / p95ms=2021 / samples24h=116 / failureRate24h=0`，并带按 PR 的 `prs` 键。
+
+## 复核修复（M2：失败统计）
+
+时间：2026-09-24 15:00。
+
+- **问题**（见 CPF-AIWeb 的 `2026-09-24-platform-p0-review.md` M2）：409/429/5xx 的重试不产生 receipt，失败率恒为 0、`lastError` 恒为空；容量上限也会截断 24h 样本。
+- **方案**：`drain` 重试时在 job 上记录 `lastStatus/lastError/lastAttemptAt`；`status()` 的 `failureRate24h` 计入重试尝试并新增 `retryAttempts24h`、`sampleWindowCapped`；`prHealth` 用当前重试错误覆盖、成功回执清除历史错误。
+- **验证**：`tests/pr-event-queue-status.test.ts` 断言重试被计入失败率与 `lastError`；`tsc` 与相关 vitest 253 项通过。
