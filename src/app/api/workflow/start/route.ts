@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { recordPrStartFailure, resolveWorkflowRunId, reserveWorkflowRunId } from '@/lib/workflow/pr-start-receipt';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { requireAuth } from '@/lib/auth/middleware';
 import { runWorkflowPreflight } from '@/lib/workflow/preflight';
@@ -364,7 +365,10 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const runId = `run-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    const runId = resolveWorkflowRunId(body?.runId);
+    if (!await reserveWorkflowRunId(runId, body?.runId)) {
+      return NextResponse.json({ error: '运行 ID 已被占用，请读取原任务状态', runId }, { status: 409 });
+    }
     if (config?.workflow?.mode === 'state-machine') {
       try {
         await createWorkflowConfigSnapshot({
@@ -399,6 +403,9 @@ export async function POST(request: NextRequest) {
     Promise.resolve((manager as any).start(configFile, undefined, preflightChecks, initialContexts, runId))
       .catch((err: any) => {
         logWorkflowStartFailure(configFile, err);
+        void recordPrStartFailure(runId, configFile, manager.getStatus()).catch(() => {
+          console.error('[Workflow] could not persist PR start failure');
+        });
         // The manager owns its own status transitions. Mutating it here can
         // corrupt an already-running workflow when a duplicate start is rejected.
       });

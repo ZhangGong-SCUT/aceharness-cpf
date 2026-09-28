@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stringify } from 'yaml';
@@ -74,6 +74,10 @@ describe('deterministic PR steps', () => {
     expect((await audit()).verdict).toBe('fail');
     await writeFile(join(out, 'pr-comment.json'), JSON.stringify({ ok: true, body: 'start build', endpoint: 'pulls', comment_id: 1, posted_at: '2026-09-24T00:01:00Z' }));
     expect((await audit()).verdict).toBe('pass');
+    expect(JSON.parse(await readFile(join(input.runDirectory, 'outputs/pr-push-audit.json'), 'utf8')))
+      .toMatchObject({ push_verified: true, commit_sha: 'abc', remote_head_sha: 'abc', build_comment_id: '1' });
+    await writeFile(join(out, 'push-result.json'), JSON.stringify({ push_status: 'success', commit_sha: 'abc', remote_head_sha: 'abc', pushed_at: '2026-09-24T00:02:00Z' }));
+    expect((await audit()).verdict).toBe('fail'); // an earlier build cannot verify a later push
     await writeFile(join(out, 'push-result.json'), JSON.stringify({ push_status: 'success', commit_sha: 'abc', remote_head_sha: 'old' }));
     expect((await audit()).verdict).toBe('fail');
   });

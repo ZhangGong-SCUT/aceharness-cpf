@@ -96,10 +96,8 @@ describe('R10 离线回放基线', () => {
     }
     report.generatedAt = new Date().toISOString();
     report.note = '离线回放，不发送真实评论或推送；样本为本机模拟。';
-    const out = join(process.cwd(), 'docs', 'pr-replay-baseline.json');
-    await writeFile(out, JSON.stringify(report, null, 2));
-    const written = JSON.parse(await readFile(out, 'utf8'));
-    expect(written.scenarios.length).toBe(scenarios.length);
+    const baseline = JSON.parse(await readFile(join(process.cwd(), 'docs', 'pr-replay-baseline.json'), 'utf8'));
+    expect(report.scenarios).toEqual(baseline.scenarios);
   });
 
   test('a restart reloads queued events from disk', async () => {

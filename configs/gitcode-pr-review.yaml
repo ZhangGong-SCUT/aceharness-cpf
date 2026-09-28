@@ -450,7 +450,7 @@ workflow:
                刚 push 过的必须加 --wait-push-ack --since <push完成时间ISO>：GitCode 的 MR 更新事件异步滞后（实测 ~70s），等「监测到PR/代码有更新/感谢提交」确认评论出现再发，否则构建会被中止
             6. 禁止评论 submit，禁止合入
             7. 推送失败时不得声明完成：403/无写权限直接 verdict=fail 去人工确认；网络暂时失败可 conditional_pass。
-            8. 写 outputs/push-result.json：push_status=success/failed/not_attempted、commit_sha、remote_head_sha、error（不得包含令牌）。
+            8. 写 outputs/push-result.json：push_status=success/failed/not_attempted、commit_sha、remote_head_sha、pushed_at（成功推送完成时的 ISO 时间）、error（不得包含令牌）。
                仅当 git ls-remote 对 head_repo/head_ref 返回的 SHA 与本地待推送 commit 一致时，才允许 push_status=success。
                工作区干净不等于推送完成：必须检查 PR 原始 head 到本地 HEAD 是否还有未推送提交，有则继续推送，不得跳过。
             输出 JSON：verdict、summary、push_status、start_build、start_build_count、wait_ack、dco。

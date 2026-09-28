@@ -133,8 +133,16 @@ export async function executePrScript(input: {
       const buildRequired = success || gate?.phase === 'need_start_build';
       const buildPosted = comment?.ok === true && comment.body?.trim() === 'start build'
         && comment.endpoint === 'pulls' && !!comment.comment_id
-        && Date.parse(comment.posted_at) >= Date.parse(gate?.checked_at || '');
+        && Date.parse(comment.posted_at) >= Math.max(Date.parse(gate?.checked_at || ''),
+          Date.parse(push?.pushed_at || '') || 0);
       const verified = (success || noPush) && (!buildRequired || buildPosted);
+      // Preserve script-checked facts; filesystem copy times are not push/build times.
+      const audit = { commit_sha: push?.commit_sha || '', remote_head_sha: push?.remote_head_sha || '',
+        push_verified: success, build_comment_id: verified && buildPosted ? String(comment.comment_id) : null,
+        checked_at: new Date().toISOString() };
+      await writeFile(resolve(out, 'pr-push-audit.json'), JSON.stringify(audit));
+      await mkdir(resolve(input.runDirectory, 'outputs'), { recursive: true });
+      await writeFile(resolve(input.runDirectory, 'outputs/pr-push-audit.json'), JSON.stringify(audit));
       result = { verdict: verified ? 'pass' : 'fail', push_status: push?.push_status || 'unknown',
         summary: !verified ? '推送或本轮 start build 缺少成功凭据，需要人工确认'
           : success ? '本地提交与远端提交一致，start build 已发送' : '没有待推送修改，本轮触发状态已核对' };
