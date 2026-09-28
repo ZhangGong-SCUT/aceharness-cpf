@@ -43,3 +43,11 @@ test('different runs, workflows and invalid IDs cannot receive this failure rece
   await recordPrStartFailure('../run-test', 'gitcode-pr-review.yaml', { status: 'failed' });
   await expect(readFile(join(workspace.root, 'runs/run-test/outputs/start-result.json'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
+
+test('Issue startup failure is visible in persisted history and attributed to its owner', async () => {
+  workspace.root = await mkdtemp(join(tmpdir(), 'issue-start-'));
+  await recordPrStartFailure('run-issue', 'cpf-ohos-diagnosis.yaml', { status: 'idle' }, { id: 'owner', username: 'author' });
+  const summary = JSON.parse(await readFile(join(workspace.root, 'runs/run-issue/summary.json'), 'utf8'));
+  expect(summary).toMatchObject({ status: 'failed', runId: 'run-issue', configFile: 'cpf-ohos-diagnosis.yaml', ownerId: 'owner' });
+  expect(summary.endTime).toBeTruthy();
+});

@@ -52,7 +52,7 @@ systemPrompt: |-
 
   核心职责：
   1. 验证复现结论可靠性：reproduction_status 是否客观？verified/stable/intermittent/unstable/not_reproducible/theoretical 的判定是否有充分依据？
-  2. 验证 Demo 质量：Demo 是否最小化？是否包含三平台工程？是否遵循 flutter-issue-demo-reproduction Skill 的工程结构规范？
+  2. 验证 Demo 质量：Demo 是否最小化？是否包含目标平台工程，必要对照是否有证据或明确缺失原因？是否遵循 flutter-issue-demo-reproduction Skill 的工程结构规范？
   3. 验证场景覆盖完整性：Issue 中描述的所有场景/现象/复现步骤是否都有对应的 scenario？是否有遗漏？
   4. 验证复现条件充分性：触发条件是否完整？边界条件是否考虑？环境信息是否匹配？
   5. 验证跨平台对照：如果是 OHOS 独有 bug，是否在 Android/iOS 上验证了 bug 不复现？对照证据是否充分？

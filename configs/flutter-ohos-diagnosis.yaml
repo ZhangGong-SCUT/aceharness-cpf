@@ -24,12 +24,32 @@ workflow:
     experienceEnabled: true
 
   states:
+    - name: 诊断预检
+      description: 脚本采集 Issue 正文和评论，检查 Git、SDK 与设备，保存本次诊断快照。
+      isInitial: true
+      isFinal: false
+      requireHumanApproval: false
+      steps:
+        - id: diagnosis-preflight
+          name: 输入采集与环境预检
+          agent: diagnosis-issue-collector
+          role: defender
+          diagnosisScript: preflight
+          task: 由脚本写入 diagnosis-input.json 和 diagnosis-preflight.json；正文不可读时终止，缺少设备时明确保留待验证状态。
+      transitions:
+        - to: 信息采集
+          condition: { verdict: pass }
+        - to: 信息采集
+          condition: { verdict: conditional_pass }
+        - to: 终止
+          condition: { verdict: fail }
+
     # ========== 状态1：信息采集（代码仓拉取+分支回退）==========
     - name: 信息采集
       description: |
         拉取代码仓到本地，识别 Issue 所在分支，切换到对应分支，并回退到 Issue 提出前的一个 merge commit。
       requireHumanApproval: false
-      isInitial: true
+      isInitial: false
       isFinal: false
       position: { x: 100, y: 200 }
       steps:
@@ -38,8 +58,10 @@ workflow:
           agent: diagnosis-issue-collector
           role: defender
           task: |
+            【已完成的脚本采集】先读取 outputs/diagnosis-input.json 和 outputs/diagnosis-preflight.json。正文/已读取评论以该快照为准，禁止重复请求正文 API；评论不完整时说明缺失。
+            Git/SDK/设备已预检。缺少设备时仍可做代码与编译分析，运行验证必须标记待验证，不要反复安装工具或凭空假设设备存在。
             从 globalContext 获取问题全文：可以是 Issue 链接，也可以是没有 Issue 号的文字描述。识别代码仓库 URL 和分支，准备本地代码仓；有创建时间才回退。
-            1. 先看「诊断输入形态」。有 Issue 链接：按 issue-content-collection.md 第 0 节用 curl（Windows 用 curl.exe）打正文 API 再打 comments API。禁止先抓 Issue HTML；乱码先按 UTF-8 重解。没有 Issue 链接：禁止 curl Issue API，禁止编造 Issue 号，把 globalContext 全文当本轮唯一问题，不要改去诊断残留的旧 Issue。
+            1. 先看「诊断输入形态」。仅旧任务没有 diagnosis-input.json 且有 Issue 链接时：按 issue-content-collection.md 第 0 节用 curl（Windows 用 curl.exe）打正文 API 再打 comments API。禁止先抓 Issue HTML；乱码先按 UTF-8 重解。没有 Issue 链接：禁止 curl Issue API，禁止编造 Issue 号，把 globalContext 全文当本轮唯一问题，不要改去诊断残留的旧 Issue。
                【快速终止】正文 API 返回 404 时：先用同仓另一个 Issue 号对照确认 API 本身可用；确认可用而正文仍 404（Issue 不存在/私有/已删除）→ verdict=fail、summary 注明 issue_not_accessible，走终止，禁止带空正文继续后续阶段。仅 comments 拿不到而正文正常 → 继续，verdict 最高 conditional_pass。
             2. 下载截图到 outputs/screenshots/。能看图就 Read 原图自己看；看不清或看不到再调用 look_at_image。freeform 无图片 URL 时不要使用残留截图。
             3. 提取结构化环境信息（设备/系统/API/框架/引擎版本、分支、复现概率），评估完整性；同时给出问题类型初判 problem_type_preliminary（稳定性/内存泄漏/功能/性能/渲染，无法判断填 unknown），供问题复现阶段决定插桩/埋点策略
@@ -59,9 +81,9 @@ workflow:
                - 不要 --depth=1（回退 merge commit 需要完整历史），脚本已保证完整历史
             6. 有 Issue created_at 才回退到创建时间前的 merge commit；freeform 保持 HEAD，reset_status=skipped_no_issue_date
             7. 验证当前 HEAD，列出关键文件路径。branch 必须是真实分支名，引擎会据此写入 outputs/ohos-flutter-sdk.json。JSON 填 input_source=issue_url 或 freeform_text
-            8. 评论里若出现「已合入 / 已在 PR #xx 修复」，只记「维护者称后续有修复」；禁止写出 PR 号、PR URL、官方修复 commit。有 Issue 号时保留号和 reset merge commit。
+            8. 评论里若出现「已合入 / 已在 PR #xx 修复」，只记「维护者称后续有修复」；禁止写出 PR 号、PR URL、官方修复 commit。不得对照该 PR 或套用官方修复。有 Issue 号时保留号和 reset merge commit。
             API URL、截图解析、环境信息字段等详细指导见 cpf-ohos-issue-analysis Skill 的 references/issue-content-collection.md。
-            输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、repo_path、engine_repo_path（准备了 engine 仓时填，否则 null）、branch、commit、issue_created_at、reset_target_merge_commit、issue_content_complete、issue_comments_count、screenshots、environment_info、environment_completeness、missing_evidence、repo_preparation（cached|fetched|cloned|degraded|skipped）、problem_type_preliminary（稳定性|内存泄漏|功能|性能|渲染|unknown）。
+            输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、repo_path、engine_repo_path（准备了 engine 仓时填，否则 null）、branch、commit、issue_created_at、reset_target_merge_commit、engine_commit（准备了 repo-engine 时必须记录修改前的完整 SHA）、issue_content_complete、issue_comments_count、screenshots、environment_info、environment_completeness、missing_evidence、repo_preparation（cached|fetched|cloned|degraded|skipped）、problem_type_preliminary（稳定性|内存泄漏|功能|性能|渲染|unknown）。
       transitions:
         # 信息采集 → 问题复现（构造 Demo 复现 Issue 问题）
         - to: 问题复现
@@ -81,7 +103,7 @@ workflow:
     - name: 问题复现
       description: |
         根据 Issue 描述和代码仓中的相关代码，按 flutter-issue-demo-reproduction Skill 构造最小复现 Demo。
-        Demo 必须包含三平台工程（ohos/android/ios），能编译通过，有设备时实际运行验证复现效果。
+        Demo 必须包含目标平台工程，按需增加可运行的对照平台；有设备时实际运行验证复现效果。
         如果是 OHOS 独有 bug，在 Android/iOS 上运行同样 scenario 验证 bug 不复现（跨平台对照验证）。
         复现不了时给出明确说明（原因分析 + 理论复现路径 + 缺失条件），不阻塞工作流。
       requireHumanApproval: false
@@ -96,19 +118,20 @@ workflow:
           role: defender
           task: |
             根据 Issue 描述和代码仓中的相关代码，按 flutter-issue-demo-reproduction Skill 构造最小复现 Demo。
+            0. 先读 outputs/diagnosis-preflight.json；按实际可用平台生成最小工程。OHOS 为目标平台，Android/iOS 工程和编译仅在需要跨平台对照且环境可用时准备，未执行项明确标注。
             1. 从信息采集阶段的输出获取：Issue 正文、复现步骤、环境信息、截图描述、问题类型初判（problem_type_preliminary）、代码仓本地路径（repo/）
             2. 判断 Issue 中是否直接提供了 Demo 代码：
                - 检查 Issue body 和评论中是否有代码块（```dart、```typescript、```arkts 等）
                - 检查是否有完整的可运行示例
             3. 根据 flutter-issue-demo-reproduction Skill 的快速启动决策树选择 Demo 构造策略：
-               - 【策略 A】Issue 提供了完整 Demo：直接使用，补充运行说明和三平台工程
+               - 【策略 A】Issue 提供了完整 Demo：直接使用，补充运行说明和所需平台工程
                - 【策略 B】Issue 提供了部分代码片段：基于片段 + 代码仓相关代码补全为完整可运行 Demo
                - 【策略 C】Issue 只有文字描述：根据描述 + 代码仓相关代码从零构造最小复现 Demo
                - 【策略 D】无法构造 Demo：说明原因，输出理论复现路径
             4. 按问题类型为 Demo 配置观测手段：内存泄漏→内存插桩/泄漏观测点；性能→trace/耗时埋点；渲染→截图对比点；稳定性→崩溃日志捕获（hilog）；功能→断言/输出检查点
             5. 锁定 Issue 黄金标志（issue_golden_flag）：从 Issue 正文复现步骤/预期行为中选定唯一可观测判据（如「点击 X 后页面白屏」），写入 JSON。修复验证阶段必须沿用此判据，禁止修订/改写/放宽
-            6. 按 Skill 的工程结构生成三平台工程（ohos/android/ios），配置 OHOS 签名
-            7. 按 Skill 的编译验证清单验证 Demo 能编译通过（flutter analyze / build hap / build apk）
+            6. 按 Skill 的工程结构生成目标平台及必要对照工程，配置 OHOS 签名
+            7. 按实际平台执行 flutter analyze / build hap，Android 对照必要且可用时执行 build apk
             8. 检测是否有连接的鸿蒙设备（hdc list targets），有设备时实际运行 Demo 验证复现效果
             9. 如果是 OHOS 独有 bug，在 Android/iOS 上运行同样 scenario 验证 bug 不复现（跨平台对照验证）
             10. 记录复现稳定性（verified/stable/intermittent/unstable/not_reproducible/theoretical）
@@ -153,7 +176,7 @@ workflow:
           task: |
             以批判性视角验证问题复现阶段（diagnosis-reproducer）的 Demo 质量和复现效果（效率约束：缺证据再读，不要写死文件个数；输出不超过 1500 字）：
             1. 验证复现结论可靠性：reproduction_status 是否客观？verified/stable/intermittent/unstable/not_reproducible/theoretical 的判定是否有充分依据？
-            2. 验证 Demo 质量：Demo 是否最小化？是否包含三平台工程？是否遵循 flutter-issue-demo-reproduction Skill 的工程结构规范？
+            2. 验证 Demo 质量：Demo 是否最小化？是否包含目标平台工程，所需对照平台是否有证据或明确缺失原因？是否遵循 flutter-issue-demo-reproduction Skill 的工程结构规范？
             3. 验证场景覆盖完整性：Issue 中描述的所有场景/现象/复现步骤是否都有对应的 scenario？是否有遗漏？
             4. 验证复现条件充分性：触发条件是否完整？边界条件是否考虑？环境信息是否匹配？
             5. 验证跨平台对照：如果是 OHOS 独有 bug，是否在 Android/iOS 上验证了 bug 不复现？对照证据是否充分？
@@ -569,16 +592,8 @@ workflow:
           name: 诊断完成
           agent: diagnosis-completer
           role: defender
-          task: |
-            诊断流程完成，输出最终总结：
-            1. 诊断报告路径（完整报告可通过 GET /api/runs/{runId}/step-logs?step=报告沉淀-生成诊断报告 获取）
-            2. 根因结论摘要
-            3. 修复建议摘要
-            4. 后续行动建议
-            5. 明确修复验证状态；如果前序报告标记为 skipped 或 needs_runtime_validation，不得表述为已解决。
-            6. 【磁盘清理】输出最终总结后，执行以下清理命令删除本次 run clone 的仓库目录以回收磁盘空间（诊断报告和状态已持久化到 ~/.aceharness/runs/，不受影响）：
-               rm -rf repo/
-               清理失败不影响诊断结论，在输出中标注清理结果即可。
+          diagnosisScript: finish
+          task: 脚本归档诊断证据、补丁和继承清单，保留 Demo 与仓库供后续反馈复用；验收结论沿用实际验证证据。
       transitions: []
 
     # ========== 终止状态：终止 ==========
@@ -592,11 +607,8 @@ workflow:
           name: 终止记录
           agent: diagnosis-completer
           role: defender
-          task: |
-            记录诊断终止原因和已有分析记录。
-            然后执行磁盘清理，删除本次 run clone 的仓库目录：
-            rm -rf repo/
-            清理失败不影响终止记录，在输出中标注清理结果即可。
+          diagnosisScript: abort
+          task: 脚本归档诊断证据、补丁和继承清单，保留 Demo 与仓库供后续反馈复用；验收结论沿用实际验证证据。
       transitions: []
 
 context:

@@ -5,6 +5,7 @@
 
 import { EventEmitter } from 'events';
 import { executePrScript } from '@/lib/workflow/pr-script-step';
+import { executeDiagnosisScript } from '@/lib/workflow/diagnosis-script-step';
 import { randomUUID } from 'crypto';
 import { readFile, readdir, stat, mkdir, rm, writeFile, copyFile } from 'fs/promises';
 import { resolve, join, dirname } from 'path';
@@ -1824,7 +1825,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       await reportPreparingProgress('准备中：初始化执行引擎...', '初始化执行引擎');
         await this.initializeEngine(
         resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine,
-        workflowConfig.workflow.states.some(state => state.steps.some(step => step.prScript)),
+        workflowConfig.workflow.states.some(state => state.steps.some(step => step.prScript || step.diagnosisScript)),
       );
       if (this.shouldStop) return;
       await reportPreparingProgress('准备中：加载 MCP 配置...', '加载 MCP 配置');
@@ -3947,7 +3948,7 @@ try {
       }
       this.emit('log', `使用引擎: ${this.engineType}`);
 
-      // Resolve the engine for skill paths, but read-only PR scripts need no model service.
+      // Resolve skill paths now; script steps can run before the model service is needed.
       if (deferCreation) return;
       // Always initialize currentEngine for the selected engine, including claude-code.
       this.currentEngine = await createEngine(this.engineType);
@@ -4465,7 +4466,8 @@ try {
       );
 
       const supervisorEnabled = config.workflow.supervisor?.enabled !== false
-        && config.workflow.supervisor?.stageReviewEnabled !== false;
+        && config.workflow.supervisor?.stageReviewEnabled !== false
+        && !(stateConfig.steps?.length && stateConfig.steps.every(step => step.diagnosisScript));
       const supervisorBeforeTransition = supervisorEnabled
         && config.workflow.supervisor?.stageReviewAsync === false;
       if (supervisorBeforeTransition && !wasForced && nextState !== '__human_approval__') {
@@ -6371,7 +6373,8 @@ try {
       }
 
       // Build context (now async)
-      const context = step.prScript ? '' : await this.buildStepContext(step, state, config, requirements, extraContext);
+      const scriptOnly = !!step.prScript || (!!step.diagnosisScript && step.diagnosisScript !== 'restore');
+      const context = scriptOnly ? '' : await this.buildStepContext(step, state, config, requirements, extraContext);
       console.log(`[StepTiming] context-done ts=${Date.now()} run=${this.currentRunId || '-'} step=${stepTimingTag} elapsed=${Date.now() - stepTimingStartMs}ms ctxLen=${context.length}`);
       this.logRunDiagnostic('step.prompt', {
         agent: runtimeAgentName,
@@ -6385,7 +6388,7 @@ try {
       // Execute step (reuse existing process manager logic)
       let stepResult = await this.runAgentStep(step, context, config, stepId);
       let output = stepResult.output;
-      if (!step.prScript && this.shouldRequireFinalVerdict(step, state) && !this.hasRequiredVerdictJson(output)) {
+      if (!scriptOnly && this.shouldRequireFinalVerdict(step, state) && !this.hasRequiredVerdictJson(output)) {
         const repairContext = this.buildMissingFinalVerdictPrompt(context, output, state, step);
         const repairResult = await this.runAgentStep(step, repairContext, config, stepId);
         output = [output, repairResult.output].filter(Boolean).join('\n\n---\n\n');
@@ -7366,20 +7369,25 @@ try {
     config: StateMachineWorkflowConfig,
     stepId?: string
   ): Promise<{ output: string; lastRoundOutput: string; costUsd: number; durationMs: number; sessionId?: string; tokenUsage: TokenUsage }> {
-    if (step.prScript) {
+    if (step.prScript || step.diagnosisScript) {
       if (!this.currentRunId) throw new Error('脚本步骤缺少 runId');
       const started = Date.now();
       const controller = new AbortController();
       this.scriptControllers.add(controller);
       try {
-        const output = await executePrScript({
-          operation: step.prScript, stateName: this.currentState || '',
+        const scriptInput = {
           workingDirectory: this.getWorkingDirectory() || this.resolveProjectRootPath(),
           runDirectory: resolve(getWorkspaceRunsDir(), this.currentRunId),
           globalContext: this.globalContext, userId: this._createdBy, signal: controller.signal,
-        });
-        return { output, lastRoundOutput: output, costUsd: 0, durationMs: Date.now() - started,
+        };
+        const output = step.diagnosisScript
+          ? await executeDiagnosisScript({ ...scriptInput, operation: step.diagnosisScript })
+          : await executePrScript({ ...scriptInput, operation: step.prScript!, stateName: this.currentState || '' });
+        const legacyRestore = step.diagnosisScript === 'restore' && extractStructuredResult(output,
+          (value: any): value is { fallback_to_agent: true } => value?.fallback_to_agent === true);
+        if (!legacyRestore) return { output, lastRoundOutput: output, costUsd: 0, durationMs: Date.now() - started,
           tokenUsage: toPersistedTokenUsage(ZERO_ENGINE_USAGE) };
+        this.emit('log', { message: '旧诊断任务缺少结构化继承清单，使用兼容恢复步骤核对原始证据' });
       } finally { this.scriptControllers.delete(controller); }
     }
     // Find agent config for system prompt and model
@@ -8244,7 +8252,7 @@ try {
     // Initialize engine
     await this.initializeEngine(
         resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine,
-        workflowConfig.workflow.states.some(state => state.steps.some(step => step.prScript)),
+        workflowConfig.workflow.states.some(state => state.steps.some(step => step.prScript || step.diagnosisScript)),
       );
     await this.resolveWorkflowMcpServers(workflowConfig);
     if (workflowConfig.context?.gitBaselineEnabled !== false) {
@@ -9017,7 +9025,7 @@ try {
     }
     await this.initializeEngine(
         resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine,
-        workflowConfig.workflow.states.some(state => state.steps.some(step => step.prScript)),
+        workflowConfig.workflow.states.some(state => state.steps.some(step => step.prScript || step.diagnosisScript)),
       );
     await this.resolveWorkflowMcpServers(workflowConfig);
     if (workflowConfig.context?.gitBaselineEnabled !== false) {

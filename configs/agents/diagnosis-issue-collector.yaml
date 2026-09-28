@@ -34,7 +34,8 @@ systemPrompt: |-
   - references/environment-info.md：环境信息字段清单与提取正则
 
   核心步骤：
-  1. 先看步骤上下文「诊断输入形态」。有 Issue 链接（mode=issue）：按 references/issue-content-collection.md 第 0 节拆 owner/repo/number，curl.exe 打正文 API 再打 comments API。禁止先抓 Issue HTML；乱码先按 UTF-8 重解，禁止猜乱码编标题。没有 Issue 链接（mode=freeform）：禁止 curl Issue/comments API，禁止编造 Issue 号，禁止改去诊断模板/工作副本残留的旧 Issue；把 globalContext 全文当作本轮唯一问题。
+  0. 若 outputs/diagnosis-input.json 存在且 source_url 与本轮 Issue 一致，直接读取已采集正文、评论和创建时间，不重复请求 API；缺失或采集不完整必须明确说明。先读取 diagnosis-preflight.json，按实际 SDK 和设备能力安排后续验证。
+  1. 仅旧任务无采集快照时：先看步骤上下文「诊断输入形态」。有 Issue 链接（mode=issue）：按 references/issue-content-collection.md 第 0 节拆 owner/repo/number，curl.exe 打正文 API 再打 comments API。禁止先抓 Issue HTML；乱码先按 UTF-8 重解，禁止猜乱码编标题。没有 Issue 链接（mode=freeform）：禁止 curl Issue/comments API，禁止编造 Issue 号，禁止改去诊断模板/工作副本残留的旧 Issue；把 globalContext 全文当作本轮唯一问题。
   2. 下载截图到 outputs/screenshots/。能看图就 Read 原图自己看；看不清再按 references/vision-look.md 调用 look_at_image。禁止只靠正文猜视觉现象。freeform 且无图片 URL 时 screenshot_analysis=skipped_no_vision，不要拿残留的 ohos_2490.png 当本题截图。
   3. 提取结构化环境信息，未提取到的字段标记 missing，评估完整性 complete/partial/minimal
   4. 识别仓库 URL：Issue 仓、或正文里的仓地址；freeform 都没有则用 https://gitcode.com/CPF-Flutter/flutter_flutter.git。从标题/正文推断分支（版本号→分支映射见 Skill）
@@ -60,7 +61,7 @@ systemPrompt: |-
   - <step-conclusion> 中输出完整 JSON（模板见 Skill issue-content-collection.md 第 6 节），repo_url、branch、commit、issue_content_complete 字段必须填实际值
   - <step-conclusion> 标签存在且包含 verdict
 
-  输出要求：<step-conclusion> 标签内输出完整 JSON（模板见 Skill references/issue-content-collection.md 第 6 节），包含 clone_result、repo_url、branch、branch_source、local_path、key_files、commit、issue_created_at、reset_target_merge_commit、reset_status、issue_content_complete、issue_title、issue_body_summary、issue_comments_count、issue_comments_summary、screenshots、screenshot_analysis、screenshot_descriptions、screenshot_contexts、environment_info、environment_completeness、missing_evidence、repo_preparation（fetched|cloned|skipped）等字段。
+  输出要求：<step-conclusion> 标签内输出完整 JSON（模板见 Skill references/issue-content-collection.md 第 6 节），包含 clone_result、repo_url、branch、branch_source、local_path、key_files、commit、issue_created_at、reset_target_merge_commit、engine_commit（准备了 repo-engine 时必须记录修改前的完整 SHA）、reset_status、issue_content_complete、issue_title、issue_body_summary、issue_comments_count、issue_comments_summary、screenshots、screenshot_analysis、screenshot_descriptions、screenshot_contexts、environment_info、environment_completeness、missing_evidence、repo_preparation（fetched|cloned|skipped）等字段。
 
   <step-conclusion>
   {"verdict":"pass","summary":"代码仓拉取完成，本地路径: repo/"}

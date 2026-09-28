@@ -1,6 +1,10 @@
 import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
 import { MockEngine } from './helpers/mock-engine';
 
+vi.mock('@/lib/workflow/diagnosis-script-step', () => ({
+  executeDiagnosisScript: vi.fn().mockResolvedValue('<step-conclusion>{"verdict":"pass","summary":"script complete"}</step-conclusion>'),
+}));
+
 const registryMocks = vi.hoisted(() => ({
   getManagerForRun: vi.fn(),
   getManagerByRunId: vi.fn(),
@@ -268,6 +272,29 @@ async function createManagerForTest(engine: MockEngine) {
 
   return manager;
 }
+
+test('diagnosis script dispatch consumes zero model tokens and builds no AI prompt', async () => {
+  const engine = new MockEngine({ success: false, output: 'model must not run' });
+  const manager = await createManagerForTest(engine);
+  const execute = vi.spyOn(engine, 'execute');
+  const config = makeConfig();
+  const step = { ...config.workflow.states[0].steps[0], diagnosisScript: 'preflight' };
+  const output = await (manager as any).executeStep(step, config.workflow.states[0], config);
+  expect(output).toContain('script complete');
+  expect(execute).not.toHaveBeenCalled();
+  expect((manager as any).buildStepContext).not.toHaveBeenCalled();
+  expect((manager as any).agents[0].costUsd).toBe(0);
+});
+
+test('script stages skip redundant supervisor review while semantic stages retain it', async () => {
+  const manager = await createManagerForTest(new MockEngine({ success: true, output: '<step-conclusion>{"verdict":"pass"}</step-conclusion>' }));
+  const config = makeConfig({ workflow: { supervisor: { enabled: true, stageReviewEnabled: true, stageReviewAsync: false } } });
+  config.workflow.states[0].steps[0].diagnosisScript = 'preflight';
+  await (manager as any).executeStateMachine(config);
+  const reviewed = (manager as any).collectSupervisorReview.mock.calls.filter(([type]: any[]) => type === 'state-review').map(([, state]: any[]) => state.name);
+  expect(reviewed).not.toContain('设计');
+  expect(reviewed).toContain('实施');
+});
 
 // ============================================================
 // parseVerdict

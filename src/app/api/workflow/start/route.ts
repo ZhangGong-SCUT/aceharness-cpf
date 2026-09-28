@@ -403,7 +403,7 @@ export async function POST(request: NextRequest) {
     Promise.resolve((manager as any).start(configFile, undefined, preflightChecks, initialContexts, runId))
       .catch((err: any) => {
         logWorkflowStartFailure(configFile, err);
-        void recordPrStartFailure(runId, configFile, manager.getStatus()).catch(() => {
+        void recordPrStartFailure(runId, configFile, manager.getStatus(), { id: user.id, username: user.username }).catch(() => {
           console.error('[Workflow] could not persist PR start failure');
         });
         // The manager owns its own status transitions. Mutating it here can

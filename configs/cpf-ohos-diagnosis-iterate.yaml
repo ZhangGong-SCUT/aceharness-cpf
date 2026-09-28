@@ -24,13 +24,14 @@ workflow:
     - name: 上下文装载
       description: |
         从原 run（parent-run）恢复诊断上下文：Issue 元信息、根因结论、冻结黄金标志、Demo 位置；
-        重新 clone repo/（及 repo-engine/）并回退到原轮同一 commit，保证两轮 patch 可对比。
+        优先复用本机仓库对象，独立恢复 repo/（及 repo-engine/）并回退到原轮同一 commit，保证两轮 patch 可对比。
       requireHumanApproval: false
       isInitial: true
       isFinal: false
       position: { x: 100, y: 200 }
       steps:
         - id: restore-context
+          diagnosisScript: restore
           name: 继承上下文恢复
           agent: diagnosis-issue-collector
           role: defender
@@ -40,12 +41,12 @@ workflow:
                - outputs/ 下的产物（诊断报告 md、fix.patch / fix-engine.patch、ohos-flutter-sdk.json、复现截图与日志）
                - 从问题复现阶段输出 JSON 中提取 issue_golden_flag（冻结黄金标志，本轮禁止修订）
                - 根因结论（problem_type / layer / problem_ownership / confidence）
-               - Demo 工程位置 = parent-run-dir/demo/（本轮直接引用该绝对路径复用，不重建）
-            2. 重新拉取代码仓（原 run 的 repo/ 已被完成步骤清理）：
+               - Demo 工程位置 = parent-run-dir/demo/；复制到本轮 demo/ 独立使用，排除 build 和依赖缓存，禁止修改原轮 Demo
+            2. 恢复独立代码仓（原 run 的 repo/ 若仍存在优先本地 clone，否则复用 repo-cache 脚本）：
                - repo-url + repo-branch 从 globalContext 或原 run 的 outputs/ohos-flutter-sdk.json 获取
-               - clone 到本 run 目录 repo/，checkout 到原轮相同的 reset_target_merge_commit（从原 run 信息采集输出 JSON 或 ~/.aceharness/runs/<parent-run-id>/ 持久化状态中读取；找不到时 checkout 分支最新并明确标注）
+               - clone 到本 run 目录 repo/，checkout 到原轮相同的 reset_target_merge_commit（从原 run 信息采集输出 JSON 或 ~/.aceharness/runs/<parent-run-id>/ 持久化状态中读取；找不到时必须 fail 并说明缺失证据，禁止改用分支最新提交）
                - 原轮涉及引擎层（repo-engine/）时同样恢复
-            3. 校验恢复完整性：黄金标志缺失时 verdict=fail 终止（无验收标准无法迭代）；demo/ 不存在时 verdict=fail 终止；黄金标志与 Demo 完好但 repo 未能还原到原轮精确 commit（回退到分支最新）时 verdict=conditional_pass 且 context_completeness=partial
+            3. 校验恢复完整性：黄金标志缺失时 verdict=fail 终止（无验收标准无法迭代）；demo/ 不存在时 verdict=fail 终止；repo 未能还原到原轮精确 commit 时 verdict=fail 并说明缺失证据，禁止回退到分支最新；仅非关键说明缺失时可 conditional_pass
             4. 输出继承上下文清单，供方案设计阶段使用
             输出结尾必须包含 JSON：verdict、summary、artifact_path、key_findings、issue_golden_flag（冻结值）、root_cause_summary、problem_ownership、demo_path（绝对路径）、repo_commit（实际恢复到的 commit）、context_completeness（complete|partial）。
       transitions:
@@ -56,7 +57,7 @@ workflow:
         - to: 方案设计
           condition: { verdict: conditional_pass }
           priority: 2
-          label: 上下文部分恢复（repo 回退到分支最新而非原轮精确 commit），带 partial 标注进入方案设计
+          label: 原始提交、Demo、黄金标志均已确认，仅非关键说明缺失，带 partial 标注进入方案设计
         - to: 终止
           condition: { verdict: fail }
           priority: 3
@@ -296,13 +297,8 @@ workflow:
           name: 诊断完成
           agent: diagnosis-completer
           role: defender
-          task: |
-            迭代流程完成，输出最终总结：
-            1. 迭代报告路径（含 AI 轮对比章节）
-            2. 本轮修复结论摘要（用户反馈落实情况 + 黄金标志结果）
-            3. 与 AI 轮的优劣结论摘要
-            4. 后续行动建议；前序标记 needs_runtime_validation 时不得表述为已解决
-            5. 【磁盘清理】输出总结后执行 rm -rf repo/ repo-engine/（demo 属于原 run 目录，不清理）。
+          diagnosisScript: finish
+          task: 脚本归档本轮诊断证据与继承清单，保留独立 Demo、冻结验收判据和仓库基线。
       transitions: []
 
     # ========== 终止状态：终止 ==========
@@ -316,9 +312,8 @@ workflow:
           name: 终止记录
           agent: diagnosis-completer
           role: defender
-          task: |
-            记录迭代终止原因（通常是原 run 上下文缺失：黄金标志/Demo 不可恢复）。
-            然后执行 rm -rf repo/ repo-engine/ 清理。
+          diagnosisScript: abort
+          task: 脚本归档本轮诊断证据与继承清单，保留独立 Demo、冻结验收判据和仓库基线。
       transitions: []
 
 context:
