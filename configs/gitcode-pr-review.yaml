@@ -350,6 +350,7 @@ workflow:
       position: { x: 1820, y: 680 }
       steps:
         - id: apply-ai-review
+          prScript: approved-apply
           name: 按AI检视修改
           agent: developer
           role: defender
@@ -396,6 +397,7 @@ workflow:
               git -C repo apply --check 通过后 git -C repo apply；apply 冲突说明 PR 基线已漂移，verdict=conditional_pass 并注明需在面板重新生成建议。applied_issues 填「应用建议修复（源 run-<id>）」。此模式改完正常走推送。
             - user_revert: from <sha> to <sha> 行：在 repo/ 执行 git revert --no-commit <sha>..<sha>（无变更则 verdict=pass 并说明无可回退）。applied_issues 填「回退 AI 检视修复」。
         - id: challenge-ai-review
+          prScript: approved-apply-audit
           name: 质疑检视修复
           agent: code-hunter
           role: attacker
@@ -405,6 +407,7 @@ workflow:
             模式C：指令是否执行到位、是否改了指令外的范围。
             输出 <step-conclusion>。
         - id: judge-ai-review
+          prScript: approved-apply-audit
           name: 检视修复裁决
           agent: fix-reviewer
           role: judge
@@ -434,10 +437,11 @@ workflow:
           agent: developer
           role: defender
           task: |
+            0. 在任何推送或评论前记录本轮 attempted_at（ISO 时间），写入 outputs/push-result.json；本轮始终保留该时间，门禁查询不能改写它。
             1. git -C repo status。无改动且 gate-check.json 的 phase 不是 need_start_build 且上一步骤（编译修复裁决）结论 summary 不是以 env-jitter-retry 开头：不要空 commit，也不要空评论 start build，verdict=pass
             2. phase=need_start_build 且无改动（CI 抖动重试，gate-check.json 的 start_build_count < start_build_max）：不要 commit、不要 push，直接重发恰好一行 start build，verdict=pass。
                或上一步骤结论 summary 以 env-jitter-retry 开头且工作区无改动（编译失败实证为 CI 环境问题的一次性豁免重试，不受 start_build 预算约束）：同样不 commit、不 push，以作者凭据直接重发恰好一行 start build，verdict=pass，summary 注明 env-jitter-retry 已使用
-            3. 有改动：git -C repo diff > outputs/fix.patch。commit 写清修的是静态/编译/DCO/检视，必须带 Signed-off-by，可用 git commit -s。
+            3. 有改动（含已暂存改动）：git -C repo diff --binary HEAD > outputs/fix.patch。commit 写清修的是静态/编译/DCO/检视，必须带 Signed-off-by，可用 git commit -s。
                user.email 与 Signed-off-by 必须用 PR 基线 commit（head 起点，即 PR 原始提交）的 author 邮箱——那是作者 GitCode 账号绑定且已签 DCO 的邮箱；禁止从仓库其他历史 commit 或 git config 拿邮箱（1913 事故：拿了旧邮箱导致 DCO 失败）。
                禁止改写历史 commit 的 author 邮箱后 force push——那是顶替他人提交身份，永远不做；DCO 邮箱问题只能由作者本人在线签署对应邮箱的 DCO 协议解决。
                提交身份必须复用 fork 历史提交的作者（git -C repo log -1 --format='%an <%ae>' 取原 PR 提交人），禁止编造邮箱——DCO 校验 Signed-off-by 邮箱必须与 GitCode 账号一致，用错邮箱必挂 DCO
@@ -450,7 +454,7 @@ workflow:
                刚 push 过的必须加 --wait-push-ack --since <push完成时间ISO>：GitCode 的 MR 更新事件异步滞后（实测 ~70s），等「监测到PR/代码有更新/感谢提交」确认评论出现再发，否则构建会被中止
             6. 禁止评论 submit，禁止合入
             7. 推送失败时不得声明完成：403/无写权限直接 verdict=fail 去人工确认；网络暂时失败可 conditional_pass。
-            8. 写 outputs/push-result.json：push_status=success/failed/not_attempted、commit_sha、remote_head_sha、pushed_at（成功推送完成时的 ISO 时间）、error（不得包含令牌）。
+            8. 写 outputs/push-result.json：push_status=success/failed/not_attempted、attempted_at（本轮动作开始时间）、commit_sha、remote_head_sha、pushed_at（成功推送完成时的 ISO 时间）、error（不得包含令牌）。
                仅当 git ls-remote 对 head_repo/head_ref 返回的 SHA 与本地待推送 commit 一致时，才允许 push_status=success。
                工作区干净不等于推送完成：必须检查 PR 原始 head 到本地 HEAD 是否还有未推送提交，有则继续推送，不得跳过。
             输出 JSON：verdict、summary、push_status、start_build、start_build_count、wait_ack、dco。

@@ -7,7 +7,7 @@ export type RunningPrSnapshot = {
   currentState?: string | null;
   globalContext?: string;
   pendingHumanQuestion?: { id?: string; previousState?: string | null; answerSchema?: { type?: string } } | null;
-  waitingFor?: 'webhook' | 'user_decision';
+  waitingFor?: 'webhook' | 'user_decision' | 'push_reconcile';
   workingDirectory?: string;
   userId?: string;
 };
@@ -26,6 +26,7 @@ export function resolveGitcodeMaxParallel(): number {
 }
 
 export function isPrGateWait(item: RunningPrSnapshot): boolean {
+  if (item.waitingFor === 'push_reconcile' && item.pendingHumanQuestion?.previousState === '人工确认') return true;
   if (item.waitingFor === 'user_decision') return false;
   const state = item.currentState;
   if (state === '__human_approval__' || item.pendingHumanQuestion) {
@@ -98,4 +99,3 @@ export function decideGitcodeWebhookRun(input: {
 
   return { action: 'start', activeCount: executing.length };
 }
-

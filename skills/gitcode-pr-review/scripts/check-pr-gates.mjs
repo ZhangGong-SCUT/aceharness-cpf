@@ -180,7 +180,10 @@ async function main() {
   try {
     const stateRaw = await readFile(resolve(arg('--state', resolve(outDir, '..', 'state.yaml'))), 'utf8');
     const gc = /^globalContext:\s*[|>][+-]?\n([\s\S]*?)(?=\n[^\s]|(?![\s\S]))/m.exec(stateRaw)?.[1] || '';
-    if (/^\s*user_(?:fix_feedback|revert|apply_patch):/m.test(gc)) phaseOverride = 'user_fix';
+    const instruction = gc.match(/^\s*(user_(?:fix_feedback|revert|apply_patch):[^\n]*)/m)?.[1]?.trim();
+    let completed = null;
+    try { completed = JSON.parse(await readFile(resolve(outDir, 'user-instruction-result.json'), 'utf8')); } catch { /* first execution */ }
+    if (instruction && !(completed?.instruction === instruction && /^[a-f0-9]{40}$/i.test(completed.commit_sha || ''))) phaseOverride = 'user_fix';
   } catch { /* 直跑脚本时无指令 */ }
   // 检视建议等待决策检测：本 run 已生成建议（review-suggestion.json）且 PR head 未变 → 等用户决策，不重新生成
   // （仅在正常分类为 ai_review_pending 时生效：用户自己推送过修复 → 意见已 stale → 走正常流程）

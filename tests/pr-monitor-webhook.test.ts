@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const mocks = vi.hoisted(() => ({ managers: [] as any[], manager: null as any, persisted: null as any, root: '', gate: vi.fn() }));
@@ -83,4 +83,33 @@ test('a restart restores the waiting execution loop, rather than transitioning a
   expect((await snapshotRunningPrs(configFile))).toHaveLength(1);
   expect(await startPrReviewFromWebhook({ payload, configFile })).toMatchObject({ woken: true });
   expect(m.forceJumpToState).toHaveBeenCalledOnce(); expect(m.forceTransition).not.toHaveBeenCalled();
+});
+
+test.each([true, false])('verified push audit recovery resumes CI monitoring (live=%s)', async live => {
+  const { m, dir } = await manager('人工确认');
+  const runId = 'run-pr42-test', sha = 'a'.repeat(40);
+  const gc = `${context}\nhead_repo: me/repo\nhead_ref: fix\nuser_apply_patch: run-original`;
+  m.getStatus = () => ({ runId, status: 'running', currentState: '__human_approval__', globalContext: gc, workingDirectory: dir });
+  mocks.persisted = { ...m.getStatus(), pendingHumanQuestionId: 'q',
+    humanQuestions: [{ ...m.getPendingHumanQuestion(), status: 'unanswered' }], stateHistory: [{ from: '推送并触发', to: '人工确认' }] };
+  const files = {
+    'push-result.json': { push_status: 'success', commit_sha: sha, remote_head_sha: sha, pushed_at: '2026-09-28T13:06:46Z', branch: 'fix', remote: 'https://gitcode.com/me/repo.git' },
+    'pr-comment.json': { ok: true, body: 'start build', endpoint: 'pulls', comment_id: 'receipt', posted_at: '2026-09-28T13:07:41Z' },
+    'gate-check.json': { phase: 'running', head_sha: sha, checked_at: '2026-09-28T13:11:26Z' },
+    'pr-push-audit.json': { push_verified: true, verified: false },
+  };
+  for (const [name, body] of Object.entries(files)) await writeFile(join(dir, 'outputs', name), JSON.stringify(body));
+  const configFile = live ? 'gitcode-pr-review.yaml' : `recovery-${Date.now()}.yaml`;
+  if (!live) {
+    const archive = join(mocks.root, 'runs', runId); await mkdir(archive, { recursive: true });
+    await writeFile(join(archive, 'summary.json'), JSON.stringify({ configFile, status: 'running' }));
+    mocks.persisted.configFile = configFile;
+    mocks.managers = [];
+    m.getStatus = () => ({ status: 'idle' });
+    m.forceJumpToState = vi.fn(async () => { m.emit('status', { runId, status: 'running' }); });
+  }
+  mocks.gate.mockResolvedValue(JSON.stringify({ phase: 'running', own_pr: true, head_sha: sha }));
+  expect(await startPrReviewFromWebhook({ payload, configFile })).toMatchObject({ woken: true, started: false });
+  expect(live ? m.answerHumanQuestion : m.forceJumpToState).toHaveBeenCalledOnce();
+  expect(JSON.parse(await readFile(join(dir, 'outputs/user-instruction-result.json'), 'utf8'))).toMatchObject({ instruction: 'user_apply_patch: run-original', commit_sha: sha });
 });

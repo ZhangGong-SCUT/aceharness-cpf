@@ -4,6 +4,7 @@ import { MockEngine } from './helpers/mock-engine';
 vi.mock('@/lib/workflow/diagnosis-script-step', () => ({
   executeDiagnosisScript: vi.fn().mockResolvedValue('<step-conclusion>{"verdict":"pass","summary":"script complete"}</step-conclusion>'),
 }));
+vi.mock('@/lib/workflow/pr-script-step', () => ({ executePrScript: vi.fn() }));
 
 const registryMocks = vi.hoisted(() => ({
   getManagerForRun: vi.fn(),
@@ -294,6 +295,24 @@ test('script stages skip redundant supervisor review while semantic stages retai
   const reviewed = (manager as any).collectSupervisorReview.mock.calls.filter(([type]: any[]) => type === 'state-review').map(([, state]: any[]) => state.name);
   expect(reviewed).not.toContain('设计');
   expect(reviewed).toContain('实施');
+});
+
+test('approved patch steps use zero model calls, while other review requests fall back to the engine', async () => {
+  const { executePrScript } = await import('@/lib/workflow/pr-script-step');
+  const engine = new MockEngine({ success: true, output: '<step-conclusion>{"verdict":"pass","summary":"semantic review"}</step-conclusion>' });
+  const manager = await createManagerForTest(engine);
+  const execute = vi.spyOn(engine, 'execute');
+  const config = makeConfig();
+  for (const operation of ['approved-apply', 'approved-apply-audit', 'approved-apply-audit']) {
+    vi.mocked(executePrScript).mockResolvedValue('<step-conclusion>{"verdict":"pass","summary":"approved script"}</step-conclusion>');
+    const step = { ...config.workflow.states[0].steps[0], prScript: operation };
+    expect(await (manager as any).executeStep(step, config.workflow.states[0], config)).toContain('approved script');
+  }
+  expect(execute).not.toHaveBeenCalled();
+  vi.mocked(executePrScript).mockResolvedValue('<step-conclusion>{"verdict":"conditional_pass","fallback_to_agent":true}</step-conclusion>');
+  const step = { ...config.workflow.states[0].steps[0], prScript: 'approved-apply' };
+  expect(await (manager as any).executeStep(step, config.workflow.states[0], config)).toContain('semantic review');
+  expect(execute).toHaveBeenCalledOnce();
 });
 
 // ============================================================

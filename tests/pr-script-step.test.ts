@@ -69,16 +69,16 @@ describe('deterministic PR steps', () => {
   test('push audit requires both remote SHA evidence and a current build trigger', async () => {
     const input = await fixture(); const out = join(input.workingDirectory, 'outputs');
     await writeFile(join(out, 'gate-check.json'), JSON.stringify({ phase: 'static_failed', checked_at: '2026-09-24T00:00:00Z' }));
-    await writeFile(join(out, 'push-result.json'), JSON.stringify({ push_status: 'success', commit_sha: 'abc', remote_head_sha: 'abc' }));
+    await writeFile(join(out, 'push-result.json'), JSON.stringify({ push_status: 'success', commit_sha: 'a'.repeat(40), remote_head_sha: 'a'.repeat(40), pushed_at: '2026-09-24T00:00:01Z' }));
     const audit = async () => result(await executePrScript({ ...input, operation: 'push-audit', stateName: '推送并触发' }));
     expect((await audit()).verdict).toBe('fail');
     await writeFile(join(out, 'pr-comment.json'), JSON.stringify({ ok: true, body: 'start build', endpoint: 'pulls', comment_id: 1, posted_at: '2026-09-24T00:01:00Z' }));
     expect((await audit()).verdict).toBe('pass');
     expect(JSON.parse(await readFile(join(input.runDirectory, 'outputs/pr-push-audit.json'), 'utf8')))
-      .toMatchObject({ push_verified: true, commit_sha: 'abc', remote_head_sha: 'abc', build_comment_id: '1' });
-    await writeFile(join(out, 'push-result.json'), JSON.stringify({ push_status: 'success', commit_sha: 'abc', remote_head_sha: 'abc', pushed_at: '2026-09-24T00:02:00Z' }));
+      .toMatchObject({ push_verified: true, commit_sha: 'a'.repeat(40), remote_head_sha: 'a'.repeat(40), build_comment_id: '1' });
+    await writeFile(join(out, 'push-result.json'), JSON.stringify({ push_status: 'success', commit_sha: 'a'.repeat(40), remote_head_sha: 'a'.repeat(40), pushed_at: '2026-09-24T00:02:00Z' }));
     expect((await audit()).verdict).toBe('fail'); // an earlier build cannot verify a later push
-    await writeFile(join(out, 'push-result.json'), JSON.stringify({ push_status: 'success', commit_sha: 'abc', remote_head_sha: 'old' }));
+    await writeFile(join(out, 'push-result.json'), JSON.stringify({ push_status: 'success', commit_sha: 'a'.repeat(40), remote_head_sha: 'old' }));
     expect((await audit()).verdict).toBe('fail');
   });
   test('missing push record cannot be treated as success', async () => {

@@ -7,7 +7,7 @@
 import { describe, expect, test, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import { mkdtemp, rm, readFile } from 'fs/promises';
+import { mkdtemp, rm, readFile, mkdir, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -369,6 +369,22 @@ describe('check-pr-gates.mjs 集成', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test('completed user instructions are not replayed by subsequent gate checks', async () => {
+    pull = { state: 'open', user: { login: 'me' }, head: { sha: 'a'.repeat(40), ref: 'fix', repo: { full_name: 'me/app_fork' } }, base: { ref: 'master' } };
+    labels = [{ name: 'dco检查成功' }]; commentPages = {};
+    const dir = await mkdtemp(resolve(tmpdir(), 'gate-instruction-'));
+    const out = resolve(dir, 'outputs'); await mkdir(out);
+    const instruction = 'user_apply_patch: run-original';
+    try {
+      await writeFile(resolve(dir, 'state.yaml'), `globalContext: |-\n  ${instruction}\n`);
+      expect((await runScript(out)).phase).toBe('user_fix');
+      await writeFile(resolve(out, 'user-instruction-result.json'), JSON.stringify({ instruction, commit_sha: 'a'.repeat(40) }));
+      expect((await runScript(out)).phase).not.toBe('user_fix');
+      await writeFile(resolve(out, 'user-instruction-result.json'), JSON.stringify({ instruction: 'user_apply_patch: run-other', commit_sha: 'a'.repeat(40) }));
+      expect((await runScript(out)).phase).toBe('user_fix');
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
   test('修复：超过 300 条仍读取最新 CI 评论', async () => {

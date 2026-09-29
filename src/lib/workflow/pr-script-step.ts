@@ -4,11 +4,15 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { buildConfiguredProcessEnv } from '@/lib/core/configured-env';
+import { evaluatePrPushEvidence } from '@/lib/workflow/pr-push-evidence';
+import { markPrInstructionComplete } from '@/lib/workflow/pr-push-recovery';
+
+import { executeApprovedApply } from './pr-approved-apply';
 
 const execute = promisify(execFile);
-export type PrScript = 'identity' | 'gates' | 'route' | 'review' | 'park' | 'ready' | 'human' | 'finish' | 'push-audit';
+export type PrScript = 'identity' | 'gates' | 'route' | 'review' | 'park' | 'ready' | 'human' | 'finish' | 'push-audit' | 'approved-apply' | 'approved-apply-audit';
 
-/** Fixed, read-only PR operations. Never interpret a model response as a command. */
+/** Fixed PR operations and exact approved-patch application. Never execute model output as a command. */
 export async function executePrScript(input: {
   operation: PrScript; stateName: string; workingDirectory: string;
   runDirectory: string; globalContext: string; userId?: string; signal?: AbortSignal;
@@ -60,6 +64,10 @@ export async function executePrScript(input: {
     return head !== gate?.head_sha && !(push?.push_status === 'success'
       && push.commit_sha === head && push.remote_head_sha === head);
   };
+  if (input.operation === 'approved-apply' || input.operation === 'approved-apply-audit') {
+    const applied = await executeApprovedApply({ ...input, operation: input.operation, env });
+    return '<step-conclusion>' + JSON.stringify(applied) + '</step-conclusion>';
+  }
   let result;
   switch (input.operation) {
     case 'identity':
@@ -128,22 +136,17 @@ export async function executePrScript(input: {
       const push = await optionalRead('push-result.json');
       const gate = await optionalRead('gate-check.json');
       const comment = await optionalRead('pr-comment.json');
-      const success = push?.push_status === 'success' && !!push.commit_sha && push.commit_sha === push.remote_head_sha;
-      const noPush = push?.push_status === 'not_attempted' && !(await hasUnpushedChanges());
-      const buildRequired = success || gate?.phase === 'need_start_build';
-      const buildPosted = comment?.ok === true && comment.body?.trim() === 'start build'
-        && comment.endpoint === 'pulls' && !!comment.comment_id
-        && Date.parse(comment.posted_at) >= Math.max(Date.parse(gate?.checked_at || ''),
-          Date.parse(push?.pushed_at || '') || 0);
-      const verified = (success || noPush) && (!buildRequired || buildPosted);
+      const { success, verified, buildCommentId, reason } = evaluatePrPushEvidence(push, comment, gate,
+        push?.push_status === 'not_attempted' && !(await hasUnpushedChanges()));
+      if (success) await markPrInstructionComplete(input.workingDirectory, input.runDirectory, input.globalContext, push.commit_sha);
       // Preserve script-checked facts; filesystem copy times are not push/build times.
       const audit = { commit_sha: push?.commit_sha || '', remote_head_sha: push?.remote_head_sha || '',
-        push_verified: success, build_comment_id: verified && buildPosted ? String(comment.comment_id) : null,
+        push_verified: success, build_comment_id: buildCommentId, verified, reason,
         checked_at: new Date().toISOString() };
       await writeFile(resolve(out, 'pr-push-audit.json'), JSON.stringify(audit));
       await mkdir(resolve(input.runDirectory, 'outputs'), { recursive: true });
       await writeFile(resolve(input.runDirectory, 'outputs/pr-push-audit.json'), JSON.stringify(audit));
-      result = { verdict: verified ? 'pass' : 'fail', push_status: push?.push_status || 'unknown',
+      result = { verdict: verified ? 'pass' : 'fail', reason, push_status: push?.push_status || 'unknown',
         summary: !verified ? '推送或本轮 start build 缺少成功凭据，需要人工确认'
           : success ? '本地提交与远端提交一致，start build 已发送' : '没有待推送修改，本轮触发状态已核对' };
       break;

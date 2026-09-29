@@ -378,7 +378,8 @@ export function parseGitcodeWebhookPayload(payload: unknown, options: { includeC
     author: author || null,
     headRef: firstText(head.ref, pull?.head_branch, pull?.source_branch) || null,
     baseRef: firstText(base.ref, pull?.base_branch, pull?.target_branch) || null,
-    headSha: firstText(head.sha, head.id, pull?.merge_commit_sha) || null,
+    // merge_commit_sha identifies a merge result, never the source branch tip.
+    headSha: firstText(head.sha, head.id, pull?.last_commit?.id, pull?.diff_refs?.head_sha) || null,
     headRepo,
   };
 

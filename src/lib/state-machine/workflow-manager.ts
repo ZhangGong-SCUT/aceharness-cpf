@@ -6373,7 +6373,8 @@ try {
       }
 
       // Build context (now async)
-      const scriptOnly = !!step.prScript || (!!step.diagnosisScript && step.diagnosisScript !== 'restore');
+      const conditionalPrScript = step.prScript === 'approved-apply' || step.prScript === 'approved-apply-audit';
+      const scriptOnly = (!!step.prScript && !conditionalPrScript) || (!!step.diagnosisScript && step.diagnosisScript !== 'restore');
       const context = scriptOnly ? '' : await this.buildStepContext(step, state, config, requirements, extraContext);
       console.log(`[StepTiming] context-done ts=${Date.now()} run=${this.currentRunId || '-'} step=${stepTimingTag} elapsed=${Date.now() - stepTimingStartMs}ms ctxLen=${context.length}`);
       this.logRunDiagnostic('step.prompt', {
@@ -7383,11 +7384,12 @@ try {
         const output = step.diagnosisScript
           ? await executeDiagnosisScript({ ...scriptInput, operation: step.diagnosisScript })
           : await executePrScript({ ...scriptInput, operation: step.prScript!, stateName: this.currentState || '' });
-        const legacyRestore = step.diagnosisScript === 'restore' && extractStructuredResult(output,
-          (value: any): value is { fallback_to_agent: true } => value?.fallback_to_agent === true);
+        // Script adapters return <step-conclusion>, whereas extractStructuredResult only reads <result>.
+        const legacyRestore = (step.diagnosisScript === 'restore' || step.prScript === 'approved-apply' || step.prScript === 'approved-apply-audit')
+          && this.extractJsonObject(output)?.fallback_to_agent === true;
         if (!legacyRestore) return { output, lastRoundOutput: output, costUsd: 0, durationMs: Date.now() - started,
           tokenUsage: toPersistedTokenUsage(ZERO_ENGINE_USAGE) };
-        this.emit('log', { message: '旧诊断任务缺少结构化继承清单，使用兼容恢复步骤核对原始证据' });
+        this.emit('log', { message: step.diagnosisScript ? '旧诊断任务缺少结构化继承清单，使用兼容恢复步骤核对原始证据' : '当前请求需要语义审查，继续使用原有 Agent 步骤' });
       } finally { this.scriptControllers.delete(controller); }
     }
     // Find agent config for system prompt and model

@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import { loadRunState } from '@/lib/run/state-persistence';
 import { mergePrEventContext } from '@/lib/workflow/pr-monitor-state';
 import { executePrScript } from '@/lib/workflow/pr-script-step';
+import { readRecoverablePush, markPrInstructionComplete } from '@/lib/workflow/pr-push-recovery';
 import { join, resolve } from 'path';
 import { loadSystemSettings } from '@/lib/config/system-settings';
 import { loadUsers, storeToken, type User } from '@/lib/core/user-store';
@@ -334,6 +335,10 @@ function waitingFor(question: any): 'webhook' | 'user_decision' {
 }
 
 async function annotatePrWait(snapshot: RunningPrSnapshot): Promise<RunningPrSnapshot> {
+  if (snapshot.pendingHumanQuestion?.previousState === '人工确认' && snapshot.runId) {
+    const state = await loadRunState(snapshot.runId);
+    if (await readRecoverablePush({ ...snapshot, state })) return { ...snapshot, waitingFor: 'push_reconcile' };
+  }
   if (snapshot.pendingHumanQuestion?.previousState !== '挂起' || !snapshot.runId) return snapshot;
   // Step output bodies are compacted on persistence; never rely on them alone
   // to distinguish CI waits from approval of an unpushed suggestion.
@@ -362,7 +367,7 @@ export async function snapshotRunningPrs(configFile: string): Promise<RunningPrS
         waitingFor: waitingFor(question), workingDirectory: status.workingDirectory,
         userId: (manager as any)._createdBy };
     });
-  if (String(process.env.ACE_WEBHOOK_DISK_SNAPSHOT ?? '1') !== '1') return snapshots;
+  if (String(process.env.ACE_WEBHOOK_DISK_SNAPSHOT ?? '1') !== '1') return Promise.all(snapshots.map(annotatePrWait));
   const seen = new Set(snapshots.map(item => item.runId));
   if (!diskSnapshots || diskSnapshots.config !== configFile || Date.now() - diskSnapshots.at > 5000) {
     const items: RunningPrSnapshot[] = [];
@@ -394,10 +399,20 @@ async function probePrGateWait(snapshot: RunningPrSnapshot): Promise<{ wake: boo
   if (!snapshot.runId || !snapshot.workingDirectory || basename(snapshot.workingDirectory) !== snapshot.runId) {
     return { wake: false, status: 202, reason: '历史任务工作区未隔离，需要重新开启监控' };
   }
+  const recovery = snapshot.waitingFor === 'push_reconcile'
+    ? await readRecoverablePush({ ...snapshot, state: await loadRunState(snapshot.runId) }) : null;
+  if (snapshot.waitingFor === 'push_reconcile' && !recovery) return { wake: false, status: 202, reason: '推送恢复凭据已变化，保留人工确认' };
+  if (recovery) await markPrInstructionComplete(snapshot.workingDirectory, recovery.archive, snapshot.globalContext || '', recovery.push.commit_sha);
   const text = await executePrScript({ operation: 'gates', stateName: '等待门禁',
     workingDirectory: snapshot.workingDirectory, runDirectory: join(getWorkspaceRoot(), 'runs', snapshot.runId),
     globalContext: snapshot.globalContext || '', userId: snapshot.userId });
   const gate = JSON.parse(text.replace(/^```json\n|\n```$/g, ''));
+  if (recovery) {
+    if (gate.read_failed || gate.head_sha !== recovery.push.commit_sha || gate.own_pr !== true) {
+      return { wake: false, status: gate.read_failed ? 503 : 202, reason: '最新 PR 状态尚未核实，保留人工确认' };
+    }
+    return { wake: true, status: 202, reason: '已核实推送和构建凭据，恢复门禁监控' };
+  }
   if (gate.read_failed && gate.phase === 'read_error') return { wake: false, status: 503, reason: gate.summary };
   if (['running', 'review_pending_decision'].includes(gate.phase)) return { wake: false, status: 202, reason: gate.summary };
   return { wake: true, status: 202, reason: '门禁已发生可处理的变化' };
@@ -419,9 +434,12 @@ async function wakeExistingPrRun(input: {
   if (!status.runId || status.status !== 'running') {
     const persisted = await loadRunState(input.runId);
     const question = persisted?.humanQuestions?.find(q => q.id === persisted.pendingHumanQuestionId && q.status === 'unanswered');
-    if (!persisted || persisted.status !== 'running' || !isPrGateWait({
-      currentState: persisted.currentState, pendingHumanQuestion: question, waitingFor: waitingFor(question),
-    }) || !isStateMachineManagerLike(manager)) return { ok: false, reason: '任务状态已变化，不能自动恢复' };
+    const restoredWait = await annotatePrWait({ runId: input.runId, status: persisted?.status,
+      globalContext: persisted?.globalContext, workingDirectory: persisted?.workingDirectory,
+      currentState: persisted?.currentState, pendingHumanQuestion: question, waitingFor: waitingFor(question),
+    });
+    if (!persisted || persisted.status !== 'running' || !isPrGateWait(restoredWait)
+      || !isStateMachineManagerLike(manager)) return { ok: false, reason: '任务状态已变化，不能自动恢复' };
     // A restored manager has no execution loop. forceTransition alone silently does nothing.
     await new Promise<void>((resolveReady, reject) => {
       const onStatus = (next: any) => {
@@ -439,9 +457,11 @@ async function wakeExistingPrRun(input: {
     return { ok: true, reason: 'restored-wait' };
   }
   const pending = { ...status.pendingHumanQuestion, ...(manager as any).getPendingHumanQuestion?.() };
-  if (input.mode === 'resume-wait' && !isPrGateWait({
+  const currentWait = await annotatePrWait({ runId: input.runId, status: status.status, globalContext: status.globalContext,
+    workingDirectory: status.workingDirectory,
     currentState: status.currentState, pendingHumanQuestion: pending.id ? pending : null, waitingFor: waitingFor(pending),
-  })) return { ok: false, reason: '任务已不处于可自动唤醒的门禁等待' };
+  });
+  if (input.mode === 'resume-wait' && !isPrGateWait(currentWait)) return { ok: false, reason: '任务已不处于可自动唤醒的门禁等待' };
   const mergedContext = mergePrEventContext(status.globalContext || '', input.context);
   manager.setContext?.('global', mergedContext);
 
