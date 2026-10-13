@@ -1,5 +1,6 @@
 import { jsonrepair } from 'jsonrepair';
 import { getAceProcessRanges as getStructuredAceProcessRanges } from '@/lib/chat/ai-process-blocks';
+import { findStepConclusionSpans } from '@/lib/run/output-compaction';
 
 export interface ResultSection {
   start: number;
@@ -696,18 +697,18 @@ function parseJsonCandidate(raw: string): Record<string, any> | null {
 }
 
 /** <step-conclusion> 段落：内容是 JSON 才接受；Agent 在同名标签里写的 Markdown 会被跳过；
- * 注释/引用块里的同名标签视为示例或引述，不可信 */
+ * 注释/引用块里的同名标签视为示例或引述，不可信；
+ * 标签就近配对——引文里未闭合的开标签不会吞并后续真实结论（#1761 教训） */
 export function getStepConclusionJson(markdown: string): Record<string, any> | null {
   const skipRanges = [
     ...getFencedCodeBlockRanges(markdown),
     ...getHtmlCommentRanges(markdown),
     ...getBlockquoteRanges(markdown),
   ];
-  const regex = /<step-conclusion>([\s\S]*?)<\/step-conclusion>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(markdown)) !== null) {
-    if (isInsideRanges(match.index, skipRanges)) continue;
-    const parsed = parseJsonCandidate(match[1]);
+  for (const span of findStepConclusionSpans(markdown)) {
+    if (isInsideRanges(span.start, skipRanges)) continue;
+    const content = span.content.slice(span.content.indexOf('>') + 1, span.content.lastIndexOf('<'));
+    const parsed = parseJsonCandidate(content);
     if (parsed) return parsed;
   }
   return null;
