@@ -551,7 +551,13 @@ export function shouldFinalizeDiagnosisAsCompleted(input: {
   fixVerificationReached?: boolean;
   /** F04：conditional_pass 的具体原因（如"无 OHOS 设备"），来自验证步骤输出的结构化/散文记录 */
   conditionalReason?: string | null;
+  /** R06：归档完整度。failed 时 run 不得呈现为"全部成功"（可只重试归档） */
+  diagnosisArtifactStatus?: 'complete' | 'partial' | 'failed' | null;
 }): { complete: boolean; reason: string } {
+  // R06：归档失败独立于验证裁决——即使验证 pass，归档失败也不能呈现为全部成功
+  if (input.diagnosisArtifactStatus === 'failed') {
+    return { complete: false, reason: '诊断产物归档失败（artifact_status=failed），可只重试归档，不得呈现为全部成功' };
+  }
   if (!input.hasFixVerificationState) return { complete: true, reason: '' };
   if (input.finalStateName && input.finalStateName !== '完成') {
     return { complete: true, reason: '' };

@@ -8,8 +8,8 @@ import { executePrScript } from '@/lib/workflow/pr-script-step';
 import { executeDiagnosisScript } from '@/lib/workflow/diagnosis-script-step';
 import { randomUUID } from 'crypto';
 import { readFile, readdir, stat, mkdir, rm, writeFile, copyFile } from 'fs/promises';
-import { resolve, join, dirname } from 'path';
-import { existsSync } from 'fs';
+import { resolve, join, dirname, isAbsolute } from 'path';
+import { existsSync, readFileSync } from 'fs';
 import { createDirectoryLinkSync } from '@/lib/core/directory-links';
 import { cpus } from 'os';
 import { parse } from 'yaml';
@@ -7411,16 +7411,21 @@ try {
             if (typeof conclusion.verification_status === 'string' && conclusion.verification_status) {
               this.diagnosisVerificationStatus = conclusion.verification_status;
             }
-            if (conclusion.verdict && conclusion.verdict !== 'pass') {
-              this.diagnosisArtifactStatus = {
-                status: conclusion.artifact_status === 'failed' || conclusion.verdict === 'fail' ? 'failed' : 'partial',
+            // R06：artifact_status 是归档完整度的独立维度（complete/partial/failed），
+            // 不再靠 verdict 推断；finish 步骤 verdict 已回归三值枚举
+            const artifactStatus = typeof conclusion.artifact_status === 'string' && conclusion.artifact_status
+              ? conclusion.artifact_status
+              : (conclusion.verdict === 'fail' ? 'failed' : 'complete');
+            this.diagnosisArtifactStatus = {
+              status: artifactStatus === 'failed' ? 'failed' : artifactStatus === 'partial' ? 'partial' : 'complete',
+              ...(artifactStatus === 'complete' ? {} : {
                 summary: String(conclusion.summary || '').slice(0, 200),
                 errorCode: typeof conclusion.error_code === 'string' ? conclusion.error_code : null,
-                at: new Date().toISOString(),
-              };
+              }),
+              at: new Date().toISOString(),
+            };
+            if (artifactStatus !== 'complete') {
               this.emit('log', { message: `诊断归档不完整（${this.diagnosisArtifactStatus.status}）：${this.diagnosisArtifactStatus.summary || '详见归档清单'}` });
-            } else {
-              this.diagnosisArtifactStatus = { status: 'complete', at: new Date().toISOString() };
             }
           }
         }
@@ -8093,8 +8098,27 @@ try {
     });
     if (isFixVerificationStep(context)) {
       this.lastFixVerificationVerdict = verdict;
+      // F04/R02：verdict 与 conditional_reason 必须在同一次解析中同步替换；
+      // 新一轮修复验证输出会覆盖旧值，避免继承上一轮的原因
+      this.lastFixVerificationConditionalReason = extractConditionalReason(output);
     }
     return verdict;
+  }
+
+  /** 恢复路径：优先读 outputRef 指向的完整步骤输出（state.yaml 里的 output 可能是截断摘要） */
+  private readStepLogOutput(log: PersistedStepLog): string {
+    if (log.outputRef) {
+      try {
+        const base = this.currentRunId ? resolve(getWorkspaceRunsDir(), this.currentRunId) : null;
+        if (base) {
+          const refPath = isAbsolute(log.outputRef) ? log.outputRef : join(base, log.outputRef);
+          if (existsSync(refPath)) return readFileSync(refPath, 'utf-8');
+        }
+      } catch {
+        // 读取失败则回退到内联 output
+      }
+    }
+    return log.output || '';
   }
 
   private hydrateLastFixVerificationVerdict(): void {
@@ -8105,12 +8129,13 @@ try {
         stateName: /修复验证|verify-fix|修复方案对抗验证/.test(log.stepName || '') ? '修复验证' : '',
         stepName: log.stepName,
       })) continue;
-      this.lastFixVerificationVerdict = this.parseVerdict(log.output || '', {
+      const output = this.readStepLogOutput(log);
+      this.lastFixVerificationVerdict = this.parseVerdict(output, {
         stateName: '修复验证',
         stepName: log.stepName,
       });
       // F04：同时缓存 conditional_pass 的具体原因（如"无 OHOS 设备"），供终态判定说明
-      this.lastFixVerificationConditionalReason = extractConditionalReason(log.output || '');
+      this.lastFixVerificationConditionalReason = extractConditionalReason(output);
       return;
     }
   }
@@ -8130,6 +8155,7 @@ try {
       finalStateName: this.currentState,
       fixVerificationReached,
       conditionalReason: this.lastFixVerificationConditionalReason,
+      diagnosisArtifactStatus: this.diagnosisArtifactStatus?.status || null,
     });
     const runId = options?.runId || this.currentRunId;
     if (!gate.complete) {
@@ -8643,19 +8669,42 @@ try {
   }
 
   private async persistOhosFlutterSdkPin(resolved: ResolvedOhosFlutterSdk): Promise<void> {
-    this.ohosFlutterSdk = resolved;
-    const payload = `${JSON.stringify(resolved, null, 2)}\n`;
+    // R08：pin 命中共享 SDK 时，为本次 run 建 overlay（symlink 镜像 + 可写 bin/cache），
+    // 之后本 run 的 flutter 一律指向 overlay，共享 SDK 保持只读；失败则退回共享并留指纹检测兜底
+    let effective = resolved;
+    if (resolved.matched && resolved.sdkRoot && this.currentRunId) {
+      try {
+        const { createSdkOverlay } = await import('@/lib/workflow/sdk-overlay');
+        const overlayDir = join(resolve(getWorkspaceRunsDir(), this.currentRunId), 'sdk-overlay');
+        const overlay = createSdkOverlay(resolved.sdkRoot, overlayDir);
+        if (overlay.flutterBin) {
+          effective = {
+            ...resolved,
+            sdkRoot: overlay.sdkLink,
+            flutterBin: overlay.flutterBin,
+            reason: `${resolved.reason}（本 run 使用 overlay 隔离，共享 SDK 只读：${resolved.sdkRoot}）`,
+          } as ResolvedOhosFlutterSdk;
+        }
+      } catch (error: any) {
+        this.logRunDiagnostic('ohos.flutter.sdk.overlay', {
+          error: String(error?.message || error).slice(0, 200),
+          sdkRoot: resolved.sdkRoot,
+        }, 'warn');
+      }
+    }
+    this.ohosFlutterSdk = effective;
+    const payload = `${JSON.stringify(effective, null, 2)}\n`;
     for (const filePath of this.getOhosFlutterSdkPinPaths()) {
       await mkdir(dirname(filePath), { recursive: true });
       await writeFile(filePath, payload, 'utf-8');
     }
     this.logRunDiagnostic('ohos.flutter.sdk', {
-      matched: resolved.matched,
-      branch: resolved.branch,
-      sdkId: resolved.sdkId,
-      flutterBin: resolved.flutterBin,
-      reason: resolved.reason,
-    }, resolved.matched ? 'info' : 'warn');
+      matched: effective.matched,
+      branch: effective.branch,
+      sdkId: effective.sdkId,
+      flutterBin: effective.flutterBin,
+      reason: effective.reason,
+    }, effective.matched ? 'info' : 'warn');
   }
 
   private async refreshOhosFlutterSdkPin(stateName: string, output: string): Promise<void> {

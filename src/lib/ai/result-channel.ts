@@ -289,8 +289,44 @@ function getAceProcessRanges(markdown: string): Array<[number, number]> {
   return getStructuredAceProcessRanges(markdown);
 }
 
-function isInsideRanges(index: number, ranges: Array<[number, number]>): boolean {
-  return ranges.some(([start, end]) => index >= start && index < end);
+/** HTML 注释区间：注释内的 <result>/<step-conclusion> 只是示例或旧存档，不是可信输出 */
+function getHtmlCommentRanges(markdown: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const commentRegex = /<!--[\s\S]*?-->/g;
+  let match: RegExpExecArray | null;
+  while ((match = commentRegex.exec(markdown)) !== null) {
+    ranges.push([match.index, match.index + match[0].length]);
+  }
+  return ranges;
+}
+
+/** Markdown 引用块（> …）区间：引述的他人/历史输出不属于本次裁决 */
+function getBlockquoteRanges(markdown: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const quoteRegex = /^[ \t]*>[^\r\n]*(?:\r?\n|$)/gm;
+  let match: RegExpExecArray | null;
+  while ((match = quoteRegex.exec(markdown)) !== null) {
+    ranges.push([match.index, match.index + match[0].length]);
+  }
+  return ranges;
+}
+
+function isInsideRanges(index: number, ranges: Array<[number, number]>): boolean {  return ranges.some(([start, end]) => index >= start && index < end);
+}
+
+/** 把 fenced code、HTML 注释、引用块替换为空白：散文/内联提取只在可信正文上进行 */
+function stripUntrustedRegions(markdown: string): string {
+  const ranges = [
+    ...getFencedCodeBlockRanges(markdown),
+    ...getHtmlCommentRanges(markdown),
+    ...getBlockquoteRanges(markdown),
+  ];
+  if (!ranges.length) return markdown;
+  const chars = markdown.split('');
+  for (const [start, end] of ranges) {
+    for (let i = start; i < end && i < chars.length; i += 1) chars[i] = ' ';
+  }
+  return chars.join('');
 }
 
 export function getResultSections(markdown: string): ResultSection[] {
@@ -298,6 +334,8 @@ export function getResultSections(markdown: string): ResultSection[] {
   const skipRanges = [
     ...getFencedCodeBlockRanges(markdown),
     ...getAceProcessRanges(markdown),
+    ...getHtmlCommentRanges(markdown),
+    ...getBlockquoteRanges(markdown),
   ];
   const resultRegex = /<result>([\s\S]*?)<\/result>/gi;
   let match: RegExpExecArray | null;
@@ -553,6 +591,8 @@ export interface LooseExtraction {
   fields: Record<string, unknown>;
   /** 每个字段来自哪一层提取；缺失为 'unknown' */
   sources: Record<string, LooseExtractionSource>;
+  /** 可信来源之间结论冲突的记录（如 result-tag=pass 而散文=fail）；无冲突为 undefined */
+  conflicts?: string[];
 }
 
 /** 嵌套容器键：部分步骤把字段包在 run_verification / result 等对象里，收尾读取按顶层优先、容器回退 */
@@ -597,13 +637,14 @@ function coerceInlineValue(raw: string): unknown {
 export function extractInlineKeyValues(text: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (!text) return out;
+  const sanitized = stripUntrustedRegions(text);
   const allKeys = [...INLINE_BOOL_KEYS, ...INLINE_STRING_KEYS];
   const pattern = new RegExp(
     `(?<![A-Za-z0-9_])(${allKeys.join('|')})\\s*[:：=]\\s*(?:\\*\\*|__|\`)?([^\\n,，;；。]+?)(?:\\*\\*|__|\`)?(?=[,，;；。\\n]|$)`,
     'g',
   );
   let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text)) !== null) {
+  while ((match = pattern.exec(sanitized)) !== null) {
     const key = match[1];
     if (key in out) continue; // 首次出现优先（步骤结论通常先写结论）
     const value = coerceInlineValue(match[2]);
@@ -617,24 +658,26 @@ export function extractInlineKeyValues(text: string): Record<string, unknown> {
 /** 散文中的裁决：仅接受显式 verdict 标记或「XX验证 **pass**」句式，拒绝否定语境 */
 export function extractProseVerdict(text: string): 'pass' | 'fail' | 'conditional_pass' | null {
   if (!text) return null;
-  const explicit = /["'`]?verdict["'`]?\s*[:：=]\s*["'`]?\s*(conditional_pass|pass|fail)\b/i.exec(text);
+  const sanitized = stripUntrustedRegions(text);
+  const explicit = /["'`]?verdict["'`]?\s*[:：=]\s*["'`]?\s*(conditional_pass|pass|fail)\b/i.exec(sanitized);
   if (explicit) return explicit[1].toLowerCase() as 'pass' | 'fail' | 'conditional_pass';
   const sentence = /(?:修复验证|复现验证|方案裁决|根因裁决|对抗验证)\s*[:：]?\s*\*{0,2}\s*(conditional_pass|pass|fail)\b/gi;
   let match: RegExpExecArray | null;
-  while ((match = sentence.exec(text)) !== null) {
-    const prefix = text.slice(Math.max(0, match.index - 12), match.index);
+  while ((match = sentence.exec(sanitized)) !== null) {
+    const prefix = sanitized.slice(Math.max(0, match.index - 12), match.index);
     if (/不|未|非|否决|驳回|而非/.test(prefix)) continue;
     return match[1].toLowerCase() as 'pass' | 'fail' | 'conditional_pass';
   }
   return null;
 }
 
-/** F04：conditional_pass 的具体原因。兼容结构化 conditional_reason 与散文"conditional_pass 的（唯一）原因：…" */
+/** F04：conditional_pass 的具体原因。兼容结构化 conditional_reason 与散文"conditional_pass 的（唯一）原因：…"；只在可信正文上提取 */
 export function extractConditionalReason(text: string): string | null {
   if (!text) return null;
-  const structured = /["'`]?conditional_reason["'`]?\s*[:：=]\s*["'`]?([^。\n"'`,，}]+)/i.exec(text);
+  const sanitized = stripUntrustedRegions(text);
+  const structured = /["'`]?conditional_reason["'`]?\s*[:：=]\s*["'`]?([^。\n"'`,，}]+)/i.exec(sanitized);
   if (structured?.[1]?.trim()) return structured[1].trim().slice(0, 200);
-  const prose = /conditional_pass\s*的(?:唯一|主要)?原因\s*[:：是]?\s*([^。\n]+)/i.exec(text);
+  const prose = /conditional_pass\s*的(?:唯一|主要)?原因\s*[:：是]?\s*([^。\n]+)/i.exec(sanitized);
   if (prose?.[1]?.trim()) return prose[1].trim().slice(0, 200);
   return null;
 }
@@ -652,15 +695,36 @@ function parseJsonCandidate(raw: string): Record<string, any> | null {
   }
 }
 
-/** <step-conclusion> 段落：内容是 JSON 才接受；Agent 在同名标签里写的 Markdown 会被跳过 */
+/** <step-conclusion> 段落：内容是 JSON 才接受；Agent 在同名标签里写的 Markdown 会被跳过；
+ * 注释/引用块里的同名标签视为示例或引述，不可信 */
 export function getStepConclusionJson(markdown: string): Record<string, any> | null {
+  const skipRanges = [
+    ...getFencedCodeBlockRanges(markdown),
+    ...getHtmlCommentRanges(markdown),
+    ...getBlockquoteRanges(markdown),
+  ];
   const regex = /<step-conclusion>([\s\S]*?)<\/step-conclusion>/gi;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(markdown)) !== null) {
+    if (isInsideRanges(match.index, skipRanges)) continue;
     const parsed = parseJsonCandidate(match[1]);
     if (parsed) return parsed;
   }
   return null;
+}
+
+/** 紧跟在"示例/格式/例如/example"等提示语之后的 fenced JSON 是格式示范，不是裁决结果 */
+const EXAMPLE_CONTEXT_RE = /(示例|样例|例子|例如|example|e\.g\.|template|sample)/i;
+
+function normalizeVerdictText(raw: string): string {
+  return raw.trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function isExampleFence(markdown: string, fenceIndex: number): boolean {
+  const before = markdown.slice(Math.max(0, fenceIndex - 120), fenceIndex);
+  const lines = before.split('\n').map((line) => line.trim()).filter(Boolean);
+  const nearest = lines[lines.length - 1] || '';
+  return EXAMPLE_CONTEXT_RE.test(nearest);
 }
 
 function getFencedJsonObjects(markdown: string): Record<string, any>[] {
@@ -668,6 +732,7 @@ function getFencedJsonObjects(markdown: string): Record<string, any>[] {
   const regex = /```(?:json)?\s*\n([\s\S]*?)```/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(markdown)) !== null) {
+    if (isExampleFence(markdown, match.index)) continue;
     const parsed = parseJsonCandidate(match[1]);
     if (parsed) out.push(parsed);
   }
@@ -700,7 +765,8 @@ export function extractLooseStructuredResult(markdown: string): LooseExtraction 
   );
   if (resultTagged) apply(resultTagged, 'result-tag');
 
-  for (const fenced of getFencedJsonObjects(markdown)) apply(fenced, 'fenced-json');
+  const fencedObjects = getFencedJsonObjects(markdown);
+  for (const fenced of fencedObjects) apply(fenced, 'fenced-json');
 
   apply(extractInlineKeyValues(markdown), 'inline-fields');
 
@@ -711,5 +777,23 @@ export function extractLooseStructuredResult(markdown: string): LooseExtraction 
       sources.verdict = 'prose-verdict';
     }
   }
-  return { fields, sources };
+
+  // F02 返修：可信来源之间的 verdict 冲突必须显式记录，不允许静默按优先级覆盖。
+  const verdictCandidates: Array<{ source: string; verdict: string }> = [];
+  const collectVerdict = (obj: Record<string, any> | null, source: string) => {
+    const flat = obj ? flattenNestedContainers(obj) : {};
+    const raw = flat.verdict;
+    if (typeof raw === 'string' && raw.trim()) verdictCandidates.push({ source, verdict: normalizeVerdictText(raw) });
+  };
+  collectVerdict(stepConclusion, 'step-conclusion-json');
+  collectVerdict(resultTagged, 'result-tag');
+  for (const fenced of fencedObjects) collectVerdict(fenced, 'fenced-json');
+  const proseVerdict = sources.verdict === 'prose-verdict' ? String(fields.verdict) : extractProseVerdict(markdown);
+  if (proseVerdict) verdictCandidates.push({ source: 'prose-verdict', verdict: normalizeVerdictText(proseVerdict) });
+  const distinct = [...new Set(verdictCandidates.map((candidate) => candidate.verdict))].filter(Boolean);
+  const conflicts = distinct.length > 1
+    ? verdictCandidates.map((candidate) => `${candidate.source}=${candidate.verdict}`)
+    : undefined;
+
+  return conflicts ? { fields, sources, conflicts } : { fields, sources };
 }
