@@ -28,6 +28,13 @@
 - 运行时配置同步（R07 --apply）同样推迟到该窗口，避免改变在途 run 的验收规则（其恢复快照已隔离，但遵守复核约束）。
 - CPF 侧（R06 接口透传、F03/F08/F09）为普通 node 服务，提交后重启 aiweb-backend 即生效，不影响引擎内运行的 run。
 
+## 追加：#1761 终态复盘发现的压缩缺陷（commit 29f29ae，已修复）
+
+- 现象：#1761（2026-10-13 16:18 终态 failed）修复验证步骤输出 36KB，`outputRef` 落盘文件仅 8.5KB 且无 step-conclusion；终态门禁报"conditional_pass 且未记录具体原因"。
+- 根因：`compactRuntimeOutputPreview` 用贪婪正则配对的 `<step-conclusion>` 匹配，被 grep 工具输出里**引用的、未闭合的同名开标签**带偏——伪匹配从引文开标签一路吞到真实结论的闭合标签（~15.7KB），起点位于 ace-process 工具区被过滤、且超过 8192 保留上限，输出退化为纯头部截断，真实裁决（conditional_pass，原因"无 OHOS 设备"）整体丢失。
+- 修复：`findStepConclusionSpans` 就近配对（闭合标签与最近未配对开标签配对，引文未闭合开标签被后续开标签覆盖丢弃）；`result-channel.getStepConclusionJson` 同样改造。回归测试含 #1761 真实 36KB 流端到端用例（压缩后可提取 verdict=conditional_pass）。
+- #1761 结论恢复后评估：verdict=conditional_pass 属实（无 OHOS 设备，运行时黄金标志待真机），门禁判 failed 是**正确的不粉饰行为**；修复补丁与官方 !1101 的对比已补入训练台账 fix-vs-official-comparison.md（机制等价、互有超出、盲测有效性受限因仓内 3.35.7 线已含官方修复）。
+
 ## 备注
 
 - 归档文档首页"6 个真实 Issue 回放"已更正为"4 个真实 Issue、共 8 次运行（#1919×5、#1941、#2856、#1772）"（按 run 目录 diagnosis-input.json 逐一核对）。
