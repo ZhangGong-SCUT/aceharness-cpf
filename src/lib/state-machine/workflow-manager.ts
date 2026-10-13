@@ -135,6 +135,7 @@ import { appendMemoryEntries } from '@/lib/workflow/memory-store';
 import { upsertRelationshipSignal } from '@/lib/agent/relationship-store';
 import {
   extractJsonObject as extractStructuredJsonObject,
+  extractConditionalReason,
   extractStructuredResult,
 } from '@/lib/ai/result-channel';
 import {
@@ -697,6 +698,17 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private currentRunSpecCoding: SpecCodingDocument | null = null;
   private currentWorkflowConfig: StateMachineWorkflowConfig | null = null;
   private lastFixVerificationVerdict: WorkflowVerdict | null = null;
+  /** F04：conditional_pass 的具体原因（来自验证步骤输出），用于准确描述"验证受限"与"验证失败" */
+  private lastFixVerificationConditionalReason: string | null = null;
+  /** F01：诊断收尾归档状态。run 可能 completed 但归档不完整，必须单独可见 */
+  private diagnosisArtifactStatus: {
+    status: 'complete' | 'partial' | 'failed';
+    summary?: string;
+    errorCode?: string | null;
+    at?: string;
+  } | null = null;
+  /** F04：诊断验证状态（verified / needs_runtime_validation / evidence_incomplete），与执行状态分离 */
+  private diagnosisVerificationStatus: string | null = null;
   private currentSpecRootDir: string | null = null;
   private deltaSpecMerged: boolean = false;
   private deltaMergeState: DeltaMergeState | undefined;
@@ -1497,6 +1509,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.status = 'preparing';
       this.statusReason = null;
       this.lastFixVerificationVerdict = null;
+      this.lastFixVerificationConditionalReason = null;
+      this.diagnosisArtifactStatus = null;
+      this.diagnosisVerificationStatus = null;
       this.runEndTime = null;
       this.resetPromptInjectionState();
       this.shouldStop = false;
@@ -3029,6 +3044,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
         createdByName: this._createdByName,
         status: statusToPersist as any,
         statusReason: this.statusReason || undefined,
+        diagnosisArtifactStatus: this.diagnosisArtifactStatus || undefined,
+        diagnosisVerificationStatus: this.diagnosisVerificationStatus || undefined,
         startTime: this.runStartTime || new Date().toISOString(),
         endTime: finalStatus ? this.runEndTime : null,
         accumulatedWaitMs: this.accumulatedWaitMs,
@@ -7387,6 +7404,26 @@ try {
         // Script adapters return <step-conclusion>, whereas extractStructuredResult only reads <result>.
         const legacyRestore = (step.diagnosisScript === 'restore' || step.prScript === 'approved-apply' || step.prScript === 'approved-apply-audit')
           && this.extractJsonObject(output)?.fallback_to_agent === true;
+        // F01/F04：收尾归档失败与验证受限必须进入运行记录，不能显示"全部成功"
+        if (step.diagnosisScript === 'finish') {
+          const conclusion = this.extractJsonObject(output);
+          if (conclusion && typeof conclusion === 'object') {
+            if (typeof conclusion.verification_status === 'string' && conclusion.verification_status) {
+              this.diagnosisVerificationStatus = conclusion.verification_status;
+            }
+            if (conclusion.verdict && conclusion.verdict !== 'pass') {
+              this.diagnosisArtifactStatus = {
+                status: conclusion.artifact_status === 'failed' || conclusion.verdict === 'fail' ? 'failed' : 'partial',
+                summary: String(conclusion.summary || '').slice(0, 200),
+                errorCode: typeof conclusion.error_code === 'string' ? conclusion.error_code : null,
+                at: new Date().toISOString(),
+              };
+              this.emit('log', { message: `诊断归档不完整（${this.diagnosisArtifactStatus.status}）：${this.diagnosisArtifactStatus.summary || '详见归档清单'}` });
+            } else {
+              this.diagnosisArtifactStatus = { status: 'complete', at: new Date().toISOString() };
+            }
+          }
+        }
         if (!legacyRestore) return { output, lastRoundOutput: output, costUsd: 0, durationMs: Date.now() - started,
           tokenUsage: toPersistedTokenUsage(ZERO_ENGINE_USAGE) };
         this.emit('log', { message: step.diagnosisScript ? '旧诊断任务缺少结构化继承清单，使用兼容恢复步骤核对原始证据' : '当前请求需要语义审查，继续使用原有 Agent 步骤' });
@@ -8072,6 +8109,8 @@ try {
         stateName: '修复验证',
         stepName: log.stepName,
       });
+      // F04：同时缓存 conditional_pass 的具体原因（如"无 OHOS 设备"），供终态判定说明
+      this.lastFixVerificationConditionalReason = extractConditionalReason(log.output || '');
       return;
     }
   }
@@ -8090,6 +8129,7 @@ try {
       lastFixVerificationVerdict: this.lastFixVerificationVerdict,
       finalStateName: this.currentState,
       fixVerificationReached,
+      conditionalReason: this.lastFixVerificationConditionalReason,
     });
     const runId = options?.runId || this.currentRunId;
     if (!gate.complete) {
@@ -8451,6 +8491,8 @@ try {
     this.stepLogs = runState.stepLogs || [];
     this.lastFixVerificationVerdict = null;
     this.hydrateLastFixVerificationVerdict();
+    this.diagnosisArtifactStatus = runState.diagnosisArtifactStatus || null;
+    this.diagnosisVerificationStatus = runState.diagnosisVerificationStatus || null;
     this.qualityChecks = runState.qualityChecks || [];
     this.runStartTime = runState.startTime || null;
     this.runEndTime = null;

@@ -549,6 +549,8 @@ export function shouldFinalizeDiagnosisAsCompleted(input: {
   finalStateName?: string | null;
   /** 修复验证状态是否真正执行过（false = 走的是设计内兜底/建议出口，未进入修复环节） */
   fixVerificationReached?: boolean;
+  /** F04：conditional_pass 的具体原因（如"无 OHOS 设备"），来自验证步骤输出的结构化/散文记录 */
+  conditionalReason?: string | null;
 }): { complete: boolean; reason: string } {
   if (!input.hasFixVerificationState) return { complete: true, reason: '' };
   if (input.finalStateName && input.finalStateName !== '完成') {
@@ -565,6 +567,14 @@ export function shouldFinalizeDiagnosisAsCompleted(input: {
     return {
       complete: false,
       reason: '诊断工作流未完成修复验证（需要 issue_golden_flag_met=true 且 engine_aligned=true），不得标 completed',
+    };
+  }
+  // F04：把"验证受限（缺设备/缺环境）"与"验证失败"区分开，不再笼统归为未过黄金标志
+  if (input.lastFixVerificationVerdict === 'conditional_pass') {
+    const detail = input.conditionalReason?.trim();
+    return {
+      complete: false,
+      reason: `修复验证未完全通过（conditional_pass）${detail ? `：${detail}` : '，验证步骤未记录具体原因'}。按规则保持未完成，补齐验证条件后可恢复`,
     };
   }
   return {

@@ -54,6 +54,22 @@ export interface RunSummaryCache {
   tokenUsage: RunSummaryTokenUsage;
   totalTokens: number;
   cost: number;
+  /**
+   * F10：token 统计可信度。引擎未上报时历史行为是全 0，与"真的零消耗"无法区分；
+   * 现在显式标注来源，消费方应把 unavailable 显示为"未知"而不是 0。
+   */
+  tokenUsageSource: 'reported' | 'partial' | 'unavailable';
+  /** 0..1：有真实 token 数据的步骤日志占比 */
+  tokenUsageCoverage: number;
+  /** F01：诊断归档状态（仅诊断类工作流产生） */
+  artifactStatus?: {
+    status: 'complete' | 'partial' | 'failed';
+    summary?: string;
+    errorCode?: string | null;
+    at?: string;
+  } | null;
+  /** F04：诊断验证状态（verified / needs_runtime_validation / evidence_incomplete） */
+  verificationStatus?: string | null;
   ownerId: string;
   ownerName: string;
   agentUsage: Record<string, RunSummaryAgentUsage>;
@@ -131,6 +147,31 @@ function getRunTokenUsage(state: any): { usage: RunSummaryTokenUsage; cost: numb
   }
 
   return { usage, cost };
+}
+
+/** F10：统计有真实（非全零）token 数据的步骤日志占比 */
+function getTokenUsageCoverage(state: any): { source: 'reported' | 'partial' | 'unavailable'; coverage: number } {
+  const logs = Array.isArray(state?.stepLogs) ? state.stepLogs : [];
+  if (logs.length === 0) return { source: 'unavailable', coverage: 0 };
+  const withUsage = logs.filter((log: any) => {
+    const usage = readTokenUsage(log);
+    return usage.inputTokens > 0 || usage.outputTokens > 0
+      || usage.cacheCreationInputTokens > 0 || usage.cacheReadInputTokens > 0;
+  }).length;
+  const coverage = withUsage / logs.length;
+  return { source: withUsage === 0 ? 'unavailable' : withUsage === logs.length ? 'reported' : 'partial', coverage };
+}
+
+function normalizeArtifactStatus(input: unknown): RunSummaryCache['artifactStatus'] {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const status = stringValue((input as any).status);
+  if (status !== 'complete' && status !== 'partial' && status !== 'failed') return undefined;
+  return {
+    status,
+    summary: stringValue((input as any).summary) || undefined,
+    errorCode: stringValue((input as any).errorCode) || null,
+    at: stringValue((input as any).at) || undefined,
+  };
 }
 
 function getAgentUsage(state: any): Record<string, RunSummaryAgentUsage> {
@@ -211,6 +252,14 @@ function normalizeSummary(input: any): RunSummaryCache | null {
     tokenUsage: normalizedUsage,
     totalTokens: numberOrZero(input.totalTokens) || totalTokens(normalizedUsage),
     cost: numberOrZero(input.cost),
+    tokenUsageSource: input.tokenUsageSource === 'reported' || input.tokenUsageSource === 'partial' || input.tokenUsageSource === 'unavailable'
+      ? input.tokenUsageSource
+      : (totalTokens(normalizedUsage) > 0 ? 'reported' : 'unavailable'),
+    tokenUsageCoverage: typeof input.tokenUsageCoverage === 'number' && Number.isFinite(input.tokenUsageCoverage)
+      ? Math.min(1, Math.max(0, input.tokenUsageCoverage))
+      : (totalTokens(normalizedUsage) > 0 ? 1 : 0),
+    artifactStatus: normalizeArtifactStatus(input.artifactStatus),
+    verificationStatus: stringValue(input.verificationStatus) || null,
     ownerId: stringValue(input.ownerId),
     ownerName: stringValue(input.ownerName),
     agentUsage: normalizeAgentUsage(input.agentUsage),
@@ -239,6 +288,7 @@ function isValidRunState(state: any): state is PersistedRunState {
 export function buildRunSummaryCacheFromState(state: PersistedRunState): RunSummaryCache | null {
   if (!isValidRunState(state)) return null;
   const { usage, cost } = getRunTokenUsage(state);
+  const tokenCoverage = getTokenUsageCoverage(state);
   const completedSteps = Array.isArray(state.completedSteps) ? state.completedSteps.length : 0;
   const failedSteps = Array.isArray(state.failedSteps) ? state.failedSteps.length : 0;
   const ownerId = stringValue(state.runOwnerId) || stringValue(state.createdBy);
@@ -278,6 +328,10 @@ export function buildRunSummaryCacheFromState(state: PersistedRunState): RunSumm
     tokenUsage: usage,
     totalTokens: totalTokens(usage),
     cost,
+    tokenUsageSource: tokenCoverage.source,
+    tokenUsageCoverage: tokenCoverage.coverage,
+    artifactStatus: normalizeArtifactStatus(state.diagnosisArtifactStatus),
+    verificationStatus: stringValue(state.diagnosisVerificationStatus) || null,
     ownerId,
     ownerName,
     agentUsage: getAgentUsage(state),
@@ -313,6 +367,7 @@ export function buildRunSummaryCacheFromRecord(record: {
   };
   const completedSteps = numberOrZero(record.completedSteps);
   const totalSteps = numberOrZero(record.totalSteps);
+  const recordTotalTokens = numberOrZero(record.totalTokens) || totalTokens(usage);
   return {
     version: SUMMARY_CACHE_VERSION,
     id: runId,
@@ -327,8 +382,12 @@ export function buildRunSummaryCacheFromRecord(record: {
     completedSteps,
     failedSteps: Math.max(0, totalSteps - completedSteps),
     tokenUsage: usage,
-    totalTokens: numberOrZero(record.totalTokens) || totalTokens(usage),
+    totalTokens: recordTotalTokens,
     cost: 0,
+    tokenUsageSource: recordTotalTokens > 0 ? 'reported' : 'unavailable',
+    tokenUsageCoverage: recordTotalTokens > 0 ? 1 : 0,
+    artifactStatus: undefined,
+    verificationStatus: undefined,
     ownerId: '',
     ownerName: '',
     agentUsage: {},
@@ -402,6 +461,10 @@ async function recoverRunSummaryFromFinalReview(runId: string): Promise<RunSumma
       tokenUsage: emptyTokenUsage(),
       totalTokens: 0,
       cost: 0,
+      tokenUsageSource: 'unavailable',
+      tokenUsageCoverage: 0,
+      artifactStatus: undefined,
+      verificationStatus: undefined,
       ownerId: '',
       ownerName: '',
       agentUsage: {},

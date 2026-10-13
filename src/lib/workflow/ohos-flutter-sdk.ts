@@ -267,7 +267,7 @@ export function buildOhosFlutterSdkPrompt(resolved: ResolvedOhosFlutterSdk): str
     `已登记可用: ${resolved.inventory.join(', ') || '无'}`,
     `说明: ${resolved.reason}`,
     '编 hap / 换 HAR / 装真机必须用「选用」里的 flutter，不要用 PATH 里的社区 flutter，也不要把 repo/ 当 SDK。',
-    'HAR 只盖进选用 SDK 的 bin/cache，或本次 run 目录。禁止盖日常 SDK 的 flutter_embedding_*.har。',
+    'HAR 优先盖进本 run 的 sdk_overlay/har-cache（见 outputs/diagnosis-preflight.json 的 sdk_overlay）；禁止盖日常 SDK 的 flutter_embedding_*.har；必须临时盖入选用 SDK cache 时用完立即还原备份（收尾会比对共享指纹）。',
   ];
   if (!resolved.matched) {
     lines.push('engine_aligned=false。可以出 patch，禁止 issue_resolved=yes / bug_fixed=true / verdict=pass。');

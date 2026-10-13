@@ -530,3 +530,186 @@ export function extractStructuredResult<T = any>(
   }
   return null;
 }
+
+// ============================================================================
+// 诊断步骤结论的宽松提取（F02）
+// 真实运行里步骤输出有三种历史格式：
+//   1) <step-conclusion>{json}</step-conclusion>（脚本步骤；Agent 也可能在同名标签里写 Markdown）
+//   2) <result>{json}</result>（本文件原有通道）
+//   3) 散文内联 `key=value` / `key: value`（Agent 交接摘要的主流格式，如
+//      "issue_golden_flag_met=true，engine_aligned=true"）
+// 这里提供统一入口，逐字段记录来源；取不到的字段保持 unknown，不伪造 false/true。
+// ============================================================================
+
+export type LooseExtractionSource =
+  | 'step-conclusion-json'
+  | 'result-tag'
+  | 'fenced-json'
+  | 'inline-fields'
+  | 'prose-verdict'
+  | 'unknown';
+
+export interface LooseExtraction {
+  fields: Record<string, unknown>;
+  /** 每个字段来自哪一层提取；缺失为 'unknown' */
+  sources: Record<string, LooseExtractionSource>;
+}
+
+/** 嵌套容器键：部分步骤把字段包在 run_verification / result 等对象里，收尾读取按顶层优先、容器回退 */
+const NESTED_CONTAINER_KEYS = ['run_verification', 'verification', 'result', 'context', 'structured', 'data'] as const;
+
+export function flattenNestedContainers(value: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = { ...value };
+  for (const key of NESTED_CONTAINER_KEYS) {
+    const nested = value?.[key];
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      for (const [nestedKey, nestedValue] of Object.entries(nested)) {
+        if (!(nestedKey in out)) out[nestedKey] = nestedValue;
+      }
+    }
+  }
+  return out;
+}
+
+/** 允许从散文中提取的布尔字段白名单（避免误抓无关文本） */
+const INLINE_BOOL_KEYS = new Set([
+  'issue_golden_flag_met', 'engine_aligned', 'bug_fixed', 'baseline_confirmed',
+  'issue_content_complete', 'reproduction_confirmed', 'fix_applied', 'tests_passed',
+]);
+/** 允许从散文中提取的字符串/枚举字段白名单 */
+const INLINE_STRING_KEYS = new Set([
+  'verdict', 'problem_ownership', 'fix_target', 'verification_status', 'evaluation_mode',
+  'root_cause_summary', 'issue_golden_flag', 'demo_path', 'branch', 'commit',
+  'reset_target_merge_commit', 'engine_commit', 'conditional_reason', 'input_source',
+]);
+
+function coerceInlineValue(raw: string): unknown {
+  const value = raw.trim().replace(/[*_`'"。，,；;]+$/, '').trim();
+  if (/^(true|false)$/i.test(value)) return value.toLowerCase() === 'true';
+  if (/^null$/i.test(value)) return null;
+  return value;
+}
+
+/**
+ * 从散文中提取白名单内联字段。
+ * 兼容 `key=value`、`key: value`、`key：**value**`，值截止到中文/英文逗号、分号、句号或换行。
+ */
+export function extractInlineKeyValues(text: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!text) return out;
+  const allKeys = [...INLINE_BOOL_KEYS, ...INLINE_STRING_KEYS];
+  const pattern = new RegExp(
+    `(?<![A-Za-z0-9_])(${allKeys.join('|')})\\s*[:：=]\\s*(?:\\*\\*|__|\`)?([^\\n,，;；。]+?)(?:\\*\\*|__|\`)?(?=[,，;；。\\n]|$)`,
+    'g',
+  );
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    const key = match[1];
+    if (key in out) continue; // 首次出现优先（步骤结论通常先写结论）
+    const value = coerceInlineValue(match[2]);
+    if (INLINE_BOOL_KEYS.has(key) && typeof value !== 'boolean') continue;
+    if (typeof value === 'string' && !value) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+/** 散文中的裁决：仅接受显式 verdict 标记或「XX验证 **pass**」句式，拒绝否定语境 */
+export function extractProseVerdict(text: string): 'pass' | 'fail' | 'conditional_pass' | null {
+  if (!text) return null;
+  const explicit = /["'`]?verdict["'`]?\s*[:：=]\s*["'`]?\s*(conditional_pass|pass|fail)\b/i.exec(text);
+  if (explicit) return explicit[1].toLowerCase() as 'pass' | 'fail' | 'conditional_pass';
+  const sentence = /(?:修复验证|复现验证|方案裁决|根因裁决|对抗验证)\s*[:：]?\s*\*{0,2}\s*(conditional_pass|pass|fail)\b/gi;
+  let match: RegExpExecArray | null;
+  while ((match = sentence.exec(text)) !== null) {
+    const prefix = text.slice(Math.max(0, match.index - 12), match.index);
+    if (/不|未|非|否决|驳回|而非/.test(prefix)) continue;
+    return match[1].toLowerCase() as 'pass' | 'fail' | 'conditional_pass';
+  }
+  return null;
+}
+
+/** F04：conditional_pass 的具体原因。兼容结构化 conditional_reason 与散文"conditional_pass 的（唯一）原因：…" */
+export function extractConditionalReason(text: string): string | null {
+  if (!text) return null;
+  const structured = /["'`]?conditional_reason["'`]?\s*[:：=]\s*["'`]?([^。\n"'`,，}]+)/i.exec(text);
+  if (structured?.[1]?.trim()) return structured[1].trim().slice(0, 200);
+  const prose = /conditional_pass\s*的(?:唯一|主要)?原因\s*[:：是]?\s*([^。\n]+)/i.exec(text);
+  if (prose?.[1]?.trim()) return prose[1].trim().slice(0, 200);
+  return null;
+}
+
+function parseJsonCandidate(raw: string): Record<string, any> | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('{')) return null;
+  const bounds = findBalancedJsonObjectBounds(trimmed);
+  if (!bounds) return null;
+  try {
+    const parsed = JSON.parse(trimmed.slice(bounds.start, bounds.end));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** <step-conclusion> 段落：内容是 JSON 才接受；Agent 在同名标签里写的 Markdown 会被跳过 */
+export function getStepConclusionJson(markdown: string): Record<string, any> | null {
+  const regex = /<step-conclusion>([\s\S]*?)<\/step-conclusion>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(markdown)) !== null) {
+    const parsed = parseJsonCandidate(match[1]);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+function getFencedJsonObjects(markdown: string): Record<string, any>[] {
+  const out: Record<string, any>[] = [];
+  const regex = /```(?:json)?\s*\n([\s\S]*?)```/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(markdown)) !== null) {
+    const parsed = parseJsonCandidate(match[1]);
+    if (parsed) out.push(parsed);
+  }
+  return out;
+}
+
+/**
+ * 统一宽松提取：优先级 step-conclusion(JSON) > result 标签 JSON > fenced json > 内联字段。
+ * verdict 额外允许散文句式（extractProseVerdict）。
+ * 返回值带逐字段来源，调用方应把 sources 一并归档，便于审计"字段从哪来"。
+ */
+export function extractLooseStructuredResult(markdown: string): LooseExtraction {
+  const fields: Record<string, unknown> = {};
+  const sources: Record<string, LooseExtractionSource> = {};
+  const apply = (obj: Record<string, any>, source: LooseExtractionSource) => {
+    const flat = flattenNestedContainers(obj);
+    for (const [key, value] of Object.entries(flat)) {
+      if (key in fields) continue;
+      fields[key] = value;
+      sources[key] = source;
+    }
+  };
+
+  const stepConclusion = getStepConclusionJson(markdown);
+  if (stepConclusion) apply(stepConclusion, 'step-conclusion-json');
+
+  const resultTagged = extractStructuredResult<Record<string, any>>(
+    markdown,
+    (value): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value),
+  );
+  if (resultTagged) apply(resultTagged, 'result-tag');
+
+  for (const fenced of getFencedJsonObjects(markdown)) apply(fenced, 'fenced-json');
+
+  apply(extractInlineKeyValues(markdown), 'inline-fields');
+
+  if (!('verdict' in fields)) {
+    const prose = extractProseVerdict(markdown);
+    if (prose) {
+      fields.verdict = prose;
+      sources.verdict = 'prose-verdict';
+    }
+  }
+  return { fields, sources };
+}

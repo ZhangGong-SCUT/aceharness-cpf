@@ -350,6 +350,15 @@ export interface PersistedRunState {
   createdByName?: string;
   status: 'preparing' | 'running' | 'completed' | 'failed' | 'stopped' | 'crashed' | 'pending';
   statusReason?: string;
+  /** F01：诊断归档状态（finish 脚本产物）。run 终态 completed 时也可能为 partial/failed */
+  diagnosisArtifactStatus?: {
+    status: 'complete' | 'partial' | 'failed';
+    summary?: string;
+    errorCode?: string | null;
+    at?: string;
+  } | null;
+  /** F04：诊断验证状态（verified / needs_runtime_validation / evidence_incomplete），与执行状态分离 */
+  diagnosisVerificationStatus?: string | null;
   startTime: string;
   endTime: string | null;
   /** 累计等待（停摆）时长（毫秒）：人工审查、token 耗尽、停止/崩溃后恢复等区间之和，不计入实际执行时间。 */

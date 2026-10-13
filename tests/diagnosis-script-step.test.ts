@@ -156,7 +156,8 @@ test('real Git restore checks out the saved baseline, preserves dirty retries, a
   await writeFile(join(input.workingDirectory, 'outputs/fix.patch'), 'existing patch including new files');
   await writeFile(join(input.runDirectory, 'state.yaml'), stringify({ stepLogs: [] }));
   const finished = result(await executeDiagnosisScript({ ...input, operation: 'finish' }));
-  expect(finished.verification_status).toBe('needs_runtime_validation');
+  // F02：验证字段整体缺失时应是 evidence_incomplete（unknown），不再与"显式未过"的 needs_runtime_validation 混同
+  expect(finished.verification_status).toBe('evidence_incomplete');
   const saved = JSON.parse(await readFile(join(input.runDirectory, 'outputs/diagnosis-context.json'), 'utf8'));
   expect(saved.context_completeness).toBe('complete');
   expect(saved.repositories[0]).toMatchObject({ commit, baseline_confirmed: true });

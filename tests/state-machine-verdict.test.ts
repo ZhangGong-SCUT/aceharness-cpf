@@ -282,6 +282,28 @@ describe('shouldFinalizeDiagnosisAsCompleted', () => {
     expect(gate.reason).toMatch(/conditional_pass/);
   });
 
+  test('F04：conditional_pass 携带受限原因（缺设备）时应准确表达，而非笼统归因黄金标志', () => {
+    const gate = shouldFinalizeDiagnosisAsCompleted({
+      hasFixVerificationState: true,
+      lastFixVerificationVerdict: 'conditional_pass',
+      finalStateName: '完成',
+      conditionalReason: '无 OHOS 设备（hdc 为空）',
+    });
+    expect(gate.complete).toBe(false);
+    expect(gate.reason).toContain('无 OHOS 设备');
+    expect(gate.reason).toMatch(/未完全通过/);
+    expect(gate.reason).not.toMatch(/未过黄金标志/);
+  });
+
+  test('F04：未记录原因时明确说"未记录具体原因"', () => {
+    const gate = shouldFinalizeDiagnosisAsCompleted({
+      hasFixVerificationState: true,
+      lastFixVerificationVerdict: 'conditional_pass',
+      finalStateName: '完成',
+    });
+    expect(gate.reason).toMatch(/未记录具体原因/);
+  });
+
   test('refuses completed when verification never ran but workflow reached 完成', () => {
     const gate = shouldFinalizeDiagnosisAsCompleted({
       hasFixVerificationState: true,

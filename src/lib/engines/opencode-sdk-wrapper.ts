@@ -124,6 +124,58 @@ function fingerprintEnv(env: NodeJS.ProcessEnv): string {
     .join('\n');
 }
 
+/**
+ * F07：把 SDK/子进程错误展开成可读、可分类、已脱敏的诊断文本。
+ * 历史问题：`Failed to create session: {}`——SDK 错误对象常无可枚举字段，
+ * JSON.stringify 得空对象，导致下游无法区分瞬态（ECONN/5xx）与永久（401/协议）故障。
+ */
+export function describeSdkError(error: unknown): string {
+  if (error == null) return '未知错误（空错误对象）';
+  if (typeof error === 'string') return sanitizeDiagnostic(error).slice(0, 500) || '未知错误';
+  const parts: string[] = [];
+  const push = (value: unknown) => {
+    const text = String(value ?? '').trim();
+    if (text && !parts.includes(text)) parts.push(text);
+  };
+  const anyErr = error as any;
+  if (anyErr instanceof Error) {
+    push(anyErr.message);
+    const extra = anyErr as any;
+    if (extra.code !== undefined) push(`code=${typeof extra.code === 'object' ? JSON.stringify(extra.code) : extra.code}`);
+    if (typeof extra.status === 'number') push(`HTTP ${extra.status}`);
+    if (typeof extra.exitCode === 'number') push(`exit=${extra.exitCode}`);
+    if (typeof extra.signal === 'string') push(`signal=${extra.signal}`);
+    if (typeof extra.stderr === 'string' && extra.stderr.trim()) push(`stderr=${extra.stderr.trim().slice(-300)}`);
+  } else {
+    if (typeof anyErr.status === 'number') push(`HTTP ${anyErr.status}`);
+    push(anyErr.statusText);
+    if (anyErr.code !== undefined) push(`code=${typeof anyErr.code === 'object' ? JSON.stringify(anyErr.code) : anyErr.code}`);
+    push(anyErr.message);
+    push(anyErr.error?.message);
+    if (anyErr.error?.code !== undefined) push(`code=${anyErr.error.code}`);
+    if (anyErr.data) { try { push(JSON.stringify(anyErr.data).slice(0, 300)); } catch { /* 忽略不可序列化 */ } }
+    if (typeof anyErr.stderr === 'string' && anyErr.stderr.trim()) push(`stderr=${anyErr.stderr.trim().slice(-300)}`);
+    if (typeof anyErr.exitCode === 'number') push(`exit=${anyErr.exitCode}`);
+  }
+  if (!parts.length) {
+    let json = '';
+    try { json = JSON.stringify(error); } catch { json = ''; }
+    push(json && json !== '{}' && json !== '[]'
+      ? json.slice(0, 300)
+      : `未知错误（${Object.prototype.toString.call(error)}，无可读字段）`);
+  }
+  const text = parts.join('；') || '未知错误（无可读字段）';
+  return sanitizeDiagnostic(text).slice(0, 500);
+}
+
+/** 诊断文本脱敏：令牌/密钥不出现在日志与错误消息 */
+function sanitizeDiagnostic(text: string): string {
+  return String(text)
+    .replace(/(sk-[A-Za-z0-9_-]{8})[A-Za-z0-9_-]+/g, '$1…')
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1…')
+    .replace(/(access_token=)[A-Za-z0-9._~+/=-]+/gi, '$1…');
+}
+
 async function withTemporaryProcessEnv<T>(env: NodeJS.ProcessEnv, action: () => Promise<T>): Promise<T> {
   const snapshot = new Map<string, string | undefined>();
   const keys = new Set<string>([
@@ -211,11 +263,19 @@ async function ensureServer(userId?: string): Promise<{ client: OpenCodeHttpClie
     console.log(`[opencode-sdk] starting HTTP server (pool key=${key || '(default)'}) with command ${getOpencodeCommand(userId)}...`);
 
     const server = await withTemporaryProcessEnv(serverEnv, async () => {
-      return await createOpencodeServer({
-        port: 0,
-        hostname: '127.0.0.1',
-        timeout: OPENCODE_SERVER_STARTUP_TIMEOUT_MS,
-      } as any);
+      try {
+        return await createOpencodeServer({
+          port: 0,
+          hostname: '127.0.0.1',
+          timeout: OPENCODE_SERVER_STARTUP_TIMEOUT_MS,
+        } as any);
+      } catch (startupError) {
+        // F07：启动失败必须带命令、超时与底层错误（退出码/stderr 尾），不再只有模糊消息
+        throw new Error(
+          `OpenCode 服务启动失败（command=${getOpencodeCommand(userId)}, `
+          + `timeout=${OPENCODE_SERVER_STARTUP_TIMEOUT_MS}ms）：${describeSdkError(startupError)}`,
+        );
+      }
     });
 
     entry.server = server;
@@ -403,7 +463,8 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
           query: sessionQuery,
         });
         if (sessionResult.error) {
-          throw new Error(`Failed to create session: ${JSON.stringify(sessionResult.error)}`);
+          // F07：展开错误字段（状态码/错误码/响应体），不再出现空 {} 消息
+          throw new Error(`Failed to create session: ${describeSdkError(sessionResult.error)}`);
         }
         this.currentSessionId = getSessionId(sessionResult.data);
         console.log(`[opencode-sdk] session created: ${this.currentSessionId}${nativeAgentName ? `, agent=${nativeAgentName}` : ''}`);

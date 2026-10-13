@@ -249,6 +249,9 @@ export function compactWorkflowStatusForLive(status: any, configFile?: string | 
     workflowSnapshotManifestHash: status.workflowSnapshotManifestHash || null,
     startTime: status.startTime || null,
     endTime: status.endTime || null,
+    // F01/F04：诊断归档与验证状态必须随状态透出，CPF 据此区分"完成"与"归档/验证异常"
+    diagnosisArtifactStatus: status.diagnosisArtifactStatus || null,
+    diagnosisVerificationStatus: status.diagnosisVerificationStatus || null,
     accumulatedWaitMs: typeof status.accumulatedWaitMs === 'number' ? status.accumulatedWaitMs : 0,
     waitStartedAt: status.waitStartedAt || null,
     workingDirectory: status.workingDirectory || null,
@@ -308,6 +311,9 @@ export function compactWorkflowStatusDeltaForLive(status: any, configFile?: stri
     pendingHumanQuestion: compactHumanQuestion(status.pendingHumanQuestion),
     startTime: status.startTime || null,
     endTime: status.endTime || null,
+    // F01/F04：诊断归档与验证状态必须随状态透出，CPF 据此区分"完成"与"归档/验证异常"
+    diagnosisArtifactStatus: status.diagnosisArtifactStatus || null,
+    diagnosisVerificationStatus: status.diagnosisVerificationStatus || null,
     accumulatedWaitMs: typeof status.accumulatedWaitMs === 'number' ? status.accumulatedWaitMs : 0,
     waitStartedAt: status.waitStartedAt || null,
   };
