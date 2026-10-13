@@ -35,6 +35,16 @@
 - 修复：`findStepConclusionSpans` 就近配对（闭合标签与最近未配对开标签配对，引文未闭合开标签被后续开标签覆盖丢弃）；`result-channel.getStepConclusionJson` 同样改造。回归测试含 #1761 真实 36KB 流端到端用例（压缩后可提取 verdict=conditional_pass）。
 - #1761 结论恢复后评估：verdict=conditional_pass 属实（无 OHOS 设备，运行时黄金标志待真机），门禁判 failed 是**正确的不粉饰行为**；修复补丁与官方 !1101 的对比已补入训练台账 fix-vs-official-comparison.md（机制等价、互有超出、盲测有效性受限因仓内 3.35.7 线已含官方修复）。
 
+## 追加二：#1712 事后验证发现的原因提取缺口（commit a500ecc，已修复并上线）
+
+- 现象：#1712（2026-10-13 22:12 终态 failed）已携带全部返修成果运行，outputRef 完整保留 7.9KB 真实 `<step-conclusion>`（29f29ae 压缩修复生效），终态 verdict=conditional_pass 正确，但 statusReason 仍报"验证步骤未记录具体原因"。
+- 根因（两处，均非 R02 存取逻辑）：
+  1. `extractConditionalReason` 语法只覆盖 `conditional_reason` 键与"…的原因：…"散文，未覆盖真实输出变体「运行验证未执行：无 OHOS 设备（hdc [Empty]）+ 引擎不对齐（决定性）」与「verdict=**conditional_pass**（括注）」；
+  2. inline 层 `coerceInlineValue` 对 `verdict=**conditional_pass**（engine_aligned=false 路由报告沉淀）` 原样保留加粗残余与括注，loose fields 的 verdict 带噪声（下游 parseWorkflowVerdict 走 step-conclusion 正则路径未受影响，故门禁 verdict 仍正确）。
+- 修复：原因提取按 structured > 的原因 > 未执行 > 括注 优先级新增两变体；`coerceInlineValue` 全局剥离 `**`，枚举型字段（verdict/problem_ownership/fix_target/verification_status/evaluation_mode/input_source 及布尔键）只取首词元，自由文本字段不截断。
+- 验证：#1712 真实 7.9KB 结论端到端回归（verdict=conditional_pass 净值、reason=无 OHOS 设备（hdc [Empty]）+ 引擎不对齐（决定性）、issue_golden_flag_met=false）；result-channel 14/14、复核探针 8/8、全量 1309 例维持 13 失败既有基线。已构建重启（HTTP 200）。
+- #1712 其余在线验证结论：R07 配置快照 hash=def8eb44 ✓；R08 overlay+pin 替换+共享 SDK 完整性 clean ✓；R04 归档 22 条 complete（fix.patch 按 business_code 豁免 not_applicable）✓；R06 三处（state.yaml/live-status/CPF metadata）状态一致 ✓；F12 未实战（无设备），Agent 依提示词主动拒绝降级 HAR 投递。
+
 ## 备注
 
 - 归档文档首页"6 个真实 Issue 回放"已更正为"4 个真实 Issue、共 8 次运行（#1919×5、#1941、#2856、#1772）"（按 run 目录 diagnosis-input.json 逐一核对）。
