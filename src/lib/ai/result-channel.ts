@@ -624,8 +624,19 @@ const INLINE_STRING_KEYS = new Set([
   'reset_target_merge_commit', 'engine_commit', 'conditional_reason', 'input_source',
 ]);
 
-function coerceInlineValue(raw: string): unknown {
-  const value = raw.trim().replace(/[*_`'"。，,；;]+$/, '').trim();
+/** 值域为枚举的内联字符串字段（自由文本字段如 root_cause_summary/branch 不在此列） */
+const INLINE_ENUM_STRING_KEYS = new Set([
+  'verdict', 'problem_ownership', 'fix_target', 'verification_status', 'evaluation_mode', 'input_source',
+]);
+
+function coerceInlineValue(raw: string, key?: string): unknown {
+  let value = raw.trim().replace(/[*_`'"。，,；;]+$/, '').trim().replace(/\*\*/g, '').trim();
+  // 枚举型字段只取首个词元：真实输出常写 verdict=**conditional_pass**（原因括注），
+  // 加粗残余与括注都属于噪声；自由文本字段不做此截断。
+  if (key && (INLINE_BOOL_KEYS.has(key) || INLINE_ENUM_STRING_KEYS.has(key))) {
+    const head = /^([A-Za-z][A-Za-z0-9_]*|[一-鿿]+)/.exec(value);
+    if (head && head[1] !== value) value = head[1];
+  }
   if (/^(true|false)$/i.test(value)) return value.toLowerCase() === 'true';
   if (/^null$/i.test(value)) return null;
   return value;
@@ -648,7 +659,7 @@ export function extractInlineKeyValues(text: string): Record<string, unknown> {
   while ((match = pattern.exec(sanitized)) !== null) {
     const key = match[1];
     if (key in out) continue; // 首次出现优先（步骤结论通常先写结论）
-    const value = coerceInlineValue(match[2]);
+    const value = coerceInlineValue(match[2], key);
     if (INLINE_BOOL_KEYS.has(key) && typeof value !== 'boolean') continue;
     if (typeof value === 'string' && !value) continue;
     out[key] = value;
@@ -680,6 +691,12 @@ export function extractConditionalReason(text: string): string | null {
   if (structured?.[1]?.trim()) return structured[1].trim().slice(0, 200);
   const prose = /conditional_pass\s*的(?:唯一|主要)?原因\s*[:：是]?\s*([^。\n]+)/i.exec(sanitized);
   if (prose?.[1]?.trim()) return prose[1].trim().slice(0, 200);
+  // 工作流真实变体（#1712）：「运行验证未执行：无 OHOS 设备（hdc [Empty]）+ 引擎不对齐」
+  const notExecuted = /(?:运行验证|真机验证|安装运行|验证)?未执行\s*[:：]\s*([^。\n]+)/.exec(sanitized);
+  if (notExecuted?.[1]?.trim()) return notExecuted[1].trim().slice(0, 200);
+  // 变体：verdict=conditional_pass（原因括注）
+  const paren = /conditional_pass\*{0,2}[（(]([^。\n）)]{2,120})[）)]/.exec(sanitized);
+  if (paren?.[1]?.trim()) return paren[1].trim().slice(0, 200);
   return null;
 }
 
