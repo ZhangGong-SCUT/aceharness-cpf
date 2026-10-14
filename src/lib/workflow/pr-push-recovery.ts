@@ -26,17 +26,31 @@ export async function readRecoverablePush(input: { runId?: string; workingDirect
     || enteredHuman?.from !== '推送并触发') return null;
   const out = join(input.workingDirectory, 'outputs');
   const [push, comment, gate, audit] = await Promise.all(['push-result.json', 'pr-comment.json', 'gate-check.json', 'pr-push-audit.json'].map(n => json(join(out, n))));
+  // head_changed 同样只是「推送凭据没对上」；是否真需要人工判断由 proof.verified 决定。
   if (!audit?.push_verified || audit.verified === true
-    || (audit.reason && audit.reason !== 'build_receipt_unverified')) return null;
+    || (audit.reason && !['build_receipt_unverified', 'head_changed'].includes(audit.reason))) return null;
   const proof = evaluatePrPushEvidence(push, comment, gate);
   if (!proof.verified) return null;
   // These fields bind the evidence to this workflow's PR branch, not just a SHA pair.
   const field = (key: string) => new RegExp(`^\\s*${key}:\\s*([^\\n]+)`, 'm').exec(state.globalContext || '')?.[1]?.trim();
-  if (push.branch !== field('head_ref')) return null;
-  try {
-    const remote = new URL(push.remote);
-    if (remote.protocol !== 'https:' || remote.port || remote.hostname !== 'gitcode.com'
-      || remote.pathname.replace(/^\//, '').replace(/\.git$/, '').toLowerCase() !== field('head_repo')?.toLowerCase()) return null;
-  } catch { return null; }
+  const headRef = field('head_ref'), headRepo = (field('head_repo') || '').toLowerCase();
+  const sameRef = (repo: unknown, ref: unknown) => !!repo && !!ref
+    && String(repo).replace(/^\//, '').replace(/\.git$/, '').toLowerCase() === headRepo && String(ref) === headRef;
+  let bound = false;
+  if (push.branch && push.remote) {
+    try {
+      const remote = new URL(push.remote);
+      bound = remote.protocol === 'https:' && !remote.port && remote.hostname === 'gitcode.com'
+        && sameRef(remote.pathname, push.branch);
+    } catch { bound = false; }
+  } else if (push.push_target) {
+    // 部分运行只写 push_target=<head_repo>@<head_ref>。
+    const at = String(push.push_target).lastIndexOf('@');
+    bound = at > 0 && sameRef(String(push.push_target).slice(0, at), String(push.push_target).slice(at + 1));
+  } else {
+    // push-result 未自带分支信息时，用本 run 门禁快照记录的 PR 身份绑定。
+    bound = gate?.own_pr === true && sameRef(gate?.head_repo, gate?.head_ref);
+  }
+  if (!bound) return null;
   return { push, comment, questionId: q.id, archive: join(getWorkspaceRoot(), 'runs', input.runId) };
 }

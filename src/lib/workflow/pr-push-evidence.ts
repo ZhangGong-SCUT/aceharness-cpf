@@ -12,7 +12,12 @@ export function evaluatePrPushEvidence(push: any, comment: any, gate: any, noLoc
     && comment.endpoint === 'pulls' && !!comment.comment_id && Number.isFinite(posted);
   const buildPosted = receipt && Number.isFinite(since) && posted >= since
     && (!comment.commit_sha || comment.commit_sha === push?.commit_sha);
-  const headMatches = !success || !gate?.head_sha || gate.head_sha === push.commit_sha;
+  // The gate snapshot is captured before the fix commit is pushed, so its head differs
+  // from the pushed commit by design. Only a snapshot checked after our own push can
+  // prove the PR head moved away from the commit we pushed.
+  const checkedAt = Date.parse(gate?.checked_at), pushedAt = Date.parse(push?.pushed_at);
+  const gateAfterPush = Number.isFinite(checkedAt) && Number.isFinite(pushedAt) && checkedAt >= pushedAt;
+  const headMatches = !success || !gate?.head_sha || !gateAfterPush || gate.head_sha === push.commit_sha;
   const verified = (success || noPush) && headMatches && (!buildRequired || buildPosted);
   const reason = !success && !noPush ? 'push_unverified' : !headMatches ? 'head_changed'
     : buildRequired && !buildPosted ? 'build_receipt_unverified' : null;
