@@ -1,5 +1,6 @@
 'use client';
 
+import { formatObservedMetric } from '@/lib/run/observed-metric';
 import { useState, useEffect, useCallback, useMemo, useRef, type DragEvent, type ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -63,6 +64,8 @@ interface TokenRankingItem {
   configFile?: string;
   runs: number;
   totalTokens: number;
+  tokenUsageSource?: 'reported' | 'partial' | 'unavailable';
+  costSource?: 'reported' | 'partial' | 'unavailable';
   inputTokens: number;
   outputTokens: number;
   cacheCreationInputTokens: number;
@@ -77,6 +80,8 @@ interface RunTokenUsageItem {
   status: string;
   startTime: string;
   totalTokens: number;
+  tokenUsageSource?: 'reported' | 'partial' | 'unavailable';
+  costSource?: 'reported' | 'partial' | 'unavailable';
   inputTokens: number;
   outputTokens: number;
   cacheCreationInputTokens: number;
@@ -819,12 +824,12 @@ export default function DashboardPage() {
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium">{item.name || item.configFile || '-'}</div>
                       <div className="mt-0.5 text-xs text-muted-foreground">
-                        {t('dashboard.tokenRanking.runs')}: {item.runs} · {t('dashboard.tokenRanking.cost')}: {formatMoney(item.cost)}
+                        {t('dashboard.tokenRanking.runs')}: {item.runs} · {t('dashboard.tokenRanking.cost')}: {formatObservedMetric(item.cost, item.costSource, formatMoney)}
                       </div>
                     </div>
                   </div>
                   <div className="shrink-0 text-right">
-                    <div className="text-sm font-semibold">{formatTokens(item.totalTokens)}</div>
+                    <div className="text-sm font-semibold">{formatObservedMetric(item.totalTokens, item.tokenUsageSource, formatTokens)}</div>
                     <div className="text-xs text-muted-foreground">{t('dashboard.tokenRanking.totalTokens')}</div>
                   </div>
                 </div>
@@ -1683,7 +1688,7 @@ export default function DashboardPage() {
                             <div className="flex items-center gap-2">
                               {typeof run.totalTokens === 'number' ? (
                                 <div className="hidden text-right md:block">
-                                  <div className="text-sm font-semibold">{formatTokens(run.totalTokens)}</div>
+                                  <div className="text-sm font-semibold">{formatObservedMetric(run.totalTokens, run.tokenUsageSource, formatTokens)}</div>
                                   <div className="text-[11px] text-muted-foreground">{t('dashboard.tokenRanking.totalTokens')}</div>
                                 </div>
                               ) : null}

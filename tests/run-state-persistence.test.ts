@@ -685,3 +685,21 @@ describe('run-state-persistence', () => {
     });
   });
 });
+
+test('step attempts persist validated result and retain raw tool evidence across saves', async () => {
+  await withIsolatedAceHome(async () => {
+    const { saveRunState, loadRunState } = await loadPersistence();
+    const { getWorkspaceRunsDir } = await import('@/lib/core/app-paths');
+    const { validateStepResultRecord } = await import('@/lib/workflow/step-result-record');
+    const raw = '<ace-process>tool evidence</ace-process>\n<step-conclusion>{"verdict":"pass"}</step-conclusion>';
+    const state = minimalRunState({ runId: 'run-result-record', stepLogs: [{ id: 'attempt-1', stepName: 'verify', agent: 'a', status: 'completed', output: raw, error: '', costUsd: 0, durationMs: 1, timestamp: new Date().toISOString() }] });
+    await saveRunState(state);
+    const loaded = (await loadRunState(state.runId))!;
+    const log = loaded.stepLogs[0], dir = resolve(getWorkspaceRunsDir(), state.runId);
+    const record = JSON.parse(await readFile(resolve(dir, log.resultRef!), 'utf8'));
+    expect(validateStepResultRecord(record, state.runId, log.id, log.output)).toBe(true);
+    expect(await readFile(resolve(dir, log.rawOutputRef!), 'utf8')).toBe(raw);
+    await saveRunState(loaded);
+    expect(await readFile(resolve(dir, log.rawOutputRef!), 'utf8')).toBe(raw);
+  });
+});

@@ -18,13 +18,16 @@ function makeSdkTree() {
 }
 
 describe('createSdkOverlay（R08：run 级 SDK overlay）', () => {
-  it('镜像为 symlink 树；bin/cache 是真实可写目录，写入不触碰共享 SDK', () => {
+  it('完整 SDK 独立复制，入口、packages 和 cache 均不触碰共享 SDK', () => {
     const src = makeSdkTree();
     const overlayDir = mkdtempSync(join(tmpdir(), 'sdk-overlay-'));
     const result = createSdkOverlay(src, overlayDir);
 
-    // 顶层与包目录是符号链接
-    expect(lstatSync(join(result.sdkLink, 'packages')).isSymbolicLink()).toBe(true);
+    // 包目录和启动器必须独立
+    expect(lstatSync(join(result.sdkLink, 'packages')).isSymbolicLink()).toBe(false);
+    expect(lstatSync(result.flutterBin!).isSymbolicLink()).toBe(false);
+    writeFileSync(join(result.sdkLink, 'packages', 'flutter', 'pubspec.yaml'), 'changed');
+    expect(readFileSync(join(src, 'packages', 'flutter', 'pubspec.yaml'), 'utf8')).toBe('name: flutter\n');
     // bin/cache 是真实目录
     expect(lstatSync(join(result.sdkLink, 'bin', 'cache')).isDirectory()).toBe(true);
     expect(lstatSync(join(result.sdkLink, 'bin', 'cache')).isSymbolicLink()).toBe(false);

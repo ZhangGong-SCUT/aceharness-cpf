@@ -18,6 +18,8 @@ export interface TokenRankingItem extends TokenUsageSummary {
   configFile?: string;
   runs: number;
   totalTokens: number;
+  tokenUsageSource?: 'reported' | 'partial' | 'unavailable';
+  costSource?: 'reported' | 'partial' | 'unavailable';
   cost: number;
 }
 
@@ -60,6 +62,8 @@ export interface RunSummary extends TokenUsageSummary {
   totalSteps: number;
   completedSteps: number;
   totalTokens: number;
+  tokenUsageSource?: 'reported' | 'partial' | 'unavailable';
+  costSource?: 'reported' | 'partial' | 'unavailable';
   cost: number;
   ownerId: string;
   ownerName: string;
@@ -149,6 +153,12 @@ export function buildTokenRankingsForRuns(
     tokenRankingByWorkflowMap[workflowKey].totalTokens += run.totalTokens;
     tokenRankingByWorkflowMap[workflowKey].cost += run.cost;
     addUsage(tokenRankingByWorkflowMap[workflowKey], usage);
+    for (const item of [tokenRankingByWorkflowMap[workflowKey], tokenRankingByUserMap[ownerName]]) {
+      for (const key of ['tokenUsageSource', 'costSource'] as const) {
+        const incoming = run[key] || ((key === 'tokenUsageSource' ? run.totalTokens : run.cost) > 0 ? 'reported' : 'unavailable');
+        item[key] = item.runs === 1 ? incoming : item[key] === incoming ? incoming : 'partial';
+      }
+    }
   }
 
   return {
@@ -392,6 +402,7 @@ export async function readAllRunsSummary() {
       cacheCreationInputTokens: usage.cacheCreationInputTokens,
       cacheReadInputTokens: usage.cacheReadInputTokens,
       totalTokens: runTotalTokens,
+      tokenUsageSource: summary.tokenUsageSource, costSource: summary.costSource,
       cost,
       ownerId,
       ownerName,

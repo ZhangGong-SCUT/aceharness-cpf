@@ -318,6 +318,7 @@ function isInsideRanges(index: number, ranges: Array<[number, number]>): boolean
 /** 把 fenced code、HTML 注释、引用块替换为空白：散文/内联提取只在可信正文上进行 */
 function stripUntrustedRegions(markdown: string): string {
   const ranges = [
+    ...getStructuredAceProcessRanges(markdown),
     ...getFencedCodeBlockRanges(markdown),
     ...getHtmlCommentRanges(markdown),
     ...getBlockquoteRanges(markdown),
@@ -717,18 +718,23 @@ function parseJsonCandidate(raw: string): Record<string, any> | null {
  * 注释/引用块里的同名标签视为示例或引述，不可信；
  * 标签就近配对——引文里未闭合的开标签不会吞并后续真实结论（#1761 教训） */
 export function getStepConclusionJson(markdown: string): Record<string, any> | null {
+  return getStepConclusionObjects(markdown)[0] || null;
+}
+function getStepConclusionObjects(markdown: string): Record<string, any>[] {
+  const objects: Record<string, any>[] = [];
   const skipRanges = [
     ...getFencedCodeBlockRanges(markdown),
     ...getHtmlCommentRanges(markdown),
     ...getBlockquoteRanges(markdown),
+    ...getStructuredAceProcessRanges(markdown),
   ];
   for (const span of findStepConclusionSpans(markdown)) {
     if (isInsideRanges(span.start, skipRanges)) continue;
     const content = span.content.slice(span.content.indexOf('>') + 1, span.content.lastIndexOf('<'));
     const parsed = parseJsonCandidate(content);
-    if (parsed) return parsed;
+    if (parsed) objects.push(parsed);
   }
-  return null;
+  return objects;
 }
 
 /** 紧跟在"示例/格式/例如/example"等提示语之后的 fenced JSON 是格式示范，不是裁决结果 */
@@ -746,11 +752,12 @@ function isExampleFence(markdown: string, fenceIndex: number): boolean {
 }
 
 function getFencedJsonObjects(markdown: string): Record<string, any>[] {
+  const skipRanges = [...getStructuredAceProcessRanges(markdown), ...getHtmlCommentRanges(markdown), ...getBlockquoteRanges(markdown)];
   const out: Record<string, any>[] = [];
   const regex = /```(?:json)?\s*\n([\s\S]*?)```/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(markdown)) !== null) {
-    if (isExampleFence(markdown, match.index)) continue;
+    if (isInsideRanges(match.index, skipRanges) || isExampleFence(markdown, match.index)) continue;
     const parsed = parseJsonCandidate(match[1]);
     if (parsed) out.push(parsed);
   }
@@ -765,23 +772,28 @@ function getFencedJsonObjects(markdown: string): Record<string, any>[] {
 export function extractLooseStructuredResult(markdown: string): LooseExtraction {
   const fields: Record<string, unknown> = {};
   const sources: Record<string, LooseExtractionSource> = {};
+  const fieldConflicts: string[] = [];
+  const criticalFields = new Set(['verdict', 'issue_golden_flag_met', 'engine_aligned', 'bug_fixed']);
   const apply = (obj: Record<string, any>, source: LooseExtractionSource) => {
     const flat = flattenNestedContainers(obj);
     for (const [key, value] of Object.entries(flat)) {
-      if (key in fields) continue;
+      if (key in fields) {
+        if (criticalFields.has(key) && fields[key] !== value) fieldConflicts.push(`${key}: ${String(fields[key])} != ${String(value)} (${source})`);
+        continue;
+      }
       fields[key] = value;
       sources[key] = source;
     }
   };
 
-  const stepConclusion = getStepConclusionJson(markdown);
-  if (stepConclusion) apply(stepConclusion, 'step-conclusion-json');
+  const stepConclusions = getStepConclusionObjects(markdown);
+  const stepConclusion = stepConclusions[0] || null;
+  for (const conclusion of stepConclusions) apply(conclusion, 'step-conclusion-json');
 
-  const resultTagged = extractStructuredResult<Record<string, any>>(
-    markdown,
-    (value): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value),
-  );
-  if (resultTagged) apply(resultTagged, 'result-tag');
+  const resultObjects = getResultSections(markdown).map(section => extractJsonObject(section.content))
+    .filter(value => value && typeof value === 'object' && !Array.isArray(value));
+  const resultTagged = resultObjects[0] || null;
+  for (const result of resultObjects) apply(result, 'result-tag');
 
   const fencedObjects = getFencedJsonObjects(markdown);
   for (const fenced of fencedObjects) apply(fenced, 'fenced-json');
@@ -809,9 +821,7 @@ export function extractLooseStructuredResult(markdown: string): LooseExtraction 
   const proseVerdict = sources.verdict === 'prose-verdict' ? String(fields.verdict) : extractProseVerdict(markdown);
   if (proseVerdict) verdictCandidates.push({ source: 'prose-verdict', verdict: normalizeVerdictText(proseVerdict) });
   const distinct = [...new Set(verdictCandidates.map((candidate) => candidate.verdict))].filter(Boolean);
-  const conflicts = distinct.length > 1
-    ? verdictCandidates.map((candidate) => `${candidate.source}=${candidate.verdict}`)
-    : undefined;
-
-  return conflicts ? { fields, sources, conflicts } : { fields, sources };
+  const conflicts = [...new Set([...fieldConflicts, ...(distinct.length > 1
+    ? verdictCandidates.map((candidate) => `${candidate.source}=${candidate.verdict}`) : [])])];
+  return conflicts.length ? { fields, sources, conflicts } : { fields, sources };
 }

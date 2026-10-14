@@ -189,6 +189,7 @@ workflow:
             2. 【真机/模拟器运行验证】：
                - 检测设备：hdc list targets（OHOS）/ adb devices（Android）
                - 【引擎对齐】读 outputs/ohos-flutter-sdk.json（上下文装载阶段会从原 run 复制/重算）。matched=true 必须用 flutterBin 编 hap / 换 HAR；matched=false 禁止退回日常 SDK
+               - 【HAR/HAP 构建与安装门禁】HAR 是依赖库，安装目标必须为 HAP。先用 `node /home/flutter/ACEHarness/scripts/ohos-hap-build.mjs --project <demo目录> --flutter <本run独立SDK的bin/flutter> --har <实际依赖HAR> --hap <构建输出HAP> --expected-mode <release|debug|profile> --manifest outputs/hap-build-manifest.json` 构建，脚本核对实际 ohpm lock 的 Flutter HAR、模式和 hash；然后用 `node /home/flutter/ACEHarness/scripts/ohos-har-install.mjs --har <同一HAR> --hap <同一HAP> --build-manifest outputs/hap-build-manifest.json --expected-mode <同一模式> --expect-path-prefix <本run目录> --device <设备id> --record outputs/har-install-record.json` 安装。不得手写构建清单或绕过门禁；失败时最高 conditional_pass。分别记录安装完成、应用启动、黄金标志验证，安装成功不等于缺陷修复。step-conclusion 的 evidenceRefs 必须列出 HAP、HAR、构建清单、依赖锁文件及运行日志的 outputs 相对路径。
                - 【引擎 C++ 重编】修改了 engine/src 的 C++/napi 代码（非 ArkTS embedding）时，libflutter.so 必须重编才算 engine_aligned=true：
                  MANDATORY 先读 references/engine-build.md（构建标准路径）。环境与共享源码树已配好：/home/flutter/engine-src（已 gclient sync，构建产物 engine/src/out/ohos_<mode>_arm64/）。
                  流程：node skills/cpf-ohos-issue-analysis/scripts/build-engine.mjs --check-only（探测）→ 把本轮 outputs/fix.patch 应用到共享树
@@ -197,7 +198,7 @@ workflow:
                  （flutter build hap --local-engine=ohos_release_arm64 --local-engine-host=host_release 用法见 references §5）。
                  构建后共享树必须还原：git -C /home/flutter/engine-src checkout -- engine/ （防止污染下一轮）。
                  环境缺失 → engine_aligned=false，把脚本输出的 missing 列表原样引用进 step-conclusion（禁止不探测就写"环境性未执行"）
-               - 用本轮修改后的 repo/ 代码重新构建；Demo 用继承的 demo_path（原 run 目录），改 HAR 后删 oh_modules 并清 ~/.ohpm/cache 再编
+               - 用本轮修改后的 repo/ 代码重新构建；Demo 用继承的 demo_path（当前 run 恢复出的独立副本），改 HAR 后删 oh_modules 后重新解析本 run 的依赖再编；禁止清理共享 ~/.ohpm/cache
                - 【盖 HAR 三步强制】AI 轮验证时可能把它的修复版 HAR 盖进了 SDK cache 且未还原——本轮盖入新 HAR 必须按 linux-build-env.md §D.2：备份旧 cache（留证 AI 版指纹）→ cp 本轮 HAR → md5sum 复核 cache == 本轮 outputs HAR。md5 不一致或跳过复核 = 立即 verdict=fail，禁止构建——cache 里若仍是 AI 轮代码，黄金标志会静默通过，得出「用户方案有效」的假结论（真机跑的是 AI 代码而非本轮代码）。构建后还须核对 oh_modules 实际源码是本轮修改（非 AI 轮 21 文件版）。
                - 【冻结黄金标志】沿用上下文装载 JSON 中的 issue_golden_flag，禁止修订/改写/放宽。修不了则 issue_golden_flag_met=false，verdict 最高 conditional_pass
                - 本机 Linux 构建/真机操作前 MANDATORY 读 flutter-issue-demo-reproduction/references/linux-build-env.md

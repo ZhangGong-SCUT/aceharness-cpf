@@ -11,9 +11,10 @@
  */
 
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { dirname, delimiter, isAbsolute } from 'node:path';
 import { EventEmitter } from 'events';
 import { ensureOpenCodeCompatibleMcpServers } from '@/lib/mcp/registry';
-import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
+import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineOutput } from './engine-output';
 import { buildConfiguredProcessEnvSync, getConfiguredCliSearchPaths } from '@/lib/core/configured-env';
 import { buildOpenCodeRawCommandPrompt, isOpenCodeSlashCommandPrompt, parseOpenCodeSlashCommand } from './opencode-command';
@@ -68,8 +69,10 @@ async function isSdkServerAlive(entry: SdkServerEntry): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1500);
   try {
-    const res = await fetch(`${entry.server.url.replace(/\/$/, '')}/__pool_probe__`, { signal: controller.signal });
-    return res.status < 500; // 404 也算活
+    const res = await fetch(`${entry.server.url.replace(/\/$/, '')}/global/health`, { signal: controller.signal });
+    if (!res.ok) return false;
+    const health = await res.json();
+    return health?.healthy === true && typeof health.version === 'string';
   } catch {
     return false;
   } finally {
@@ -216,6 +219,8 @@ async function ensureServer(userId?: string): Promise<{ client: OpenCodeHttpClie
     process.env,
     configuredEnvOptions(userId),
   );
+  const command = getOpencodeCommand(userId);
+  if (isAbsolute(command)) serverEnv.PATH = `${dirname(command)}${delimiter}${serverEnv.PATH || ''}`;
   const nextFingerprint = JSON.stringify({
     userId: key,
     env: fingerprintEnv(serverEnv),
@@ -365,6 +370,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
 
   async execute(options: EngineOptions): Promise<EngineResult> {
     const startTime = Date.now();
+    let observedUsage: EngineResultMetadata = { usage_source: 'unavailable', cost_source: 'unavailable' };
     activeExecutions += 1;
     this.collectedOutput = '';
     this.streamedTranscript = '';
@@ -530,7 +536,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
           output: normalizeEngineOutput(this.collectedOutput || output),
           sessionId: this.currentSessionId,
           metadata: {
-            ...ZERO_USAGE_METADATA,
+            ...observedUsage,
             duration_ms: durationMs,
           },
         };
@@ -556,6 +562,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
       });
       const output = await sendPromptWithOpenCodeHttp({
         engineName: 'opencode-sdk',
+        onUsage: usage => { observedUsage = usage; },
         client,
         sessionId: this.currentSessionId,
         fullPrompt,
@@ -594,7 +601,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         output: normalizeEngineOutput(this.collectedOutput || output),
         sessionId: this.currentSessionId,
         metadata: {
-          ...ZERO_USAGE_METADATA,
+          ...observedUsage,
           duration_ms: durationMs,
         },
       };
@@ -615,7 +622,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
           success: true,
           output: normalizedOutput,
           sessionId: this.currentSessionId || undefined,
-          metadata: ZERO_USAGE_METADATA,
+          metadata: { ...observedUsage, duration_ms: Date.now() - startTime },
         };
       }
       this.emitDiagnosticLog({
@@ -629,7 +636,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         output: normalizedOutput,
         error: errorMessage,
         sessionId: this.currentSessionId || undefined,
-        metadata: ZERO_USAGE_METADATA,
+        metadata: { ...observedUsage, duration_ms: Date.now() - startTime },
       };
     } finally {
       activeExecutions = Math.max(0, activeExecutions - 1);

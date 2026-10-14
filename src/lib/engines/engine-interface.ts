@@ -35,6 +35,8 @@ export interface EngineOptions {
 }
 
 export interface EngineTokenUsage {
+  source?: 'reported' | 'partial' | 'unavailable' | 'not_applicable';
+  costSource?: 'reported' | 'partial' | 'unavailable' | 'not_applicable';
   input_tokens: number;
   output_tokens: number;
   cache_creation_input_tokens: number;

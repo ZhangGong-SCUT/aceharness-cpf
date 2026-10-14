@@ -27,6 +27,8 @@ export interface RunRecord {
   cacheCreationInputTokens?: number;
   cacheReadInputTokens?: number;
   totalTokens?: number;
+  tokenUsageSource?: 'reported' | 'partial' | 'unavailable';
+  costSource?: 'reported' | 'partial' | 'unavailable';
 }
 
 async function ensureRunsDir() {
@@ -51,6 +53,7 @@ function runRecordFromSummary(summary: RunSummaryCache): RunRecord {
     cacheCreationInputTokens: summary.tokenUsage.cacheCreationInputTokens,
     cacheReadInputTokens: summary.tokenUsage.cacheReadInputTokens,
     totalTokens: summary.totalTokens,
+    tokenUsageSource: summary.tokenUsageSource, costSource: summary.costSource,
   };
 }
 

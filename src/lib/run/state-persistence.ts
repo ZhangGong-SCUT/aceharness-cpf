@@ -7,6 +7,7 @@ import type { SpecCodingDocument, StepTaskBindingSnapshot, StepTaskBindingValida
 import { buildRunSummaryCacheFromState, saveRunSummaryCache } from '@/lib/run/summary-cache';
 import { normalizeSpecCodingDocument } from '@/lib/spec/coding-store';
 import { getWorkflowEventStore } from '@/lib/workflow/event-store';
+import { makeStepResultRecord } from '@/lib/workflow/step-result-record';
 import { stripAceProcessBlocks } from '@/lib/chat/ai-process-blocks';
 
 const RUNS_DIR = getWorkspaceRunsDir();
@@ -18,6 +19,8 @@ const streamWriteQueues = new Map<string, Promise<void>>();
 export const STREAM_CHUNK_SEPARATOR = '\n\n<!-- chunk-boundary -->\n\n';
 
 export interface PersistedTokenUsage {
+  source?: 'reported' | 'partial' | 'unavailable' | 'not_applicable';
+  costSource?: 'reported' | 'partial' | 'unavailable' | 'not_applicable';
   inputTokens: number;
   outputTokens: number;
   cacheCreationInputTokens?: number;
@@ -112,7 +115,10 @@ export interface PersistedStepLog {
   status: 'completed' | 'failed';
   output: string;
   outputRef?: string;
+  resultRef?: string;
+  rawOutputRef?: string;
   outputBytes?: number;
+  elapsedMs?: number;
   error: string;
   costUsd: number;
   durationMs: number;
@@ -602,8 +608,12 @@ async function hydrateHumanQuestion(runId: string, question: any): Promise<any> 
   };
 }
 
-async function externalizeStepLogOutput(runId: string, log: PersistedStepLog): Promise<PersistedStepLog> {
+export async function externalizeStepLogOutput(runId: string, log: PersistedStepLog): Promise<PersistedStepLog> {
   if (!log || typeof log !== 'object') return log;
+  // Once an attempt is archived, later saves of its display preview must not overwrite it.
+  if (log.outputRef && log.resultRef && log.rawOutputRef
+    && [log.outputRef, log.resultRef, log.rawOutputRef].every(ref =>
+      resolve(runDir(runId), ref).startsWith(runDir(runId) + '/') && existsSync(resolve(runDir(runId), ref)))) return { ...log, output: '' };
   if (typeof log.output !== 'string' || log.output.length === 0) return log;
 
   // BUGFIX: agent output may contain <ace-process>...</ace-process> blocks
@@ -624,11 +634,18 @@ async function externalizeStepLogOutput(runId: string, log: PersistedStepLog): P
   const safeId = safeStepFileName(log.id || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const filename = `${safeStep}-${safeId}.md`;
   await writeFile(resolve(dir, filename), sanitizedOutput, 'utf-8');
+  await writeFile(resolve(dir, `${filename}.raw`), log.output, { encoding: 'utf-8', mode: 0o600, flag: 'wx' })
+    .catch(error => { if (error.code !== 'EEXIST') throw error; });
+  const record = makeStepResultRecord(runId, log.id, log.stepName, sanitizedOutput);
+  await writeFile(resolve(dir, `${filename}.result.json.tmp`), JSON.stringify(record, null, 2), 'utf-8');
+  await rename(resolve(dir, `${filename}.result.json.tmp`), resolve(dir, `${filename}.result.json`));
 
   return {
     ...log,
     output: '',
     outputRef: `outputs/step-logs/${filename}`,
+    resultRef: `outputs/step-logs/${filename}.result.json`,
+    rawOutputRef: `outputs/step-logs/${filename}.raw`,
     outputBytes: Buffer.byteLength(sanitizedOutput, 'utf-8'),
   };
 }

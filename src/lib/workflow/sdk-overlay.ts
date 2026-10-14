@@ -1,131 +1,88 @@
-/**
- * F11/R08：run 级 SDK overlay——真实文件系统隔离机制（不只是指纹检测）。
- *
- * 结构：overlayDir/sdk 是原 SDK 的符号链接镜像，唯独 bin/cache 是真实目录：
- * cache 内条目逐个 symlink 到共享只读产物；flutter/dart 工具运行时新写/替换的
- * cache 条目只会落在 overlay 的真实目录里，共享 SDK 保持只读。
- * 代价接近零（全是 symlink），删除 overlay 不影响共享 SDK。
- *
- * 使用约束：overlay 通过 `flutter` 可执行文件路径生效——调用方解析 SDK 后，
- * 若 run 存在 overlay，应把 flutterBin 指向 overlay 内的 bin/flutter。
- */
-import { createHash } from 'node:crypto';
-import {
-  cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, symlinkSync, writeFileSync,
-} from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+/** Per-run SDK snapshot. No file or directory may link back to the shared SDK. */
+import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
+  readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 
 export interface SdkOverlayResult {
   overlayDir: string;
-  /** overlay 内的 flutter 入口（调用方应优先用它替换共享 SDK 的 flutterBin） */
   flutterBin: string | null;
   sdkLink: string;
-  /** 被落成真实目录的子路径（相对 sdk 根），其余皆为 symlink */
   writableDirs: string[];
   entries: number;
 }
+const WRITABLE_SUBDIRS = ['.'];
+const inside = (root: string, path: string) => path === root || path.startsWith(root + sep);
 
-/** 需要可写的子树：flutter 工具运行时会改写这些目录 */
-const WRITABLE_SUBDIRS = ['bin/cache'];
-
-function linkOrCopyEntry(src: string, dst: string): void {
-  const stat = lstatSync(src);
+function copyTree(root: string, source: string, destination: string, finalRoot: string): number {
+  const stat = lstatSync(source);
   if (stat.isSymbolicLink()) {
-    // 保留原符号链接（SDK 内部常有相对链接），读不出时退化为实体复制
-    try { symlinkSync(readlinkSync(src), dst); return; } catch { /* fallthrough */ }
+    const target = realpathSync(source);
+    if (!inside(root, target)) throw new Error(`SDK 链接越出根目录: ${relative(root, source)}`);
+    // Resolve links to a corresponding path in the new snapshot, including absolute links.
+    const finalDestination = join(finalRoot, relative(root, source));
+    symlinkSync(relative(dirname(finalDestination), join(finalRoot, relative(root, target))), destination);
+    return 1;
   }
   if (stat.isDirectory()) {
-    symlinkSync(src, dst, 'dir');
-  } else {
-    symlinkSync(src, dst, 'file');
+    mkdirSync(destination, { mode: stat.mode });
+    return readdirSync(source).reduce((count, name) =>
+      count + copyTree(root, join(source, name), join(destination, name), finalRoot), 0);
   }
+  if (!stat.isFile()) throw new Error(`SDK 包含不支持的文件类型: ${relative(root, source)}`);
+  // Reflink where supported, independent copy otherwise; never hard links.
+  copyFileSync(source, destination, constants.COPYFILE_FICLONE);
+  return 1;
 }
 
-/** 把 srcDir 内容镜像到 dstDir：子项默认 symlink；
- * writableSubdirs 及其祖先目录落成真实目录（祖先不实体化会把整棵子树链接进共享 SDK），
- * 可写区内的文件落成实体复制（工具可能原地改写） */
-function mirrorTree(srcDir: string, dstDir: string, relPrefix: string, writableSubdirs: string[]): number {
-  mkdirSync(dstDir, { recursive: true });
-  let count = 0;
-  for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
-    const rel = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
-    const src = join(srcDir, entry.name);
-    const dst = join(dstDir, entry.name);
-    const isWritable = writableSubdirs.some((w) => rel === w || rel.startsWith(`${w}/`));
-    const containsWritable = writableSubdirs.some((w) => w.startsWith(`${rel}/`));
-    if (isWritable || containsWritable) {
-      const realSrc = entry.isSymbolicLink() ? resolve(srcDir, readlinkSync(src)) : src;
-      if (existsSync(realSrc) && lstatSync(realSrc).isDirectory()) {
-        count += mirrorTree(realSrc, dst, rel, writableSubdirs);
-        continue;
-      }
-      // 可写区内的文件落成实体复制（flutter 工具可能原地改写 cache 条目）
-      cpSync(src, dst);
-      count += 1;
-      continue;
-    }
-    linkOrCopyEntry(src, dst);
-    count += 1;
-  }
-  return count;
-}
-
-/**
- * 在 overlayDir 下创建 sdk 镜像。幂等：已存在 manifest 且 sdkRoot 一致时直接复用。
- * 任何一步失败都只影响本 run 的 overlay 目录，不触碰共享 SDK。
- */
 export function createSdkOverlay(sdkRoot: string, overlayDir: string): SdkOverlayResult {
-  const root = resolve(sdkRoot);
-  if (!existsSync(root)) throw new Error(`SDK 根目录不存在: ${root}`);
+  if (!existsSync(sdkRoot)) throw new Error(`SDK 根目录不存在: ${sdkRoot}`);
+  const root = realpathSync(sdkRoot);
+  overlayDir = resolve(overlayDir);
+  if (inside(root, overlayDir)) throw new Error('SDK 副本目录不能位于共享 SDK 内');
   const manifestPath = join(overlayDir, 'overlay-manifest.json');
   const sdkLink = join(overlayDir, 'sdk');
   if (existsSync(manifestPath)) {
-    try {
-      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-      if (manifest?.sdkRoot === root && existsSync(sdkLink)) {
-        return {
-          overlayDir,
-          flutterBin: overlayFlutterBin(sdkLink),
-          sdkLink,
-          writableDirs: manifest.writableDirs || WRITABLE_SUBDIRS,
-          entries: manifest.entries || 0,
-        };
-      }
-    } catch { /* manifest 损坏则重建 */ }
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    if (manifest.version !== 2 || manifest.sdkRoot !== root || !existsSync(sdkLink)
+      || lstatSync(sdkLink).isSymbolicLink()) {
+      throw new Error('已有 SDK 隔离目录不兼容或不完整，请创建新 run；禁止退回共享 SDK');
+    }
+    const flutterBin = overlayFlutterBinForRun(overlayDir);
+    if (!flutterBin) throw new Error('SDK 副本缺少独立 Flutter 入口');
+    return { overlayDir, sdkLink, flutterBin, writableDirs: WRITABLE_SUBDIRS, entries: manifest.entries };
   }
-  mkdirSync(sdkLink, { recursive: true });
-  const entries = mirrorTree(root, sdkLink, '', WRITABLE_SUBDIRS);
-  const result: SdkOverlayResult = {
-    overlayDir,
-    flutterBin: overlayFlutterBin(sdkLink),
-    sdkLink,
-    writableDirs: WRITABLE_SUBDIRS,
-    entries,
-  };
-  writeFileSync(manifestPath, JSON.stringify({
-    version: 1,
-    sdkRoot: root,
-    sdkRootShaHint: createHash('sha256').update(root).digest('hex').slice(0, 16),
-    writableDirs: WRITABLE_SUBDIRS,
-    entries,
-    createdAt: new Date().toISOString(),
-  }, null, 2));
-  return result;
+  mkdirSync(overlayDir, { recursive: true });
+  if (existsSync(sdkLink)) throw new Error('SDK 隔离目录缺少有效清单，请创建新 run');
+  const staging = mkdtempSync(join(overlayDir, '.snapshot-'));
+  let published = false;
+  try {
+    const entries = copyTree(root, root, join(staging, 'sdk'), sdkLink);
+    if (!existsSync(join(staging, 'sdk', 'bin', 'flutter'))
+      && !existsSync(join(staging, 'sdk', 'bin', 'flutter.bat'))) throw new Error('SDK 缺少 Flutter 入口');
+    writeFileSync(join(staging, 'manifest.json'), JSON.stringify({
+      version: 2, isolation: 'independent-copy', sdkRoot: root,
+      writableDirs: WRITABLE_SUBDIRS, entries, createdAt: new Date().toISOString(),
+    }, null, 2));
+    renameSync(join(staging, 'sdk'), sdkLink);
+    published = true;
+    renameSync(join(staging, 'manifest.json'), manifestPath);
+    return { overlayDir, sdkLink, flutterBin: overlayFlutterBinForRun(overlayDir), writableDirs: WRITABLE_SUBDIRS, entries };
+  } catch (error) {
+    if (published) rmSync(sdkLink, { recursive: true, force: true });
+    throw error;
+  } finally { rmSync(staging, { recursive: true, force: true }); }
 }
 
-function overlayFlutterBin(sdkLink: string): string | null {
-  for (const name of ['flutter', 'flutter.bat']) {
-    const candidate = join(sdkLink, 'bin', name);
-    if (existsSync(candidate)) return candidate;
-  }
+export function overlayFlutterBinForRun(overlayDir: string): string | null {
+  const sdkLink = resolve(overlayDir, 'sdk');
+  try {
+    const manifest = JSON.parse(readFileSync(join(overlayDir, 'overlay-manifest.json'), 'utf8'));
+    if (manifest.version !== 2 || lstatSync(sdkLink).isSymbolicLink()) return null;
+    for (const name of ['flutter', 'flutter.bat']) {
+      const candidate = join(sdkLink, 'bin', name);
+      if (existsSync(candidate) && inside(sdkLink, realpathSync(candidate))) return candidate;
+    }
+  } catch { /* Missing or unsafe snapshots are unusable. */ }
   return null;
 }
-
-/** 若 run 已有 overlay 且包含 flutter 入口，返回 overlay 内的 flutterBin；否则返回 null */
-export function overlayFlutterBinForRun(overlayDir: string): string | null {
-  const sdkLink = join(overlayDir, 'sdk');
-  if (!existsSync(sdkLink)) return null;
-  return overlayFlutterBin(sdkLink);
-}
-
 export { WRITABLE_SUBDIRS as SDK_OVERLAY_WRITABLE_DIRS };

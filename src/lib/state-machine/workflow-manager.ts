@@ -36,6 +36,7 @@ import {
   type WorkflowSpecRevisionBallot,
   type WorkflowSpecRevisionVoteChoice,
   type WorkflowSpecRevisionVoteRecord,
+  externalizeStepLogOutput,
 } from '@/lib/run/state-persistence';
 import { appendRuntimeOutputPreview, compactRuntimeOutputPreview } from '@/lib/run/output-compaction';
 import {
@@ -159,6 +160,8 @@ import {
 export { isEngineLevelFailure };
 
 export interface TokenUsage {
+  source?: 'reported' | 'partial' | 'unavailable' | 'not_applicable';
+  costSource?: 'reported' | 'partial' | 'unavailable' | 'not_applicable';
   inputTokens: number;
   outputTokens: number;
   cacheCreationInputTokens?: number;
@@ -213,6 +216,8 @@ function numberOrZero(value: unknown): number {
 function normalizeEngineUsage(metadata?: EngineResultMetadata): EngineTokenUsage {
   const usage = metadata?.usage;
   return {
+    source: metadata?.usage_source || (usage ? 'reported' : 'unavailable'),
+    costSource: metadata?.cost_source || (typeof metadata?.cost_usd === 'number' || typeof metadata?.costUsd === 'number' ? 'reported' : 'unavailable'),
     input_tokens: numberOrZero(usage?.input_tokens),
     output_tokens: numberOrZero(usage?.output_tokens),
     cache_creation_input_tokens: numberOrZero(usage?.cache_creation_input_tokens),
@@ -226,6 +231,7 @@ function metadataNumber(metadata: EngineResultMetadata | undefined, snakeKey: st
 
 function toPersistedTokenUsage(usage: EngineTokenUsage): TokenUsage {
   return {
+    source: usage.source, costSource: usage.costSource,
     inputTokens: usage.input_tokens,
     outputTokens: usage.output_tokens,
     cacheCreationInputTokens: usage.cache_creation_input_tokens,
@@ -6304,6 +6310,7 @@ try {
     extraContext?: string
   ): Promise<string> {
     const stepStartGeneration = this.runtimeGeneration;
+    const stepWallStarted = Date.now();
     const runtimeAgentName = getStepRuntimeAgentName(step);
     this.assertValidStepRuntimeAgent(step, state, runtimeAgentName);
     const agent = this.agents.find(a => a.name === runtimeAgentName);
@@ -6433,6 +6440,46 @@ try {
         return output;
       }
 
+      try {
+        await this.refreshOhosFlutterSdkPin(state.name, `${conclusion}\n${output}`);
+      } catch (error) {
+        throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+          costUsd: stepResult.costUsd, durationMs: stepResult.durationMs, tokenUsage: stepResult.tokenUsage,
+        });
+      }
+
+      const afterSnapshotId = await this.recordStepGitAfter({
+        stepLogId: stepId,
+        stepName: stepKey,
+        stateName: state.name,
+        agent: runtimeAgentName,
+        status: 'completed',
+        beforeSnapshotId,
+      });
+      const compactLogOutput = compactRuntimeOutputPreview(output);
+      // Record step log for persistence
+      const completedLog: PersistedStepLog = {
+        id: stepId,
+        stepName: stepKey,
+        agent: runtimeAgentName,
+        status: 'completed',
+        output,
+        outputBytes: compactLogOutput.outputBytes,
+        error: '',
+        costUsd: stepResult.costUsd,
+        durationMs: stepResult.durationMs,
+        elapsedMs: Date.now() - stepWallStarted,
+        timestamp: new Date().toISOString(),
+        tokenUsage: stepResult.tokenUsage,
+        sessionId: stepResult.sessionId || null,
+        engineName: this.engineType,
+        gitStepDiffId: `git-step-${stepId}`,
+        gitBeforeSnapshotId: beforeSnapshotId,
+        gitAfterSnapshotId: afterSnapshotId,
+      };
+      const archivedLog = this.currentRunId ? await externalizeStepLogOutput(this.currentRunId, completedLog) : completedLog;
+      this.stepLogs.push({ ...archivedLog, output: compactLogOutput.output });
+
       agent.status = 'completed';
       agent.completedTasks++;
       addTokenUsage(agent, stepResult.tokenUsage);
@@ -6457,34 +6504,6 @@ try {
         validation: `Step completed: ${state.name} / ${step.name}`,
       });
 
-      const afterSnapshotId = await this.recordStepGitAfter({
-        stepLogId: stepId,
-        stepName: stepKey,
-        stateName: state.name,
-        agent: runtimeAgentName,
-        status: 'completed',
-        beforeSnapshotId,
-      });
-      const compactLogOutput = compactRuntimeOutputPreview(output);
-      // Record step log for persistence
-      this.stepLogs.push({
-        id: stepId,
-        stepName: stepKey,
-        agent: runtimeAgentName,
-        status: 'completed',
-        output: compactLogOutput.output,
-        outputBytes: compactLogOutput.outputBytes,
-        error: '',
-        costUsd: stepResult.costUsd,
-        durationMs: stepResult.durationMs,
-        timestamp: new Date().toISOString(),
-        tokenUsage: stepResult.tokenUsage,
-        sessionId: stepResult.sessionId || null,
-        engineName: this.engineType,
-        gitStepDiffId: `git-step-${stepId}`,
-        gitBeforeSnapshotId: beforeSnapshotId,
-        gitAfterSnapshotId: afterSnapshotId,
-      });
 
       this.emit('agents', { agents: this.agents });
       await this.persistState();
@@ -6541,7 +6560,6 @@ try {
           : (conclusion || output);
         await saveProcessOutput(this.currentRunId, stepFileName, archived).catch(() => {});
       }
-      await this.refreshOhosFlutterSdkPin(state.name, `${conclusion}\n${output}`).catch(() => {});
 
       if (step.channelIds?.length) {
         const entry: ChannelOutputEntry = {
@@ -6604,10 +6622,11 @@ try {
         status: 'failed',
         output: '',
         error: errorMsg,
-        costUsd: 0,
-        durationMs: 0,
+        costUsd: numberOrZero(error.costUsd),
+        durationMs: numberOrZero(error.durationMs),
+        elapsedMs: Date.now() - stepWallStarted,
         timestamp: new Date().toISOString(),
-        tokenUsage: toPersistedTokenUsage(ZERO_ENGINE_USAGE),
+        tokenUsage: error.tokenUsage || { ...toPersistedTokenUsage(ZERO_ENGINE_USAGE), source: 'unavailable', costSource: 'unavailable' },
         sessionId: null,
         engineName: this.engineType,
         gitStepDiffId: `git-step-${stepId}`,
@@ -7430,7 +7449,7 @@ try {
           }
         }
         if (!legacyRestore) return { output, lastRoundOutput: output, costUsd: 0, durationMs: Date.now() - started,
-          tokenUsage: toPersistedTokenUsage(ZERO_ENGINE_USAGE) };
+          tokenUsage: { ...toPersistedTokenUsage(ZERO_ENGINE_USAGE), source: 'not_applicable', costSource: 'not_applicable' } };
         this.emit('log', { message: step.diagnosisScript ? '旧诊断任务缺少结构化继承清单，使用兼容恢复步骤核对原始证据' : '当前请求需要语义审查，继续使用原有 Agent 步骤' });
       } finally { this.scriptControllers.delete(controller); }
     }
@@ -7477,6 +7496,7 @@ try {
     let autoRecoveryAttempts = 0;
     let transientEngineRetryAttempts = 0;
     const accumulatedTokenUsage: TokenUsage = toPersistedTokenUsage(ZERO_ENGINE_USAGE);
+    let accountedAttempts = 0;
 
     // Use state-prefixed step name so frontend stream polling matches persisted stream files
     const streamStepName = this.currentState ? `${this.currentState}-${step.name}` : step.name;
@@ -7658,6 +7678,20 @@ try {
         throw err;
       }
 
+      accumulatedCost += result.cost_usd || 0;
+      accumulatedDuration += result.duration_ms || 0;
+      const resultTokenUsage = toPersistedTokenUsage(result.usage || ZERO_ENGINE_USAGE);
+      for (const key of ['source', 'costSource'] as const) {
+        const incoming = resultTokenUsage[key] || 'unavailable';
+        accumulatedTokenUsage[key] = accountedAttempts === 0 ? incoming
+          : accumulatedTokenUsage[key] === incoming ? incoming : 'partial';
+      }
+      accountedAttempts++;
+      accumulatedTokenUsage.inputTokens += resultTokenUsage.inputTokens;
+      accumulatedTokenUsage.outputTokens += resultTokenUsage.outputTokens;
+      accumulatedTokenUsage.cacheCreationInputTokens = (accumulatedTokenUsage.cacheCreationInputTokens || 0) + (resultTokenUsage.cacheCreationInputTokens || 0);
+      accumulatedTokenUsage.cacheReadInputTokens = (accumulatedTokenUsage.cacheReadInputTokens || 0) + (resultTokenUsage.cacheReadInputTokens || 0);
+
       // Accumulate stream content
       const proc = processManager.getProcess(currentProcessId);
       if (proc?.streamContent) {
@@ -7777,13 +7811,7 @@ try {
         accumulatedOutput += (accumulatedOutput ? '\n\n---\n\n' : '') + roundOutput;
         lastRoundOutput = roundOutput;
       }
-      accumulatedCost += result.cost_usd || 0;
-      accumulatedDuration += result.duration_ms || 0;
-      const resultTokenUsage = toPersistedTokenUsage(result.usage || ZERO_ENGINE_USAGE);
-      accumulatedTokenUsage.inputTokens += resultTokenUsage.inputTokens;
-      accumulatedTokenUsage.outputTokens += resultTokenUsage.outputTokens;
-      accumulatedTokenUsage.cacheCreationInputTokens = (accumulatedTokenUsage.cacheCreationInputTokens || 0) + (resultTokenUsage.cacheCreationInputTokens || 0);
-      accumulatedTokenUsage.cacheReadInputTokens = (accumulatedTokenUsage.cacheReadInputTokens || 0) + (resultTokenUsage.cacheReadInputTokens || 0);
+
 
       // Always capture the latest session_id for reuse; clear if recovery could not produce one.
       currentSessionId = result.session_id || undefined;
@@ -7856,6 +7884,10 @@ try {
 
       break;
     }
+    } catch (error) {
+      throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+        costUsd: accumulatedCost, durationMs: accumulatedDuration, tokenUsage: accumulatedTokenUsage,
+      });
     } finally {
       if (trailingFlushTimer) {
         clearTimeout(trailingFlushTimer);
@@ -8156,6 +8188,7 @@ try {
       fixVerificationReached,
       conditionalReason: this.lastFixVerificationConditionalReason,
       diagnosisArtifactStatus: this.diagnosisArtifactStatus?.status || null,
+      diagnosisVerificationStatus: this.diagnosisVerificationStatus,
     });
     const runId = options?.runId || this.currentRunId;
     if (!gate.complete) {
@@ -8669,20 +8702,20 @@ try {
   }
 
   private async persistOhosFlutterSdkPin(resolved: ResolvedOhosFlutterSdk): Promise<void> {
-    // R08：pin 命中共享 SDK 时，为本次 run 建 overlay（symlink 镜像 + 可写 bin/cache），
-    // 之后本 run 的 flutter 一律指向 overlay，共享 SDK 保持只读；失败则退回共享并留指纹检测兜底
+    // 使用独立 SDK 副本；创建失败必须阻断，不能退回共享 SDK。
     let effective = resolved;
     if (resolved.matched && resolved.sdkRoot && this.currentRunId) {
       try {
         const { createSdkOverlay } = await import('@/lib/workflow/sdk-overlay');
         const overlayDir = join(resolve(getWorkspaceRunsDir(), this.currentRunId), 'sdk-overlay');
         const overlay = createSdkOverlay(resolved.sdkRoot, overlayDir);
+        if (!overlay.flutterBin) throw new Error('SDK 副本缺少 Flutter 入口');
         if (overlay.flutterBin) {
           effective = {
             ...resolved,
             sdkRoot: overlay.sdkLink,
             flutterBin: overlay.flutterBin,
-            reason: `${resolved.reason}（本 run 使用 overlay 隔离，共享 SDK 只读：${resolved.sdkRoot}）`,
+            reason: `${resolved.reason}（本 run 使用独立 SDK 副本，源路径：${resolved.sdkRoot}）`,
           } as ResolvedOhosFlutterSdk;
         }
       } catch (error: any) {
@@ -8690,6 +8723,7 @@ try {
           error: String(error?.message || error).slice(0, 200),
           sdkRoot: resolved.sdkRoot,
         }, 'warn');
+        throw new Error(`SDK 隔离失败，已阻止使用共享 SDK：${String(error?.message || error).slice(0, 200)}`);
       }
     }
     this.ohosFlutterSdk = effective;

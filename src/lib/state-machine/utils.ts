@@ -3,6 +3,7 @@
  * These functions have no side effects and no heavy dependencies.
  */
 
+import { extractLooseStructuredResult } from '@/lib/ai/result-channel';
 import type { WorkflowStep } from '@/lib/core/schemas';
 
 export function stripNonAiStreamArtifacts(text: string): string {
@@ -281,7 +282,9 @@ export function enforceFixVerificationGoldenFlag(
   verdict: WorkflowVerdict,
   context?: FixVerificationContext,
 ): WorkflowVerdict {
-  if (verdict !== 'pass' || !isFixVerificationStep(context)) return verdict;
+  if (!isFixVerificationStep(context)) return verdict;
+  if (extractLooseStructuredResult(output).conflicts?.length) return 'fail';
+  if (verdict !== 'pass') return verdict;
   if (REVISED_GOLDEN_FLAG.test(String(output || ''))) return 'conditional_pass';
   if (extractIssueGoldenFlagMet(output) !== true) return 'conditional_pass';
   if (context?.sdkMatched === false) return 'conditional_pass';
@@ -553,12 +556,17 @@ export function shouldFinalizeDiagnosisAsCompleted(input: {
   conditionalReason?: string | null;
   /** R06：归档完整度。failed 时 run 不得呈现为"全部成功"（可只重试归档） */
   diagnosisArtifactStatus?: 'complete' | 'partial' | 'failed' | null;
+  diagnosisVerificationStatus?: string | null;
 }): { complete: boolean; reason: string } {
   // R06：归档失败独立于验证裁决——即使验证 pass，归档失败也不能呈现为全部成功
+  if (input.diagnosisVerificationStatus === 'evidence_conflict') return { complete: false, reason: '验证结论存在冲突，需要核对原始证据后重新验证' };
+  if (input.diagnosisArtifactStatus === 'partial') return { complete: false, reason: '必需诊断产物归档不完整，补齐证据后才能完成' };
   if (input.diagnosisArtifactStatus === 'failed') {
     return { complete: false, reason: '诊断产物归档失败（artifact_status=failed），可只重试归档，不得呈现为全部成功' };
   }
   if (!input.hasFixVerificationState) return { complete: true, reason: '' };
+  if (input.fixVerificationReached !== false && input.diagnosisVerificationStatus
+    && input.diagnosisVerificationStatus !== 'verified') return { complete: false, reason: `验证证据尚未完整闭环（${input.diagnosisVerificationStatus}），不能标完成` };
   if (input.finalStateName && input.finalStateName !== '完成') {
     return { complete: true, reason: '' };
   }

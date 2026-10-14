@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, writeFile, rename, cp, realpath, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, writeFile, rename, cp, realpath, rm, readdir, stat, lstat } from 'node:fs/promises';
+import { existsSync, createReadStream } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -9,6 +9,8 @@ import { parse } from 'yaml';
 import { getInstallPath, getWorkspaceRoot } from '@/lib/core/app-paths';
 import { buildConfiguredProcessEnv } from '@/lib/core/configured-env';
 import { extractLooseStructuredResult, type LooseExtractionSource } from '@/lib/ai/result-channel';
+import { createSdkOverlay } from '@/lib/workflow/sdk-overlay';
+import { validateStepResultRecord } from '@/lib/workflow/step-result-record';
 import { redactOfficialFixLeak } from '@/lib/workflow/official-fix-redact';
 import { isUsableOhosFlutterSdk, listInventoryEntries, loadOhosFlutterSdkInventory, resolveOhosFlutterSdk } from '@/lib/workflow/ohos-flutter-sdk';
 
@@ -31,10 +33,11 @@ export interface StepConclusion {
   fields: Record<string, any>;
   sources: Record<string, LooseExtractionSource>;
   text: string;
+  conflicts: string[];
 }
 export function parseStepConclusion(text: string): StepConclusion {
   const loose = extractLooseStructuredResult(text || '');
-  return { fields: loose.fields, sources: loose.sources, text: String(text || '').slice(-8000) };
+  return { fields: loose.fields, sources: loose.sources, conflicts: loose.conflicts || [], text: String(text || '').slice(-8000) };
 }
 
 /** F01：git remote 识别与脱敏。支持 https、ssh://、scp 风格、本地路径；永不抛异常。 */
@@ -83,10 +86,15 @@ async function save(input: Input, name: string, value: unknown): Promise<string[
   let lastError: any = null;
   for (const root of new Set([input.workingDirectory, input.runDirectory])) {
     try {
-      const out = join(root, 'outputs'); await mkdir(out, { recursive: true });
-      const file = join(out, name);
-      await writeFile(file + '.tmp', JSON.stringify(value, null, 2), { mode: 0o600 });
-      await rename(file + '.tmp', file);
+      const out = join(root, 'outputs');
+      try { if ((await lstat(out)).isSymbolicLink()) throw new Error('outputs 根目录不能是符号链接'); }
+      catch (error: any) { if (error.code !== 'ENOENT') throw error; }
+      await mkdir(out, { recursive: true });
+      const file = join(out, name), temporary = `${file}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, JSON.stringify(value, null, 2), { mode: 0o600, flag: 'wx' });
+        await rename(temporary, file);
+      } finally { await rm(temporary, { force: true }); }
       saved.push(root);
     } catch (error) { lastError = error; }
   }
@@ -133,6 +141,9 @@ export async function readIssueSnapshot(rawPath: string, expectedSha256: string)
 }
 
 async function collectIssue(input: Input, env: NodeJS.ProcessEnv) {
+  if (field(input.globalContext, 'evaluation-mode') === 'blind_eval') {
+    throw new Error('blind_eval 暂不可用：当前执行器未隔离答案文件、未来 Git 历史和网络；请使用 guided_replay，不能作为独立盲测评分');
+  }
   const rawUrl = field(input.globalContext, 'issue-url') || input.globalContext.match(/https:\/\/[^\s<>"']+\/issues\/[A-Za-z0-9]+/)?.[0];
   if (!rawUrl) return { input_source: 'freeform_text', body: input.globalContext.replace(/^access-token:.*$/gm, ''),
     title: '文本问题', comments: [], issue_comments_count: 0, issue_content_complete: !!input.globalContext.trim(), checked_at: new Date().toISOString() };
@@ -150,7 +161,7 @@ async function collectIssue(input: Input, env: NodeJS.ProcessEnv) {
       comments_complete: false, comments_error: '快照输入不含评论，评论证据缺失需在报告中说明',
       missing_evidence: ['评论未包含在快照输入中'],
       snapshot_sha256: snapshot.sha256,
-      evaluation_mode: field(input.globalContext, 'evaluation-mode') || 'blind_eval',
+      evaluation_mode: field(input.globalContext, 'evaluation-mode') || 'guided_replay',
       checked_at: new Date().toISOString() };
   }
   const cached = await optionalJson(join(input.runDirectory, 'outputs/diagnosis-input.json'));
@@ -264,7 +275,17 @@ export function diffSharedSdkFingerprints(
 }
 
 async function stepResult(archive: string, work: string, name: string, state: any): Promise<StepConclusion> {
-  return parseStepConclusion(await stepResultText(archive, work, [name], state));
+  const text = await stepResultText(archive, work, [name], state);
+  const latest = [...(state.stepLogs || [])].reverse().find((log: any) => log.stepName === name);
+  if (latest?.resultRef) {
+    const ref = resolve(archive, latest.resultRef);
+    const record = ref.startsWith(resolve(archive) + sep) ? await optionalJson(ref) : null;
+    if (!validateStepResultRecord(record, basename(archive), latest.id, text)) {
+      return { fields: {}, sources: {}, conflicts: ['步骤结果记录与原始输出/尝试 ID 不匹配'], text };
+    }
+    return { fields: record.fields, sources: record.sources, conflicts: record.conflicts, text };
+  }
+  return parseStepConclusion(text);
 }
 
 /** stepLogs 里的完整输出：outputRef（相对 run 目录）优先，output 兜底 */
@@ -282,6 +303,8 @@ async function stepLogText(archive: string, name: string, state: any): Promise<s
 /** 按归档 md → 工作区 md → stepLogs(outputRef 优先、output 兜底) 的顺序取步骤完整文本 */
 async function stepResultText(archive: string, work: string, names: string[], state: any): Promise<string> {
   for (const name of names) {
+    const full = await stepLogText(archive, name, state);
+    if (full) return full;
     const archived = await optionalText(join(archive, 'outputs', name + '.md'));
     if (archived) return archived;
     const working = await optionalText(join(work, 'outputs', name + '.md'));
@@ -295,7 +318,7 @@ async function stepResultText(archive: string, work: string, names: string[], st
 }
 
 async function sha256File(file: string): Promise<string | null> {
-  try { return createHash('sha256').update(await readFile(file)).digest('hex'); } catch { return null; }
+  try { const hash = createHash('sha256'); for await (const chunk of createReadStream(file)) hash.update(chunk); return hash.digest('hex'); } catch { return null; }
 }
 
 /** F12：从 HAR 内 package/BuildProfile.ets 读取构建模式（release/debug），读取失败返回 null */
@@ -346,13 +369,6 @@ export function checkReportConsistency(input: {
   }
   return warnings;
 }
-
-/** F05：归档时从工作目录复制到运行归档目录的证据模式（文件名前缀/精确匹配） */
-const ARCHIVE_EVIDENCE_PATTERNS: RegExp[] = [
-  /^fix(-engine)?\.patch$/, /^diagnosis-.*\.json$/,
-  /^(pre|post)patch.*\.(log|txt)$/i, /logcat.*\.(log|txt)$/i, /hilog.*\.(log|txt)$/i,
-  /\.(png|jpg|jpeg)$/i, /\.har$/i, /test.*\.(log|txt)$/i,
-];
 
 interface ArchiveEntry {
   name: string; role: string; source_path: string | null;
@@ -458,6 +474,7 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
   };
   const flagValues = Object.values(verificationFlags);
   const verificationStatus =
+    verificationC.conflicts.length ? 'evidence_conflict' :
     verification.verdict === 'pass' && flagValues.every((f) => f === 'true') ? 'verified'
     : flagValues.includes('false') || ['fail', 'conditional_pass'].includes(String(verification.verdict)) ? 'needs_runtime_validation'
     : 'evidence_incomplete';
@@ -475,62 +492,94 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
   }
   const reportText = reportParts.join('\n');
 
-  // F05：把工作中的关键证据复制进归档并生成 manifest
+  // Archive the complete outputs tree, with no extension whitelist. Explicit refs are required.
   if (persist) {
+    const workOutputs = join(input.workingDirectory, 'outputs');
+    const archiveOutputs = join(input.runDirectory, 'outputs');
+    const generated = new Set(['diagnosis-context.json', 'diagnosis-archive-manifest.json']);
+    const safeName = (name: string) => !!name && !isAbsolute(name) && !name.includes('\\')
+      && !name.split('/').some(part => part === '..' || part === '.' || !part);
+    const withinRoot = async (root: string, file: string) => {
+      const actualRoot = await realpath(root);
+      const actual = await realpath(file);
+      if (!actual.startsWith(actualRoot + sep)) throw new Error('证据路径越出 outputs 目录');
+    };
+    const archiveFile = async (name: string, role: string) => {
+      if (archiveEntries.some(e => e.name === name)) return;
+      const src = join(workOutputs, name), dst = join(archiveOutputs, name);
+      try {
+        if (!safeName(name) || generated.has(name)) throw new Error('非法或自引用证据路径');
+        const source = existsSync(src) ? src : dst;
+        await withinRoot(source === src ? workOutputs : archiveOutputs, source);
+        const info = await stat(source);
+        if (!info.isFile()) throw new Error('证据引用必须指向普通文件');
+        const digest = await sha256File(source);
+        if (!digest) throw new Error('证据 hash 读取失败');
+        let parent = archiveOutputs;
+        for (const component of name.split('/').slice(0, -1)) {
+          parent = join(parent, component);
+          try { if ((await lstat(parent)).isSymbolicLink()) throw new Error('归档目标包含符号链接'); }
+          catch (error: any) { if (error.code !== 'ENOENT') throw error; await mkdir(parent); }
+        }
+        try { if ((await lstat(dst)).isSymbolicLink()) throw new Error('归档文件不能是符号链接'); }
+        catch (error: any) { if (error.code !== 'ENOENT') throw error; }
+        // Reject existing destination links before any overwrite, including parent links.
+        const actualArchive = await realpath(archiveOutputs);
+        const actualParent = await realpath(dirname(dst));
+        if (actualParent !== actualArchive && !actualParent.startsWith(actualArchive + sep)) throw new Error('归档目标越界');
+        if (existsSync(dst)) await withinRoot(archiveOutputs, dst);
+        const already = existsSync(dst) && (await sha256File(dst)) === digest;
+        if (!already) await cp(source, dst);
+        if (await sha256File(dst) !== digest) throw new Error('归档文件 hash 不匹配');
+        const harInfo = /\.har$/i.test(name) ? await inspectHarBuildProfile(dst) : null;
+        recordEntry({ name, role, source_path: source, archived_to: dst,
+          status: already ? 'already_present' : 'archived', bytes: info.size, sha256: digest,
+          ...(harInfo ? { har_build_mode: harInfo.build_mode, har_debug: harInfo.debug } : {}) });
+      } catch (error: any) {
+        recordEntry({ name, role, source_path: src, archived_to: null,
+          status: error?.code === 'ENOENT' ? 'missing' : 'failed', bytes: null, sha256: null,
+          error: String(error?.message || error).slice(0, 200) });
+      }
+    };
     try {
-      const { readdir } = await import('node:fs/promises');
-      const workOutputs = join(input.workingDirectory, 'outputs');
-      const archiveOutputs = join(input.runDirectory, 'outputs');
+      for (const root of [workOutputs, archiveOutputs]) {
+        try { if ((await lstat(root)).isSymbolicLink()) throw new Error('outputs 根目录不能是符号链接'); }
+        catch (error: any) { if (error.code !== 'ENOENT') throw error; }
+      }
       await mkdir(archiveOutputs, { recursive: true });
-      const archiveWorkOutput = async (name: string, role: string) => {
-        if (archiveEntries.some((e) => e.name === name)) return;
-        const src = join(workOutputs, name);
-        const dst = join(archiveOutputs, name);
-        try {
-          const { stat } = await import('node:fs/promises');
-          const info = await stat(src);
-          if (!info.isFile()) return;
-          const already = existsSync(dst) && (await sha256File(dst)) === (await sha256File(src));
-          if (!already) await cp(src, dst);
-          // F12：HAR 归档时读取 BuildProfile，release/debug 错配可事后审计
-          const harInfo = /\.har$/i.test(name) ? await inspectHarBuildProfile(dst) : null;
-          recordEntry({ name, role, source_path: src,
-            archived_to: dst, status: already ? 'already_present' : 'archived',
-            bytes: info.size, sha256: await sha256File(dst),
-            ...(harInfo ? { har_build_mode: harInfo.build_mode, har_debug: harInfo.debug } : {}) });
-        } catch (error: any) {
-          recordEntry({ name, role, source_path: src, archived_to: null,
-            status: 'failed', bytes: null, sha256: null, error: String(error?.message || error).slice(0, 200) });
+      const walk = async (prefix = ''): Promise<void> => {
+        for (const entry of await readdir(join(workOutputs, prefix), { withFileTypes: true })) {
+          const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+          if (generated.has(name)) continue;
+          // Never follow directory symlinks recursively (cycles / escaping trees).
+          if (entry.isDirectory()) await walk(name);
+          else await archiveFile(name, 'evidence');
         }
       };
-      let names: string[] = [];
-      try { names = await readdir(workOutputs); } catch { names = []; }
-      for (const name of names) {
-        if (!ARCHIVE_EVIDENCE_PATTERNS.some((p) => p.test(name))) continue;
-        await archiveWorkOutput(name, 'evidence');
-      }
-      // R04：报告/修复验证输出里显式引用的 outputs/ 文件必须归档（引用驱动，模式白名单兜底）；
-      // 引用了但两端都不存在的记 missing，作为必需证据在 manifest 里显式可见
-      const REFERENCED_RE = /outputs\/([A-Za-z0-9_.\-一-鿿]+\.(?:log|txt|png|jpe?g|har|patch|diff|xml|json|hprof|trace|md))/g;
-      const referencedTexts = [reportText, await stepLogText(input.runDirectory, '修复验证-修复方案对抗验证', state)];
+      if (existsSync(workOutputs)) await walk();
       const referencedNames = new Set<string>();
-      for (const text of referencedTexts) {
-        let match: RegExpExecArray | null;
-        while ((match = REFERENCED_RE.exec(text || '')) !== null) referencedNames.add(match[1]);
-      }
-      for (const name of referencedNames) {
-        if (archiveEntries.some((e) => e.name === name)) continue;
-        if (existsSync(join(workOutputs, name))) {
-          await archiveWorkOutput(name, 'referenced');
-        } else if (existsSync(join(archiveOutputs, name))) {
-          recordEntry({ name, role: 'referenced', source_path: null, archived_to: join(archiveOutputs, name),
-            status: 'already_present', bytes: null, sha256: await sha256File(join(archiveOutputs, name)) });
-        } else {
-          recordEntry({ name, role: 'referenced', source_path: null, archived_to: null,
-            status: 'missing', bytes: null, sha256: null });
+      for (const log of state.stepLogs || []) {
+        for (const ref of [log.outputRef, log.resultRef, log.rawOutputRef]) {
+          if (typeof ref !== 'string') continue;
+          referencedNames.add(ref.startsWith(archiveOutputs + sep) ? ref.slice(archiveOutputs.length + 1) : ref.replace(/^outputs\//, ''));
         }
       }
-    } catch { /* manifest 尽力而为，不掩盖上下文本体 */ }
+      for (const conclusion of [collectC, reproductionC, rootC, verificationC]) {
+        const refs = conclusion.fields.evidenceRefs;
+        if (Array.isArray(refs)) for (const ref of refs) {
+          const path = typeof ref === 'string' ? ref : ref?.path;
+          if (typeof path === 'string') referencedNames.add(path.replace(/^outputs\//, ''));
+        }
+      }
+      // Legacy textual references supplement structured refs; preserve nested paths and any suffix.
+      for (const text of [reportText, verificationC.text]) {
+        for (const match of text.matchAll(/outputs\/([^\s`<>"'，；。！？、()（）\[\]{}]+\.[A-Za-z0-9_-]+)/g)) referencedNames.add(match[1]);
+      }
+      for (const name of referencedNames) await archiveFile(name, 'referenced');
+    } catch (error: any) {
+      recordEntry({ name: 'outputs/', role: 'archive_scan', source_path: workOutputs, archived_to: null,
+        status: 'failed', bytes: null, sha256: null, error: String(error?.message || error).slice(0, 200) });
+    }
   }
   // F06：报告与证据的一致性交叉检查（非阻断，记录告警）
   const consistencyWarnings = [...checkReportConsistency({
@@ -566,13 +615,15 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
     problem_ownership: root.problem_ownership || inherited?.problem_ownership || null,
     verification_status: verificationStatus,
     verification_flags: verificationFlags,
-    evaluation_mode: field(input.globalContext, 'evaluation-mode') || null,
+    verification_conflicts: verificationC.conflicts,
+    evaluation_mode: field(input.globalContext, 'evaluation-mode') || 'guided_replay',
+    evaluation_integrity: 'not_independent',
     consistency_warnings: consistencyWarnings,
     shared_sdk_integrity: sharedSdkIntegrity,
     extraction: extractionProvenance };
 
   let artifactOverall: 'complete' | 'partial' | 'failed' = archiveEntries.some((e) => e.status === 'failed') ? 'failed'
-    : archiveEntries.some((e) => e.status === 'missing' && (/^fix/.test(e.name) || e.role === 'referenced')) ? 'partial'
+    : archiveEntries.some((e) => e.status === 'missing') ? 'partial'
     : 'complete';
   (context as any).artifact_status = {
     overall: artifactOverall,
@@ -694,7 +745,12 @@ async function restore(input: Input, env: NodeJS.ProcessEnv) {
       await rename(join(staging, 'demo'), demo);
     } finally { await rm(staging, { recursive: true, force: true }); }
   }
-  const pin = resolveOhosFlutterSdk({ branch: repositories.find(r => r.name === 'repo')?.branch || repositories[0].branch });
+  let pin = resolveOhosFlutterSdk({ branch: repositories.find(r => r.name === 'repo')?.branch || repositories[0].branch });
+  if (pin.matched && pin.sdkRoot) {
+    const overlay = createSdkOverlay(pin.sdkRoot, runSdkOverlayDir(input.runDirectory));
+    if (!overlay.flutterBin) throw new Error('恢复 SDK 隔离失败');
+    pin = { ...pin, sdkRoot: overlay.sdkLink, flutterBin: overlay.flutterBin };
+  }
   await save(input, 'ohos-flutter-sdk.json', pin);
   const result = { ...context, run_id: basename(input.runDirectory), parent_run_id: parentId, repositories,
     demo_path: demo, repo_commit: repositories[0].commit, verdict: 'pass', context_completeness: 'complete',
@@ -730,14 +786,14 @@ export async function executeDiagnosisScript(input: Input): Promise<string> {
       const context = await captureContext(input, env);
       // F01/F04：归档状态必须显式进入结果，不能再出现"收尾脚本失败但 run 显示全部成功"。
       // R06：步骤级 verdict 只用统一三值枚举；归档完整度走 artifact_status 字段单独呈现。
-      // complete/partial → pass（partial 由 artifact_status 如实标注）；failed → fail。
+      // 缺失必需证据或存在结论冲突均不能标通过。
       const artifactStatus = (context as any).artifact_status?.overall || 'complete';
-      result = { verdict: artifactStatus === 'failed' ? 'fail' : 'pass',
+      result = { verdict: artifactStatus !== 'complete' || context.verification_status === 'evidence_conflict' ? 'fail' : 'pass',
         summary: artifactStatus === 'complete'
           ? '诊断产物和可确认的继承信息已归档；缺失项保留待核对'
           : `产物归档不完整（artifact_status=${artifactStatus}），详见 outputs/diagnosis-archive-manifest.json`,
         artifact_path: 'outputs/diagnosis-context.json', context_completeness: context.context_completeness,
-        verification_status: context.verification_status, verification_flags: (context as any).verification_flags,
+        verification_status: context.verification_status, verification_conflicts: context.verification_conflicts, verification_flags: (context as any).verification_flags,
         artifact_status: artifactStatus,
         error_code: artifactStatus === 'complete' ? undefined : ((context as any).artifact_status?.error_code || 'archive_incomplete'),
         artifact_failures: (context as any).artifact_status?.failed || [],

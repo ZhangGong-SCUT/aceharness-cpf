@@ -1,5 +1,6 @@
 'use client';
 
+import { formatObservedMetric } from '@/lib/run/observed-metric';
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -73,6 +74,8 @@ interface RunRow {
   ownerId: string;
   ownerName: string;
   totalTokens: number;
+  tokenUsageSource?: 'reported' | 'partial' | 'unavailable';
+  costSource?: 'reported' | 'partial' | 'unavailable';
   cost: number;
   inputTokens: number;
   outputTokens: number;
@@ -85,6 +88,8 @@ interface TokenRankingRow {
   configFile?: string;
   runs: number;
   totalTokens: number;
+  tokenUsageSource?: 'reported' | 'partial' | 'unavailable';
+  costSource?: 'reported' | 'partial' | 'unavailable';
   inputTokens: number;
   outputTokens: number;
   cacheCreationInputTokens: number;
@@ -558,11 +563,11 @@ export default function RunHistoryPage() {
                             </div>
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">{item.runs.toLocaleString()}</TableCell>
-                          <TableCell className="whitespace-nowrap text-sm font-medium">{formatTokens(item.totalTokens)}</TableCell>
+                          <TableCell className="whitespace-nowrap text-sm font-medium">{formatObservedMetric(item.totalTokens, item.tokenUsageSource, formatTokens)}</TableCell>
                           <TableCell className="text-xs text-muted-foreground">
                             输入 {formatTokens(item.inputTokens)} · 输出 {formatTokens(item.outputTokens)} · 缓存 {formatTokens(cacheTokens)}
                           </TableCell>
-                          <TableCell className="whitespace-nowrap text-sm text-muted-foreground">{formatMoney(item.cost)}</TableCell>
+                          <TableCell className="whitespace-nowrap text-sm text-muted-foreground">{formatObservedMetric(item.cost, item.costSource, formatMoney)}</TableCell>
                         </TableRow>
                       );
                     })

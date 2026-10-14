@@ -73,13 +73,13 @@ describe('preflight 快照通道（F03）', () => {
       'issue-url: https://gitcode.com/no-such-owner-zz/no-such-repo-zz/issues/999999',
       `issue-snapshot-path: ${snap.path}`,
       `issue-snapshot-sha256: ${snap.hash}`,
-      'evaluation-mode: blind_eval',
+      'evaluation-mode: guided_replay',
     ].join('\n');
     const output = await executeDiagnosisScript({ operation: 'preflight', workingDirectory: workDir, runDirectory: runDir, globalContext });
     const result = parseConclusion(output);
     expect(result.verdict).toBe('pass');
     expect(result.input_source).toBe('provided_snapshot');
-    expect(result.evaluation_mode).toBe('blind_eval');
+    expect(result.evaluation_mode).toBe('guided_replay');
     expect(result.snapshot_sha256).toBe(snap.hash);
 
     const saved = JSON.parse(readFileSync(join(runDir, 'outputs', 'diagnosis-input.json'), 'utf8'));

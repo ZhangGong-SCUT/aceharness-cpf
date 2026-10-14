@@ -61,6 +61,8 @@ export interface RunSummaryCache {
   tokenUsageSource: 'reported' | 'partial' | 'unavailable';
   /** 0..1：有真实 token 数据的步骤日志占比 */
   tokenUsageCoverage: number;
+  costSource?: 'reported' | 'partial' | 'unavailable';
+  reportedCost?: number | null;
   /** F01：诊断归档状态（仅诊断类工作流产生） */
   artifactStatus?: {
     status: 'complete' | 'partial' | 'failed';
@@ -151,15 +153,23 @@ function getRunTokenUsage(state: any): { usage: RunSummaryTokenUsage; cost: numb
 
 /** F10：统计有真实（非全零）token 数据的步骤日志占比 */
 function getTokenUsageCoverage(state: any): { source: 'reported' | 'partial' | 'unavailable'; coverage: number } {
-  const logs = Array.isArray(state?.stepLogs) ? state.stepLogs : [];
+  const logs = (Array.isArray(state?.stepLogs) ? state.stepLogs : []).filter((log: any) => log.tokenUsage?.source !== 'not_applicable');
   if (logs.length === 0) return { source: 'unavailable', coverage: 0 };
   const withUsage = logs.filter((log: any) => {
+    if (log.tokenUsage?.source === 'reported') return true;
+    if (log.tokenUsage?.source === 'unavailable' || log.tokenUsage?.source === 'partial') return false;
     const usage = readTokenUsage(log);
     return usage.inputTokens > 0 || usage.outputTokens > 0
       || usage.cacheCreationInputTokens > 0 || usage.cacheReadInputTokens > 0;
   }).length;
   const coverage = withUsage / logs.length;
-  return { source: withUsage === 0 ? 'unavailable' : withUsage === logs.length ? 'reported' : 'partial', coverage };
+  return { source: withUsage === 0 ? (logs.some((log: any) => log.tokenUsage?.source === 'partial') ? 'partial' : 'unavailable') : withUsage === logs.length ? 'reported' : 'partial', coverage };
+}
+
+function costCoverage(state: any): 'reported' | 'partial' | 'unavailable' {
+  const logs = (Array.isArray(state?.stepLogs) ? state.stepLogs : []).filter((log: any) => log.tokenUsage?.costSource !== 'not_applicable');
+  const known = logs.filter((log: any) => log.tokenUsage?.costSource === 'reported' || (!log.tokenUsage?.costSource && log.costUsd > 0)).length;
+  return known === 0 ? 'unavailable' : known === logs.length ? 'reported' : 'partial';
 }
 
 function normalizeArtifactStatus(input: unknown): RunSummaryCache['artifactStatus'] {
@@ -252,6 +262,8 @@ function normalizeSummary(input: any): RunSummaryCache | null {
     tokenUsage: normalizedUsage,
     totalTokens: numberOrZero(input.totalTokens) || totalTokens(normalizedUsage),
     cost: numberOrZero(input.cost),
+    costSource: ['reported', 'partial', 'unavailable'].includes(input.costSource) ? input.costSource : 'unavailable',
+    reportedCost: input.costSource === 'reported' && typeof input.reportedCost === 'number' && Number.isFinite(input.reportedCost) ? input.reportedCost : null,
     tokenUsageSource: input.tokenUsageSource === 'reported' || input.tokenUsageSource === 'partial' || input.tokenUsageSource === 'unavailable'
       ? input.tokenUsageSource
       : (totalTokens(normalizedUsage) > 0 ? 'reported' : 'unavailable'),
@@ -328,6 +340,8 @@ export function buildRunSummaryCacheFromState(state: PersistedRunState): RunSumm
     tokenUsage: usage,
     totalTokens: totalTokens(usage),
     cost,
+    costSource: costCoverage(state),
+    reportedCost: costCoverage(state) === 'reported' ? cost : null,
     tokenUsageSource: tokenCoverage.source,
     tokenUsageCoverage: tokenCoverage.coverage,
     artifactStatus: normalizeArtifactStatus(state.diagnosisArtifactStatus),

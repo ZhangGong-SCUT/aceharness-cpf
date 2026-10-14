@@ -1,4 +1,5 @@
 import http from 'http';
+import { createOpenCodeUsageCollector } from './opencode-usage';
 import https from 'https';
 
 import type { EngineOptions, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
@@ -63,7 +64,7 @@ export type OpenCodeSessionCreateResponse = {
 };
 
 export type OpenCodeSessionPromptResponse = {
-  info?: { parts?: OpenCodePart[]; error?: unknown };
+  info?: { parts?: OpenCodePart[]; error?: unknown; [key: string]: unknown };
   parts?: OpenCodePart[];
   [key: string]: unknown;
 };
@@ -258,7 +259,7 @@ export type OpenCodePromptBody = {
 
 type OpenCodeSessionMessage = {
   parts?: OpenCodePart[];
-  info?: { role?: string };
+  info?: { role?: string; id?: string; [key: string]: unknown };
 };
 
 export const ZERO_USAGE_METADATA: EngineResultMetadata = {
@@ -424,6 +425,7 @@ export async function executeCommandWithOpenCodeHttp(options: {
   workingDirectory?: string;
   emit: (event: EngineStreamEvent) => void;
   log?: OpenCodeAdapterLogFn;
+  onUsage?: (usage: EngineResultMetadata) => void;
 }): Promise<string> {
   if (typeof options.client.session.command !== 'function') {
     throw new Error('OpenCode command API is unavailable');
@@ -627,6 +629,7 @@ export async function sendPromptWithOpenCodeHttp(options: {
   signal?: AbortSignal;
   emit: (event: EngineStreamEvent) => void;
   log?: OpenCodeAdapterLogFn;
+  onUsage?: (usage: EngineResultMetadata) => void;
   disableStreaming?: boolean;
   permissionResponse?: OpenCodePermissionResponse;
 }): Promise<string> {
@@ -648,6 +651,7 @@ export async function sendPromptWithOpenCodeHttp(options: {
       promptBody,
       query,
       log: options.log,
+      onUsage: options.onUsage,
     });
   }
 
@@ -672,6 +676,7 @@ export async function sendPromptWithOpenCodeHttp(options: {
       promptBody,
       query,
       log: options.log,
+      onUsage: options.onUsage,
     });
   }
 }
@@ -682,6 +687,7 @@ async function sendPromptBlocking(options: {
   promptBody: OpenCodePromptBody;
   query?: { directory?: string };
   log?: OpenCodeAdapterLogFn;
+  onUsage?: (usage: EngineResultMetadata) => void;
 }): Promise<string> {
   options.log?.({
     message: 'Blocking prompt start',
@@ -700,6 +706,7 @@ async function sendPromptBlocking(options: {
   if (promptResult.data?.info?.error) {
     throw new Error(formatError(promptResult.data.info.error));
   }
+  createOpenCodeUsageCollector(options.onUsage)(promptResult.data?.info);
   const output = extractOutput(promptResult.data);
   options.log?.({
     message: 'Blocking prompt done',
@@ -722,12 +729,15 @@ async function sendPromptStreaming(options: {
   signal?: AbortSignal;
   emit: (event: EngineStreamEvent) => void;
   log?: OpenCodeAdapterLogFn;
+  onUsage?: (usage: EngineResultMetadata) => void;
   permissionResponse?: OpenCodePermissionResponse;
 }): Promise<string> {
   const abortController = new AbortController();
   const onAbort = () => abortController.abort();
   options.signal?.addEventListener('abort', onAbort, { once: true });
-  const existingAssistantPartIds = await loadAssistantPartIds(options.client, options.sessionId, options.query);
+  const existingMessageIds = new Set<string>();
+  const existingAssistantPartIds = await loadAssistantPartIds(options.client, options.sessionId, options.query, existingMessageIds);
+  const collectUsage = createOpenCodeUsageCollector(options.onUsage, existingMessageIds);
   const startedAt = Date.now();
 
   let output = '';
@@ -1000,6 +1010,7 @@ async function sendPromptStreaming(options: {
   function updateLatestAssistantTextSnapshot(messages: OpenCodeSessionMessage[] | undefined): void {
     if (!Array.isArray(messages)) return;
     const assistantMessages = messages.filter((message) => message?.info?.role === 'assistant');
+    for (const message of assistantMessages) collectUsage(message.info);
     const latestAssistant = assistantMessages[assistantMessages.length - 1];
     const parts = Array.isArray(latestAssistant?.parts) ? latestAssistant.parts : [];
     const snapshot = collectTextFromParts(parts).trim();
@@ -1089,7 +1100,8 @@ async function sendPromptStreaming(options: {
     if (part.type === 'tool') {
       const state = (part as any).state || {};
       const status = String(state.status || '');
-      if ((status === 'pending' || status === 'running') && !emittedStructuredPartStarts.has(part.id)) {
+      const hasInput = state.input && typeof state.input === 'object' && Object.keys(state.input).length > 0;
+      if ((status === 'pending' || status === 'running') && hasInput && !emittedStructuredPartStarts.has(part.id)) {
         emittedStructuredPartStarts.add(part.id);
         options.emit({ type: 'text', content: formatToolCall(part) });
         touchActivity();
@@ -1289,6 +1301,7 @@ async function sendPromptStreaming(options: {
       abortController.abort();
       return;
     }
+    if (type === 'message.updated') { collectUsage(properties?.info); return; }
     if (type === 'message.part.updated' && properties?.part) {
       handlePartUpdated(properties.part);
       return;
@@ -1330,7 +1343,8 @@ async function sendPromptStreaming(options: {
 
 function isCurrentSession(payload: OpenCodeStreamEventPayload | undefined, sessionId: string): boolean {
   const properties = payload?.properties;
-  const eventSessionId = properties?.sessionID || properties?.sessionId || properties?.session?.id;
+  const eventSessionId = properties?.sessionID || properties?.sessionId || properties?.session?.id
+    || (properties?.info as any)?.sessionID || (properties?.part as any)?.sessionID;
   return !eventSessionId || eventSessionId === sessionId;
 }
 
@@ -1601,6 +1615,7 @@ async function loadAssistantPartIds(
   client: OpenCodeHttpClient,
   sessionId: string,
   query?: { directory?: string },
+  messageIds?: Set<string>,
 ): Promise<Set<string>> {
   if (typeof client.session.messages !== 'function') return new Set<string>();
   try {
@@ -1609,6 +1624,7 @@ async function loadAssistantPartIds(
       query: { ...(query || {}), limit: 20 },
     });
     if (result.error || !Array.isArray(result.data)) return new Set<string>();
+    for (const message of result.data) if (message.info?.id) messageIds?.add(message.info.id);
     return new Set(
       result.data
         .filter((message) => message?.info?.role === 'assistant')

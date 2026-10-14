@@ -25,6 +25,7 @@ vi.mock('@opencode-ai/sdk', () => ({
 
 vi.mock('@/lib/engines/opencode-http-adapter', () => ({
   buildFullPrompt: adapterMocks.buildFullPrompt,
+  buildOpenCodeExecutePrompt: adapterMocks.buildFullPrompt,
   discoverOpenCodeCommandsFromHttpClient: adapterMocks.discoverOpenCodeCommandsFromHttpClient,
   executeCommandWithOpenCodeHttp: adapterMocks.executeCommandWithOpenCodeHttp,
   getSessionId: vi.fn((data?: { id?: string }) => data?.id || 'session-test'),
@@ -117,6 +118,20 @@ describe('OpenCodeSdkEngineWrapper', () => {
     if (tempAceHome) {
       rmSync(tempAceHome, { recursive: true, force: true });
     }
+  });
+
+  test('reports engine usage and never replaces missing cost with a fabricated zero', async () => {
+    sdkMocks.createOpencodeServer.mockResolvedValue({ url: 'http://127.0.0.1:4101', close: vi.fn() });
+    adapterMocks.sendPromptWithOpenCodeHttp.mockImplementation(async (options: any) => {
+      options.onUsage({ usage: { input_tokens: 20, output_tokens: 5 }, usage_source: 'reported', cost_source: 'unavailable' });
+      return 'done';
+    });
+    const { OpenCodeSdkEngineWrapper } = await import('@/lib/engines/opencode-sdk-wrapper');
+    const result = await new OpenCodeSdkEngineWrapper().execute(BASE_OPTIONS);
+    expect(result.success).toBe(true);
+    expect(result.metadata?.usage?.input_tokens).toBe(20);
+    expect(result.metadata?.cost_usd).toBeUndefined();
+    expect(result.metadata?.cost_source).toBe('unavailable');
   });
 
   test('injects configured system env vars into opencode server startup without leaking them globally', async () => {
@@ -252,7 +267,7 @@ describe('OpenCodeSdkEngineWrapper', () => {
       command: 'custom-plugin',
       arguments: 'run this',
     }));
-    expect(callArgs.command).not.toHaveProperty('agent');
+    expect(callArgs.command.agent).toBe(BASE_OPTIONS.agent);
     expect(result.output).toBe('command output');
   });
 

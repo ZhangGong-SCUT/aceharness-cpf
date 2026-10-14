@@ -1,5 +1,6 @@
 'use client';
 
+import { formatObservedMetric } from '@/lib/run/observed-metric';
 import dynamic from 'next/dynamic';
 import { useEffect, useCallback, useState, useRef, useMemo } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
@@ -11894,7 +11895,7 @@ export default function WorkbenchPage({
                           }) : '-'}
                         </td>
                         <td className="p-3 text-sm hidden sm:table-cell">{run.currentPhase ? formatStateName(run.currentPhase) : '-'}</td>
-                        <td className="p-3 text-sm font-mono hidden lg:table-cell">{formatTokenCount(run.totalTokens || 0)}</td>
+                        <td className="p-3 text-sm font-mono hidden lg:table-cell">{formatObservedMetric(run.totalTokens || 0, run.tokenUsageSource, formatTokenCount)}</td>
                         <td className="p-3 text-sm">{run.completedSteps}/{run.totalSteps}</td>
                         <td className="p-3">
                           <div className="flex gap-2">
