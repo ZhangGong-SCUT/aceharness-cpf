@@ -392,7 +392,31 @@ describe('classifyOhosPrGates', () => {
       own_pr: true,
     });
     expect(result.gate_rate_limited).toBe(true);
-    expect(result.phase).toBe('static_failed');
+    expect(result.phase).toBe('blocked_rate_limit');
+  });
+
+  test.each(['编译失败', '静态检查失败', '冒烟测试失败', 'dco检查失败'])('有效限流优先于 %s，后续接受事件可解除阻塞', label => {
+    const comments = [
+      { author: 'author', body: 'start build' },
+      { author: 'openharmony_ci', body: '门禁构建开始' },
+      { author: 'openharmony_ci', body: '代码门禁未通过 failed(ecotest timeout)' },
+      { author: 'author', body: 'start build' },
+      { author: 'openharmony_ci', body: '触发门禁次数已达到上限' },
+    ];
+    const input = { labels: [label], comments, state: 'open', own_pr: true };
+    const blocked = classifyOhosPrGates(input);
+    expect(blocked.phase).toBe('blocked_rate_limit');
+    expect(blocked.trigger_rejected).toBe(true);
+    expect(blocked.ci_accepted).toBe(false);
+    expect(blocked.pending_start_build).toBe(false);
+    expect(routeClassifyState('分类处置', blocked.phase).next_state).toBe('人工确认');
+    expect(classifyOhosPrGates({ ...input, closed: true }).phase).toBe('unknown');
+    const recovered = classifyOhosPrGates({ ...input, comments: [...comments,
+      { author: 'author', body: 'start build' }, { author: 'openharmony_ci', body: '门禁构建开始' }] });
+    expect(recovered.gate_rate_limited).toBe(false);
+    expect(recovered.phase).not.toBe('blocked_rate_limit');
+    expect(recovered.trigger_rejected).toBe(false);
+    expect(recovered.ci_accepted).toBe(true);
   });
 
   test('custom start build max via input', () => {

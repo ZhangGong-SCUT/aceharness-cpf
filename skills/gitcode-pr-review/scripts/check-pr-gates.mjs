@@ -225,7 +225,7 @@ async function main() {
       || DEFAULT_JITTER_RETRY_MAX,
   });
 
-  if (phaseOverride && !closed && ownPr) {
+  if (phaseOverride && !closed && ownPr && !classified.gate_rate_limited) {
     classified.phase = phaseOverride;
     classified.summary = 'AIWeb 用户人工指令（按反馈修改/回退修复/应用建议），跳过门禁分类直达检视修复';
   }
@@ -234,7 +234,7 @@ async function main() {
   // （不依赖 phase=ai_review_pending：检视路由由分流检视步骤的 fetch-ai-review 驱动，
   //   check-pr-gates 的 phase 可能是 green/running 等；此处直接覆盖为 review_pending_decision，
   //   由 等待门禁→挂起 一步收口，避免唤醒后重走分流链重新生成建议烧 token）
-  if (!phaseOverride && reviewPendingDecision && !closed && ownPr) {
+  if (!phaseOverride && reviewPendingDecision && !closed && ownPr && !classified.gate_rate_limited) {
     classified.phase = 'review_pending_decision';
     classified.summary = '检视建议修复已生成（未推送），等待用户在 AIWeb 面板决策：应用 / 驳回 / 反馈';
   }

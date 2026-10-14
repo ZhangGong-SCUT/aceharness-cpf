@@ -165,7 +165,7 @@ export function isStartBuildComment(item) {
 }
 
 function isGateRateLimitedComment(item) {
-  return isCiBotComment(item) && /限制提交/.test(item.body || '');
+  return isCiBotComment(item) && /限制提交|触发门禁次数已达到上限/.test(item.body || '');
 }
 
 function isGateFailComment(item) {
@@ -441,7 +441,9 @@ export function countStartBuildAttempts(comments, author = '') {
   const lastAcceptedStart = startsAll.length ? startsAll[startsAll.length - 1] : -1;
   const postedWindow = startsAll.length > 0;
   const acceptedInWindow = lastAcceptedIdx > lastPushResetIdx;
-  const startBuildRejected = lastTriggerRejectIdx !== -1 && lastTriggerRejectIdx > lastStartIdx;
+  const rejectionIdx = Math.max(lastTriggerRejectIdx, lastRateLimitIdx);
+  const startBuildRejected = rejectionIdx !== -1 && rejectionIdx > lastStartIdx && rejectionIdx > lastAcceptedIdx;
+  const latestAttemptAccepted = acceptedInWindow && lastAcceptedIdx > lastStartIdx && lastAcceptedIdx > rejectionIdx;
 
   // 抖动失败单独计预算：当前代码版本窗口内，每轮「门禁未通过」评论若是平台抖动
   // （全部 timeout/基础设施类失败），计入 jitter_fail_count——与真失败的 start_build_count 分账。
@@ -462,9 +464,9 @@ export function countStartBuildAttempts(comments, author = '') {
     start_build_posted: acceptedInWindow || (postedWindow && acceptedCount > 0),
     // R2：把「评论已发送」「CI 已接受」拆成两个独立事实，避免"发出 start build"被当成"构建已通过"。
     comment_sent: postedWindow,
-    ci_accepted: acceptedInWindow,
+    ci_accepted: latestAttemptAccepted,
     trigger_rejected: startBuildRejected,
-    pending_start_build: postedWindow && !acceptedInWindow && !startBuildRejected,
+    pending_start_build: postedWindow && !latestAttemptAccepted && !startBuildRejected,
     gate_fail_after_last_start: lastCiFailIdx > lastAcceptedStart && lastCiFailIdx !== -1 && lastCiFailIdx > lastPushResetIdx,
     gate_running_after_last_start: lastAcceptedIdx > lastCiFailIdx && lastAcceptedIdx > lastStartIdx,
     gate_aborted_after_ci_start: lastAbortIdx !== -1 && lastAbortIdx > lastAcceptedIdx,
@@ -598,6 +600,10 @@ export function classifyOhosPrGates(input = {}) {
   } else if (!ownPr) {
     phase = 'unknown';
     summary = '不是白名单作者的 PR';
+  } else if (attempts.rate_limited) {
+    // 当前限流优先于旧失败标签及自动修复；后续 CI 接受事件会在 attempts 中解除限流。
+    phase = 'blocked_rate_limit';
+    summary = `DCP 触发门禁次数已达到上限并拒绝了最近一次 start build（评论已发送=${attempts.comment_sent}、CI 已接受=${attempts.ci_accepted}），停止自动修复、重试与重复评论。需人工到 OpenHarmony 数字化协作平台申请恢复额度，恢复后重新检查门禁。`;
   } else if (dcoFail) {
     phase = 'dco_failed';
     summary = 'DCO 检查失败，只补 Signed-off-by，不改业务代码';
@@ -646,10 +652,6 @@ export function classifyOhosPrGates(input = {}) {
       phase = 'green';
       summary = 'DCO / 静态检查 / 编译已通过，不要自动 submit';
     }
-  } else if (attempts.rate_limited) {
-    // R2：DCP 已明确拒绝触发，这是阻塞而非"仍在等待"。优先于普通等待和再次触发，交人工解除限流。
-    phase = 'blocked_rate_limit';
-    summary = `DCP 触发门禁次数已达到上限并拒绝了最近一次 start build（评论已发送=${attempts.comment_sent}、CI 已接受=${attempts.ci_accepted}），不是仍在等待：停止自动重试与重复评论。需人工到 OpenHarmony 数字化协作平台申请恢复额度，恢复后由新 Webhook 唤醒重新分类。`;
   } else if (attempts.pending_start_build) {
     phase = 'running';
     summary = 'start build 已评论但 CI 尚未回「门禁构建开始」（可能在途/被 push 重置吞掉/重复触发被忽略），继续等，不要重复评论';

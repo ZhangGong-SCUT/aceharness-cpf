@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { countStartBuildAttempts, normalizeComments } from './ohos-pr-gates.mjs';
+import { gitcodeReadPages } from './gitcode-read.mjs';
 
 const API_ROOT = process.env.GITCODE_API_ROOT || 'https://gitcode.com/api/v5';
 const FORBIDDEN = new Set(['submit']);
@@ -38,6 +40,18 @@ async function main() {
   }
 
   const url = `${API_ROOT}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(number)}/comments?access_token=${encodeURIComponent(token)}`;
+  if (/^start\s+build$/i.test(body)) {
+    // Re-read immediately before the side effect; a model may still be acting on an older gate snapshot.
+    const path = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(number)}/comments`;
+    const comments = await gitcodeReadPages(path, token);
+    if (countStartBuildAttempts(normalizeComments(comments)).rate_limited) {
+      await mkdir(outDir, { recursive: true });
+      await writeFile(resolve(outDir, 'pr-comment.json'), JSON.stringify({ ok: false, body,
+        phase: 'blocked_rate_limit', comment_id: null, posted_at: null,
+        checked_at: new Date().toISOString(), error: 'DCP 当前限流，未发送 start build' }));
+      throw new Error('DCP 当前限流，停止发送 start build；请先恢复额度');
+    }
+  }
   const response = await fetch(url, {
     method: 'POST',
     headers: {

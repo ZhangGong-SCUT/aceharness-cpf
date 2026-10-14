@@ -90,4 +90,16 @@ describe('deterministic PR steps', () => {
     await writeFile(join(input.workingDirectory, 'outputs/push-result.json'), JSON.stringify({ push_status: 'failed', error: '403 无写权限' }));
     expect(result(await executePrScript({ ...input, operation: 'human', stateName: '人工确认' }))).toMatchObject({ summary: '403 无写权限', waiting_for: 'user_decision' });
   });
+  test('partial evidence cannot pass finish; executed steps still require missing files', async () => {
+    const input = await fixture();
+    await writeFile(join(input.runDirectory, 'state.yaml'), stringify({ stepLogs: [
+      { stepName: '识别-脚本校验PR身份', status: 'completed' },
+      { stepName: '等待门禁-检查门禁', status: 'completed' },
+    ] }));
+    await writeFile(join(input.workingDirectory, 'outputs/gate-check.json'), JSON.stringify({ phase: 'green', source: 'labels+comments' }));
+    const finished = result(await executePrScript({ ...input, operation: 'finish', stateName: '完成' }));
+    expect(finished).toMatchObject({ verdict: 'fail', artifact_status: 'partial' });
+    const manifest = JSON.parse(await readFile(join(input.runDirectory, 'outputs/pr-archive-manifest.json'), 'utf8'));
+    expect(manifest.entries.filter((e: any) => e.status === 'missing').map((e: any) => e.name)).toEqual(['gate-source.json', 'pr-identity.json']);
+  });
 });
