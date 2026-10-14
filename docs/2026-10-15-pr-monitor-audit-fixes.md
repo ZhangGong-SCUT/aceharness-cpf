@@ -18,3 +18,14 @@
 - PR2234 14:02 历史快照回放现在进入 blocked_rate_limit；13:57 的确定性失败保持 compile_failed。
 - PR2234 已补归档 21 项当前工作证据（含原缺失的 13 项），逐项 hash 回读通过，state.yaml 未改变。补归档时间另存，没有伪造原运行时间。
 - 证据目录：`/home/flutter/issue-training-review/pr-fix-20261014/`。保存测试、构建、历史回放、补归档记录；部署结果另行追加。
+
+## 部署与线上验收（2026-10-15 07:21～07:23）
+
+- 07:21:54 已切换生产构建，Build ID：`K-YakDUlZ5M59CnYvnaqA`。代码提交 `bd95d47` 已推送 `origin/cpf-ohos-issue-diagnosis`；CPF 对应 `c6acff6` 已推送。
+- 备份：`pr-fix-20261014/deployment-backup-20261015-072148/`，包含旧构建与活跃运行状态。
+- 部署前重新检查 23 个 Issue 全部终态、12 个 PR 全部等待且无执行进程；部署前后这些 PR 的 state.yaml 与 summary.json SHA-256 完全一致。
+- 线上 API HTTP 200；4 个 engine PR 正确返回 tester_approved；PR2234 仍为 closed 且归档完整，历史缺失列表已归零。
+- 原边界复现：缺失目录现在 failed；新快照内容为 NEW；根符号链接拒绝后不会向外写 manifest。回放 PR2234 两个限流样本均为 blocked_rate_limit、trigger_rejected=true、ci_accepted=false。
+- PR2240～2244 已因各自累计 5 次 ecotest timeout 耗尽抖动预算，属于真实人工等待；PR2245 仍为 suspended，07:22:55 继续刷新门禁。外部 CI 结果不在本次平台修复的成功承诺内。
+- 健康接口 healthy=true；辅助固定端口 OpenCode serve 4096 探测为 false，实际执行链使用按需启动的随机端口，未据此宣称辅助服务恢复。本次未触发新的模型任务或远端 CI 作验收。
+- 短时新增文件日志未命中 ReferenceError/TypeError/Unhandled/EADDRINUSE/MODULE_NOT_FOUND/ERROR；不等价于长期零故障。
