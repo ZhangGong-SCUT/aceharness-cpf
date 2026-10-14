@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { commentBelongsToPull, commentTimeLE, selectActionableReviews } from './ohos-pr-gates.mjs';
 import { gitcodeRead, gitcodeReadPages } from './gitcode-read.mjs';
@@ -200,7 +201,12 @@ async function main() {
 }
 
 function isDirectRun() {
-  return resolve(process.argv[1] || '') === resolve(new URL(import.meta.url).pathname);
+  // R6：realpath 双向解析符号链接，避免经 .aceharness 链接调用时 main 不执行却 exit 0
+  try {
+    return realpathSync(resolve(process.argv[1] || '')) === realpathSync(resolve(new URL(import.meta.url).pathname));
+  } catch {
+    return false;
+  }
 }
 
 if (isDirectRun()) {

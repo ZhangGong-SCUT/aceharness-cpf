@@ -11,6 +11,7 @@
  * 用法：node find-sibling-prs.mjs --pr-url <URL> --author <login> [--out outputs]
  */
 import { mkdir, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { resolveGitcodeToken } from './gitcode-token.mjs';
 
@@ -134,7 +135,12 @@ async function output(result, outDir) {
 }
 
 function isDirectRun() {
-  return resolve(process.argv[1] || '') === resolve(new URL(import.meta.url).pathname);
+  // R6：realpath 双向解析符号链接，避免经 .aceharness 链接调用时 main 不执行却 exit 0
+  try {
+    return realpathSync(resolve(process.argv[1] || '')) === realpathSync(resolve(new URL(import.meta.url).pathname));
+  } catch {
+    return false;
+  }
 }
 
 if (isDirectRun()) {

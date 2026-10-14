@@ -1,9 +1,14 @@
 import { describe, expect, test } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { classifyOhosPrGates, commentBelongsToPull, isFlakyTestFailure, routeClassifyState } from '../skills/gitcode-pr-review/scripts/ohos-pr-gates.mjs';
 import { findQuoteCandidates, parsePatchAddedLines } from '../skills/gitcode-pr-review/scripts/scan-same-rule-defects.mjs';
 import { decideGitcodeWebhookRun } from '@/lib/workflow/pr-monitor-policy';
 import { parseGitcodeWebhookPayload } from '@/lib/workflow/pr-review-input';
 import { PR1978_GATE_FAIL_COMMENT } from './fixtures/pr1978-gate-comment';
+import { PR2234_CLOSED_SNAPSHOT, PR2234_COMPILE_FAIL_SNAPSHOT, PR2234_RATE_LIMIT_SNAPSHOT } from './fixtures/pr2234-gate-snapshots';
 
 describe('scan-same-rule-defects', () => {
   test('parses hunk headers and tracks new-file line numbers', () => {
@@ -34,6 +39,28 @@ describe('scan-same-rule-defects', () => {
     expect(candidates).toHaveLength(2);
     expect(candidates[0]).toMatchObject({ line: 184, needs_escape: false });
     expect(candidates[1]).toMatchObject({ line: 188, needs_escape: true });
+  });
+
+  test('runs main through a symlinked path instead of exiting 0 silently (R6)', () => {
+    const script = resolve(process.cwd(), 'skills/gitcode-pr-review/scripts/scan-same-rule-defects.mjs');
+    const dir = mkdtempSync(join(tmpdir(), 'pr-symlink-'));
+    const link = join(dir, 'scan-same-rule-defects.mjs');
+    symlinkSync(script, link);
+    try {
+      let status = 0;
+      let stderr = '';
+      try {
+        execFileSync(process.execPath, [link], { encoding: 'utf8', stdio: 'pipe' });
+      } catch (error: any) {
+        status = error.status;
+        stderr = String(error.stderr || '');
+      }
+      // 修复前：符号链接调用 isDirectRun=false → 空输出 exit 0；修复后必须真执行并报缺参数
+      expect(status).not.toBe(0);
+      expect(stderr).toContain('缺少');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -184,7 +211,7 @@ describe('classifyOhosPrGates', () => {
     expect(result.phase).toBe('green');
   });
 
-  test('static failure with retry budget left reruns start build instead of fixing', () => {
+  test('deterministic static failure on first round goes straight to fix, no jitter retry (R3)', () => {
     const result = classifyOhosPrGates({
       labels: ['dco检查成功', '静态检查失败'],
       comments: [
@@ -193,16 +220,38 @@ describe('classifyOhosPrGates', () => {
         { author: 'openharmony_ci', body: '首次触发 门禁构建开始,预计60分钟' },
         { author: 'openharmony_ci', body: '代码门禁未通过 静态检查 codeCheck noPass http://dcp.openharmony.cn/x/runlist' },
       ],
+      pull: { user: { login: 'huhaodong' } },
       state: 'open',
       own_pr: true,
     });
-    expect(result.phase).toBe('need_start_build');
+    // R3：noPass 是确定性失败，不能因"失败次数少"就当环境抖动重跑
+    expect(result.phase).toBe('static_failed');
+    expect(result.failure_cause).toBe('deterministic');
     expect(result.start_build_count).toBe(1);
-    expect(result.start_build_max).toBe(3);
+    expect(routeClassifyState('分流静态', result.phase).next_state).toBe('静态修复');
+  });
+
+  test('infra-timeout failure with retry budget still reruns start build (R3)', () => {
+    const result = classifyOhosPrGates({
+      labels: ['dco检查成功', '静态检查失败'],
+      comments: [
+        { author: 'openharmony_ci', body: '感谢提交 Pull Requests！' },
+        { author: 'huhaodong', body: 'start build' },
+        { author: 'openharmony_ci', body: '首次触发 门禁构建开始,预计60分钟' },
+        { author: 'openharmony_ci', body: '代码门禁未通过 <td>failed(ecotest timeout)</td>' },
+      ],
+      pull: { user: { login: 'huhaodong' } },
+      state: 'open',
+      own_pr: true,
+    });
+    // 只有明确 timeout/基础设施证据才允许环境重试
+    expect(result.phase).toBe('need_start_build');
+    expect(result.failure_cause).toBe('infra');
+    expect(result.start_build_count).toBe(1);
     expect(routeClassifyState('分流触发', result.phase).next_state).toBe('推送并触发');
   });
 
-  test('compile failure also retries start build while budget remains', () => {
+  test('compile failure without failure detail does not retry as confirmed jitter (R3)', () => {
     const result = classifyOhosPrGates({
       labels: ['dco检查成功', '编译失败'],
       comments: [
@@ -214,11 +263,59 @@ describe('classifyOhosPrGates', () => {
         { author: 'openharmony_ci', body: '部分构建失败,仅触发失败构建 门禁构建开始' },
         { author: 'openharmony_ci', body: '代码门禁未通过 编译失败' },
       ],
+      pull: { user: { login: 'huhaodong' } },
       state: 'open',
       own_pr: true,
     });
-    expect(result.phase).toBe('need_start_build');
+    // 拿不到失败详情 → 原因未知，不按"已确认抖动"重试，直接进编译修复
+    expect(result.phase).toBe('compile_failed');
+    expect(result.failure_cause).toBe('unknown');
     expect(result.start_build_count).toBe(2);
+  });
+
+  test('deterministic compile failure (failed(compile failed)) goes straight to compile fix (R3)', () => {
+    // 复现 PR2234 13:57 快照：latest fail 为 failed(compile failed)，此前被误判抖动重试
+    const compileFailComment = "代码门禁未通过 <br>静态检查:</br> <table> <tbody> <tr> <td>1</td> <td>codeCheck</td> <td>pass</td> <td><a href='x'>>>></a></td> </tr> </tbody> </table><br>编译测试:</br> <table> <tbody> <tr> <td>1</td> <td>flutter_3.35.7-dev_flutter</td> <td><a href='x'>failed(compile failed)</a></td> <td>NA</td> </tr> </tbody> </table>";
+    const result = classifyOhosPrGates({
+      labels: ['AI已检视', 'dco检查成功', '冒烟测试失败', '编译失败', '静态检查成功'],
+      comments: [
+        { author: 'openharmony_ci', body: '感谢提交 Pull Requests！' },
+        { author: 'huangyouhua', body: 'start build' },
+        { author: 'openharmony_ci', body: '门禁构建开始,预计在60分钟内完成' },
+        { author: 'openharmony_ci', body: compileFailComment },
+      ],
+      pull: { user: { login: 'huangyouhua' } },
+      state: 'open',
+      own_pr: true,
+    });
+    expect(result.failure_cause).toBe('deterministic');
+    expect(result.phase).toBe('compile_failed');
+    expect(result.start_build_count).toBe(1);
+  });
+
+  test('DCP rate-limit rejection becomes blocked_rate_limit instead of running (R2)', () => {
+    // 复现 PR2234 14:47 快照：脚本已发 start build，CI 明确回「触发门禁次数已达到上限」
+    const result = classifyOhosPrGates({
+      labels: ['AI未检视', 'dco检查成功'],
+      comments: [
+        { author: 'openharmony_ci', body: '感谢提交 Pull Requests！ Thanks for submitting a pull request.' },
+        { author: 'huangyouhua', body: 'start build' },
+        { author: 'openharmony_ci', body: '首次触发 门禁构建开始,包含静态检查、代码编译和测试' },
+        { author: 'huangyouhua', body: 'start build' },
+        { author: 'openharmony_dcp', body: '你因提交次数过多被限制提交，请先观看学习视频' },
+        { author: 'huangyouhua', body: 'start build' },
+        { author: 'openharmony_ci', body: '<p>您提交的PR合入后可能会对门禁构建产生阻塞，触发门禁次数已达到上限，您可以去 Openharmony数字化协作平台 申请恢复。</p>' },
+      ],
+      pull: { user: { login: 'huangyouhua' } },
+      state: 'open',
+      own_pr: true,
+    });
+    expect(result.gate_rate_limited).toBe(true);
+    expect(result.phase).toBe('blocked_rate_limit');
+    expect(result.rate_limit_blocked).toBe(true);
+    expect(result.verdict).toBe('pass');
+    // 分类处置把限流阻塞转成人工确认，而不是普通等待
+    expect(routeClassifyState('分类处置', result.phase)).toEqual({ verdict: 'fail', next_state: '人工确认' });
   });
 
   test('retry budget exhausted falls back to real failure phase', () => {
@@ -261,7 +358,8 @@ describe('classifyOhosPrGates', () => {
       own_pr: true,
     });
     expect(result.start_build_count).toBe(1);
-    expect(result.phase).toBe('need_start_build');
+    // R3 起静态失败无 timeout/基础设施证据不再抖动重试；此处只需验证计数已随 push 重置
+    expect(result.phase).toBe('static_failed');
   });
 
   test('CI rebuild in flight keeps waiting instead of posting duplicate start build', () => {
@@ -402,8 +500,9 @@ describe('classifyOhosPrGates', () => {
       own_pr: true,
     });
     expect(result.gate_rate_limited).toBe(false);
-    // 无 DCP 明细输入时仍走抖动重试
-    expect(result.phase).toBe('need_start_build');
+    // R3：noPass 为确定性失败，不再因"无 DCP 明细"就按抖动重试
+    expect(result.failure_cause).toBe('deterministic');
+    expect(result.phase).toBe('static_failed');
     expect(result.start_build_count).toBe(1);
   });
 
@@ -626,6 +725,49 @@ describe('classifyOhosPrGates', () => {
       own_pr: true,
     });
     expect(result.phase).toBe('blocked_no_issue');
+  });
+});
+
+describe('PR2234 真实快照回归（R2/R3/关闭）', () => {
+  const author = { user: { login: 'huangyouhua' } };
+
+  test('13:57 编译失败快照 → compile_failed，不再当抖动重试（R3）', () => {
+    const r = classifyOhosPrGates({
+      labels: PR2234_COMPILE_FAIL_SNAPSHOT.labels,
+      comments: PR2234_COMPILE_FAIL_SNAPSHOT.comments,
+      pull: author,
+      state: 'open',
+      own_pr: true,
+    });
+    expect(r.failure_cause).toBe('deterministic');
+    expect(r.phase).toBe('compile_failed');
+  });
+
+  test('14:47 限流拒绝快照 → blocked_rate_limit，不再 running（R2）', () => {
+    const r = classifyOhosPrGates({
+      labels: PR2234_RATE_LIMIT_SNAPSHOT.labels,
+      comments: PR2234_RATE_LIMIT_SNAPSHOT.comments,
+      pull: author,
+      state: 'open',
+      own_pr: true,
+    });
+    expect(r.gate_rate_limited).toBe(true);
+    expect(r.phase).toBe('blocked_rate_limit');
+    expect(r.rate_limit_blocked).toBe(true);
+    expect(routeClassifyState('分类处置', r.phase)).toEqual({ verdict: 'fail', next_state: '人工确认' });
+  });
+
+  test('15:40 关闭终止快照 → 已关闭、verdict=fail，绝不算全绿（R1 数据源）', () => {
+    const r = classifyOhosPrGates({
+      labels: PR2234_CLOSED_SNAPSHOT.labels,
+      comments: PR2234_CLOSED_SNAPSHOT.comments,
+      pull: author,
+      state: 'closed',
+      own_pr: true,
+    });
+    expect(r.phase).toBe('unknown');
+    expect(r.summary).toContain('已关闭');
+    expect(r.verdict).toBe('fail');
   });
 });
 

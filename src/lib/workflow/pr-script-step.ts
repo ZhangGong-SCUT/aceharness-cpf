@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { buildConfiguredProcessEnv } from '@/lib/core/configured-env';
 import { evaluatePrPushEvidence } from '@/lib/workflow/pr-push-evidence';
 import { markPrInstructionComplete } from '@/lib/workflow/pr-push-recovery';
+import { archivePrRunArtifacts, snapshotPrArtifact } from '@/lib/workflow/pr-artifacts';
 
 import { executeApprovedApply } from './pr-approved-apply';
 
@@ -79,6 +80,8 @@ export async function executePrScript(input: {
       const archive = resolve(input.runDirectory, 'outputs');
       await mkdir(archive, { recursive: true });
       await writeFile(resolve(archive, 'gate-check.json'), JSON.stringify(gate));
+      // R4：按本轮检查时间分版快照 gate，避免只留最后一份覆盖文件
+      await snapshotPrArtifact({ name: 'gate-check.json', tag: gate.checked_at, runDirectory: input.runDirectory, workingDirectory: input.workingDirectory });
       const waiting = ['running', 'review_pending_decision', 'read_error'].includes(gate.phase);
       const terminal = gate.closed || gate.merged || gate.own_pr === false || gate.verdict === 'fail' || gate.phase === 'tester_approved';
       result = { ...gate, verdict: terminal ? 'fail' : waiting ? 'conditional_pass' : 'pass' };
@@ -126,9 +129,16 @@ export async function executePrScript(input: {
     case 'finish': {
       const gate = await optionalRead('gate-check.json');
       const push = await optionalRead('push-result.json');
-      result = { verdict: 'pass', pr_url: field('pr_url'), phase: gate?.phase,
-        summary: push?.error || gate?.summary || (input.stateName === '完成' ? '流程结束，请查看步骤记录' : '无法继续自动处理，请查看步骤记录'),
+      // R4：终止/完成前做完整产物归档（递归 + hash + 回读），归档失败不得显示全部成功
+      const archived = await archivePrRunArtifacts({ workingDirectory: input.workingDirectory, runDirectory: input.runDirectory });
+      const archiveFailed = archived.artifact_status === 'failed';
+      result = { verdict: archiveFailed ? 'fail' : 'pass', pr_url: field('pr_url'), phase: gate?.phase,
+        summary: archiveFailed
+          ? `产物归档失败（artifact_status=${archived.artifact_status}），详见 outputs/pr-archive-manifest.json`
+          : push?.error || gate?.summary || (input.stateName === '完成' ? '流程结束，请查看步骤记录' : '无法继续自动处理，请查看步骤记录'),
         push_status: push?.push_status || 'not_attempted', submitted: false, merged: gate?.merged === true,
+        artifact_status: archived.artifact_status, archive_manifest: archived.manifest,
+        archived_entries: archived.entries.length,
         waiting_for: input.operation === 'human' ? 'user_decision' : undefined };
       break;
     }
@@ -146,6 +156,11 @@ export async function executePrScript(input: {
       await writeFile(resolve(out, 'pr-push-audit.json'), JSON.stringify(audit));
       await mkdir(resolve(input.runDirectory, 'outputs'), { recursive: true });
       await writeFile(resolve(input.runDirectory, 'outputs/pr-push-audit.json'), JSON.stringify(audit));
+      // R4：按本轮 commit/push 时间分版快照 push/gate/patch，保留每次尝试的原始凭据
+      const pushTag = `${String(push?.commit_sha || 'nocommit').slice(0, 12)}-${String(push?.pushed_at || push?.attempted_at || audit.checked_at)}`;
+      for (const name of ['push-result.json', 'pr-comment.json', 'pr-push-audit.json', 'fix.patch']) {
+        await snapshotPrArtifact({ name, tag: pushTag, runDirectory: input.runDirectory, workingDirectory: input.workingDirectory });
+      }
       result = { verdict: verified ? 'pass' : 'fail', reason, push_status: push?.push_status || 'unknown',
         summary: !verified ? '推送或本轮 start build 缺少成功凭据，需要人工确认'
           : success ? '本地提交与远端提交一致，start build 已发送' : '没有待推送修改，本轮触发状态已核对' };

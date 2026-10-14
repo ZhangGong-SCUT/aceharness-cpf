@@ -6401,14 +6401,16 @@ try {
       const scriptOnly = (!!step.prScript && !conditionalPrScript) || (!!step.diagnosisScript && step.diagnosisScript !== 'restore');
       const context = scriptOnly ? '' : await this.buildStepContext(step, state, config, requirements, extraContext);
       console.log(`[StepTiming] context-done ts=${Date.now()} run=${this.currentRunId || '-'} step=${stepTimingTag} elapsed=${Date.now() - stepTimingStartMs}ms ctxLen=${context.length}`);
+      const executionKind = scriptOnly ? 'script' : 'model';
       this.logRunDiagnostic('step.prompt', {
         agent: runtimeAgentName,
         state: state.name,
         step: step.name,
+        executionKind,
         promptLength: context.length,
         hasGlobalContextSection: context.includes('# 全局上下文'),
         hasIssueUrl: summarizeGlobalContext(context).hasIssueUrl,
-      }, context.includes('# 全局上下文') ? 'info' : 'warn');
+      }, executionKind === 'model' && !context.includes('# 全局上下文') ? 'warn' : 'info');
 
       // Execute step (reuse existing process manager logic)
       let stepResult = await this.runAgentStep(step, context, config, stepId);

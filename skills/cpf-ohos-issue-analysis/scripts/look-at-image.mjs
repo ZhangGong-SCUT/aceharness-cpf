@@ -9,7 +9,7 @@
  *   node look-at-image.mjs mcp
  */
 import { Buffer } from 'node:buffer';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -347,7 +347,14 @@ export async function runCli(argv = process.argv.slice(2)) {
   return 0;
 }
 
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+const isMain = (() => {
+  // R6：realpath 解析符号链接，避免经 .aceharness 链接调用时 main 不执行却 exit 0
+  try {
+    return !!process.argv[1] && import.meta.url === pathToFileURL(realpathSync(path.resolve(process.argv[1]))).href;
+  } catch {
+    return false;
+  }
+})();
 if (isMain) {
   runCli().then((code) => {
     if (code) process.exit(code);

@@ -10,6 +10,7 @@ export const GATE_PHASES = [
   'ai_review_pending',
   'green',
   'blocked_no_issue',
+  'blocked_rate_limit',
   'unknown',
 ];
 
@@ -17,6 +18,8 @@ export const CLASSIFY_ROUTES = {
   分类处置: {
     read_error: { verdict: 'conditional_pass', next_state: '挂起' },
     blocked_permission: { verdict: 'fail', next_state: '人工确认' },
+    // R2：DCP 已明确拒绝触发（触发额度用尽）。优先于普通等待和再次触发，直接转人工确认。
+    blocked_rate_limit: { verdict: 'fail', next_state: '人工确认' },
     user_fix: { verdict: 'fail', next_state: '检视修复' },
     review_pending_decision: { verdict: 'conditional_pass', next_state: '挂起' },
     dco_failed: { verdict: 'fail', next_state: 'DCO修复' },
@@ -194,6 +197,31 @@ export function isFlakyTestFailure(comments) {
   const causes = [...body.matchAll(/failed(?:\(IGNORE\))?\(([^)]+)\)/gi)].map((m) => m[1]);
   if (causes.length === 0) return false;
   return causes.every((cause) => /timeout|timed?\s*out|ecotest|infra(structure)?|internal\s*error/i.test(cause));
+}
+
+const INFRA_FAILURE_RE = /timeout|timed?\s*out|ecotest|infra(structure)?|internal\s*error|超时|环境|网络/i;
+
+/**
+ * R3：从最近一条门禁失败评论提取失败类别，先判原因再决定是否按环境抖动重试。
+ * - infra：失败详情全部为 timeout/基础设施类（如 ecotest timeout）→ 确属 DCP 环境抖动，可重试
+ * - deterministic：出现确定性原因（failed(compile failed) / noPass / 真实断言失败 / 裸 failed）→ 直接进对应修复
+ * - unknown：拿不到失败详情（未获取到日志）→ 原因未知，不按"已确认抖动"重试
+ * - none：当前没有门禁失败评论
+ */
+export function extractGateFailureCause(comments) {
+  const latest = comments.filter(isGateFailComment).at(-1);
+  const body = String(latest?.body || '');
+  if (!body) return { kind: 'none', causes: [] };
+  const causes = [...body.matchAll(/failed(?:\(IGNORE\))?\(([^)]+)\)/gi)].map((m) => m[1]);
+  const bareFailed = /\bfailed(?!\()/i.test(body);
+  const noPass = /noPass/i.test(body);
+  if (causes.length > 0 && !bareFailed && !noPass && causes.every((cause) => INFRA_FAILURE_RE.test(cause))) {
+    return { kind: 'infra', causes };
+  }
+  if (bareFailed || noPass || causes.some((cause) => !INFRA_FAILURE_RE.test(cause))) {
+    return { kind: 'deterministic', causes };
+  }
+  return { kind: 'unknown', causes };
 }
 
 /**
@@ -432,6 +460,9 @@ export function countStartBuildAttempts(comments, author = '') {
   return {
     start_build_count: acceptedCount,
     start_build_posted: acceptedInWindow || (postedWindow && acceptedCount > 0),
+    // R2：把「评论已发送」「CI 已接受」拆成两个独立事实，避免"发出 start build"被当成"构建已通过"。
+    comment_sent: postedWindow,
+    ci_accepted: acceptedInWindow,
     trigger_rejected: startBuildRejected,
     pending_start_build: postedWindow && !acceptedInWindow && !startBuildRejected,
     gate_fail_after_last_start: lastCiFailIdx > lastAcceptedStart && lastCiFailIdx !== -1 && lastCiFailIdx > lastPushResetIdx,
@@ -537,6 +568,8 @@ export function classifyOhosPrGates(input = {}) {
   const testFail = hasLabel(labels, LABEL_ALIASES.test_fail);
   const testOk = hasLabel(labels, LABEL_ALIASES.test_ok) && !testFail;
   const flakyTestFail = testFail && isFlakyTestFailure(comments);
+  // R3：先判定失败类别。只有明确 timeout/基础设施证据才允许按环境抖动重试。
+  const failureCause = extractGateFailureCause(comments);
   const aiPendingComments = Boolean(input.ai_actionable_count > 0);
   const issueOk = input.issue_associated !== false && hasAssociatedIssue(input.pull || {}, comments);
 
@@ -577,15 +610,23 @@ export function classifyOhosPrGates(input = {}) {
   } else if ((staticFail || compileFail || testFail) && attempts.gate_running_after_last_start) {
     phase = 'running';
     summary = '静态/编译/测试失败标签是旧结果，CI 已开始重跑，继续等';
-  } else if ((staticFail || compileFail) && gateRetryLeft) {
+  } else if ((staticFail || compileFail) && gateRetryLeft && failureCause.kind === 'infra') {
     phase = 'need_start_build';
-    summary = `${staticFail ? '静态检查' : '编译'}失败第 ${attempts.start_build_count} 次（上限 ${startBuildMax}），DCP 门禁对同一代码存在抖动，重发 start build 再试，不改代码`;
+    summary = `${staticFail ? '静态检查' : '编译'}失败第 ${attempts.start_build_count} 次（上限 ${startBuildMax}），失败详情为 timeout/基础设施类（${failureCause.causes.join('、')}），确属 DCP 环境抖动，重发 start build 再试，不改代码`;
   } else if (staticFail) {
     phase = 'static_failed';
-    summary = '静态检查失败。即使编译还在 pending，也只进静态修复';
+    summary = failureCause.kind === 'deterministic'
+      ? `静态检查失败（确定性原因：${failureCause.causes.length ? failureCause.causes.join('、') : 'noPass/真实失败'}），不按环境抖动重试，先拉 DCP codeCheck 明细再改`
+      : failureCause.kind === 'unknown'
+        ? '静态检查失败但未取到失败详情，原因未知，不按"已确认抖动"重试；先拉 DCP codeCheck 明细再改'
+        : '静态检查失败。即使编译还在 pending，也只进静态修复';
   } else if (compileFail) {
     phase = 'compile_failed';
-    summary = '编译失败，对着 DCP 编译日志改';
+    summary = failureCause.kind === 'deterministic'
+      ? `编译失败（失败类别：${failureCause.causes.length ? failureCause.causes.join('、') : '确定性失败'}），对着 DCP 编译日志改，不按环境抖动重试`
+      : failureCause.kind === 'unknown'
+        ? '编译失败但未取到失败详情，原因未知，不按"已确认抖动"重试；对着 DCP 编译日志改'
+        : '编译失败，对着 DCP 编译日志改';
   } else if (flakyTestFail && gateRetryLeft) {
     phase = 'need_start_build';
     summary = `测试失败第 ${attempts.start_build_count} 次（普通上限 ${startBuildMax}，抖动失败 ${jitterFailCount}/${jitterRetryMax}），失败详情全部为 ecotest timeout——DCP 平台抖动而非代码问题（#1927/#1978 同款），重发 start build 再试，不改代码`;
@@ -605,6 +646,10 @@ export function classifyOhosPrGates(input = {}) {
       phase = 'green';
       summary = 'DCO / 静态检查 / 编译已通过，不要自动 submit';
     }
+  } else if (attempts.rate_limited) {
+    // R2：DCP 已明确拒绝触发，这是阻塞而非"仍在等待"。优先于普通等待和再次触发，交人工解除限流。
+    phase = 'blocked_rate_limit';
+    summary = `DCP 触发门禁次数已达到上限并拒绝了最近一次 start build（评论已发送=${attempts.comment_sent}、CI 已接受=${attempts.ci_accepted}），不是仍在等待：停止自动重试与重复评论。需人工到 OpenHarmony 数字化协作平台申请恢复额度，恢复后由新 Webhook 唤醒重新分类。`;
   } else if (attempts.pending_start_build) {
     phase = 'running';
     summary = 'start build 已评论但 CI 尚未回「门禁构建开始」（可能在途/被 push 重置吞掉/重复触发被忽略），继续等，不要重复评论';
@@ -656,8 +701,16 @@ export function classifyOhosPrGates(input = {}) {
     jitter_retry_max: jitterRetryMax,
     dcp_defect_count: Number(input.dcp_defect_count || 0),
     gate_rate_limited: attempts.rate_limited,
+    rate_limit_blocked: phase === 'blocked_rate_limit',
     trigger_rejected: attempts.trigger_rejected,
     pending_start_build: attempts.pending_start_build,
+    // R2：三个独立事实——评论是否发出、CI 是否接受、构建是否已通过。
+    comment_sent: attempts.comment_sent,
+    ci_accepted: attempts.ci_accepted,
+    build_passed: dcoOk && staticOk && compileOk && !testFail && (!ciMentionsTests(comments) || testOk),
+    // R3：失败类别（infra / deterministic / unknown / none），用于解释是否按环境抖动重试。
+    failure_cause: failureCause.kind,
+    failure_cause_detail: failureCause.causes,
     dco_ok: dcoOk,
     dco_fail: dcoFail,
     static_ok: staticOk,

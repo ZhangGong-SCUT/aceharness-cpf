@@ -11,6 +11,7 @@
  *   已被 DCP 报告过的行会排除（defects 里已有），只列「下一轮大概率会冒出来」的行。
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { resolveGitcodeToken } from './gitcode-token.mjs';
 
@@ -130,6 +131,14 @@ async function main() {
       .map((d) => String(d.rule || d.message || ''))
       .filter(isQuoteRule),
   )];
+  // 能力1：显式给出支持/不支持范围。candidate_count=0 不代表"无同类缺陷"——
+  // C++ 缩进/命名/函数长度等非引号类规则本扫描器不覆盖，必须转人工或专用检查器。
+  const allRules = [...new Set(
+    (defects.defects || [])
+      .map((d) => String(d.rule || d.message || ''))
+      .filter(Boolean),
+  )];
+  const unsupportedRules = allRules.filter((rule) => !isQuoteRule(rule));
 
   const files = await fetchPullFiles(owner, repo, number, token);
   const candidates = [];
@@ -153,9 +162,13 @@ async function main() {
     reported_count: reported.size,
     candidate_count: candidates.length,
     candidates,
+    supported: ['引号类规则（单引号）：.ets/.ts 新增行的双引号字符串字面量'],
+    unsupported: unsupportedRules,
+    coverage: quoteRules.length === 0 ? 'none' : 'partial',
+    manual_review_required: unsupportedRules.length > 0,
     note: quoteRules.length === 0
-      ? '缺陷里没有可确定性扫描的规则（当前支持引号类），candidates 为空'
-      : '候选仅限 PR 新增行，已排除 DCP 已报告行；needs_escape 的行改写时注意转义',
+      ? '缺陷里没有可确定性扫描的规则（当前只覆盖引号类），candidates 为空；unsupported 列出的规则须转人工或专用检查器'
+      : '候选仅限 PR 新增行，已排除 DCP 已报告行；needs_escape 的行改写时注意转义。unsupported 列出的规则本扫描器不覆盖，须人工补查',
   };
 
   await mkdir(outDir, { recursive: true });
@@ -165,7 +178,9 @@ async function main() {
 
 const isDirectRun = (() => {
   try {
-    return resolve(process.argv[1] || '') === resolve(new URL(import.meta.url).pathname);
+    // R6：realpath 双向解析符号链接，skills 经 .aceharness 链接调用时 argv 与 import.meta.url 路径不一致，
+    // 否则 main 不执行却 exit 0，上层只看退出码会误判"扫描成功"。
+    return realpathSync(resolve(process.argv[1] || '')) === realpathSync(resolve(new URL(import.meta.url).pathname));
   } catch {
     return false;
   }
