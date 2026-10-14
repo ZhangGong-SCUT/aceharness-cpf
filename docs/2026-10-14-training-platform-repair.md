@@ -32,4 +32,31 @@
 
 独立盲测执行环境尚未实现，所以主动关闭 blind_eval；guided_replay 可继续演练，不能作为独立修复能力成绩。SDK 独立副本提供文件写入隔离，不宣称当前同一 Unix 用户下已实现答案访问权限隔离。构建清单用于可信工作流的来源一致性校验，不是抵抗恶意代理篡改的签名证明。
 
-部署前在线核对：23 个 Issue 全部终态、active=0；另有 6 个 PR 停在人工审批且没有 currentProcesses。保留这些记录；只提交本次文件，已有其他 AI 的改动不混入提交或构建。
+部署前在线核对：23 个 Issue 全部终态、active=0；另有 6 个 PR 停在人工审批且没有 currentProcesses。只提交本次文件。后续发现线上已包含其他 AI 尚未提交的鉴权等改动，因此构建保留这份既有基线，防止部署回退；没有把其他人的改动提交到本次修复中。
+
+## 最终验证与部署（2026-10-14 16:36–16:55，北京时间）
+
+- 修复代码：`bf1725d`，分支 `cpf-ohos-issue-diagnosis`，已推送。CPF 对应 `d9effb2`，分支 `feat/pr-review-subsystem`。
+- 纯提交副本曾通过 18 文件、206 项测试；随后保留已有 24 个修改文件作为部署构建基线，最终通过 **18 文件、210 项测试**。多出的 4 项来自既有测试改动，不将两次结果相加。CPF 最终 **25/25** 项通过。
+- 生产构建成功，包含 TypeScript 检查、页面数据收集及静态生成。最终使用默认 Turbopack、独立依赖副本、8 GiB 堆上限，在沙箱外完成；无需修改项目构建配置。
+- 构建排障如实留档：最初的跨目录 node_modules 链接被 Turbopack 拒绝；默认 Webpack 达到堆上限；12 GiB Webpack 运行约十分钟后主动终止；本地依赖的沙箱内 Turbopack 长时间无进展后终止。以上均不是成功构建。最后一轮沙箱外构建退出码为 0，编译耗时 30.3 秒。
+- **16:53:34 完成部署**：替换 `.next`、`dist`，同步三个诊断模板。Build ID：`FqSsrBybnBIveVhyNkJvS`。旧构建、旧模板和六条审批的状态文件保存在本机备份目录。
+- **16:54–16:55 只读验收**：三个 systemd 服务均 active；诊断 health HTTP 200、healthy=true、active=0、queryDegraded=0；23 个 Issue 仍为 15 failed、8 complete，没有改写历史成绩。ACE 登录态列表返回 91 个 run。
+- 六个 PR 仍是 `running / __human_approval__`，pendingHumanQuestion=true、currentProcesses 为空；部署前后 `state.yaml` 与 `summary.json` 的 SHA-256 均一致。
+- 三份运行时模板与源码 hash 一致。无身份访问 workflow/status、workflow/events、run stream 均返回 401；页面脚本包含 evidence_conflict 展示。
+- CPF 列表在部署前带登录身份返回 500，16:43 单独重启加载修复后返回 200；最终再次验收为 200、23 条记录。最早无身份探测返回 401 属于正确鉴权，不能作为列表缺陷证据。
+- 部署后读取新增日志：未命中 ReferenceError、TypeError、未处理异常、端口冲突、模块缺失或 ERROR 日志。此结论只覆盖本次短时验收窗口，不等价于长期运行无故障。
+
+辅助端口 4096 在重启后未存活，但诊断 health 仍正常：它不是 SDK 按需创建随机端口会话的必要服务。这次未调用真实模型，因此不宣称真实引擎会话已完成端到端验收。
+
+## 证据位置与剩余验收
+
+本机证据根目录：`/home/flutter/issue-training-review/fix-20261014/`。
+
+- `final-vitest.log`、`final-cpf-tests.log`：最终回归原始日志。
+- `build-turbopack-unrestricted.log`：成功构建日志；其他 build 日志保留失败或中止结果。
+- `preserved-baseline.json`、`preserved-baseline.patch`：构建保留的既有改动及 hash，仅本机保存。
+- `deployment.json`、`runtime-*.json`、`smoke-*.json`、`post-deployment-log-check.json`：部署时间、接口结果、审批核对与日志检查。
+- `deployment-backup-20261014-165328/`：可恢复的旧构建、模板和审批状态备份。
+
+后续真实运行仍需验收：选择人工审核过的 issue，在 guided_replay 下检查完整输出/结果 JSON/证据清单、失败与重试用量、不同 run 的 SDK 写入，以及真机 HAP 安装和应用启动。现有合成测试不能代替模型任务和设备验收。若要恢复 blind_eval，须先实现并验证答案文件、未来 Git 历史和网络访问隔离；不能仅修改开关或模式名称。
