@@ -1,0 +1,14 @@
+[Unit]
+Description=Cloudflare Tunnel (cpf-manager.xyz / aiweb.cpf-manager.xyz)
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/cloudflared tunnel --config %h/.cloudflared/config.yml --protocol auto run
+Restart=always
+RestartSec=10
+TimeoutStopSec=45
+StandardOutput=append:%h/ACEHarness/logs/cloudflared-out.log
+StandardError=append:%h/ACEHarness/logs/cloudflared-out.log
+
+[Install]
+WantedBy=default.target
