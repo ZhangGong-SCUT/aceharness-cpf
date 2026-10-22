@@ -13,11 +13,9 @@ Cloudflare Tunnel Watchdog — 检测公网可达性，断连时自动重启 clo
 
 日志：journalctl --user -u tunnel-watchdog -f
 """
-import json
 import subprocess
 import time
 import urllib.request
-import socket
 
 # ── 配置 ──
 CHECK_INTERVAL = 60          # 检测间隔（秒）
@@ -26,11 +24,12 @@ CHECK_TIMEOUT = 15            # 单次请求超时
 FAIL_THRESHOLD = 3            # 连续失败 N 次才重启（防偶发抖动）
 COOLDOWN = 300                # 重启后冷却期（秒），避免频繁重启
 MAX_RESTARTS_PER_HOUR = 6     # 每小时最大重启次数（防死循环）
+RESTART_TIMEOUT = 30         # systemctl 客户端等待上限；超时不代表服务端重启任务已取消
 
 # ── 状态 ──
 fail_count = 0
-last_restart = 0
-restart_history = []  # [timestamp, ...]
+last_restart = None
+restart_history = []  # 单调时钟下的重启尝试时间（成功、失败、超时都计入）
 
 
 def log(msg, level='INFO'):
@@ -41,24 +40,33 @@ def log(msg, level='INFO'):
 def check_tunnel():
     """通过公网入口发起真实请求，返回是否可达"""
     try:
-        socket.setdefaulttimeout(CHECK_TIMEOUT)
         req = urllib.request.Request(
             CHECK_URL,
             headers={'User-Agent': 'tunnel-watchdog/1.0'},
         )
-        resp = urllib.request.urlopen(req, timeout=CHECK_TIMEOUT)
-        return resp.status == 200
+        with urllib.request.urlopen(req, timeout=CHECK_TIMEOUT) as resp:
+            return resp.status == 200
     except Exception:
         return False
 
 
 def restart_cloudflared():
-    """重启 cloudflared 服务"""
-    result = subprocess.run(
-        ['systemctl', '--user', 'restart', 'cloudflared.service'],
-        capture_output=True, text=True, timeout=30,
-    )
-    return result.returncode == 0
+    """发起重启；命令失败或超时均交回监控循环，不能让守护进程退出。"""
+    try:
+        result = subprocess.run(
+            ['systemctl', '--user', 'restart', 'cloudflared.service'],
+            capture_output=True, text=True, timeout=RESTART_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        log(f'重启命令等待超过 {RESTART_TIMEOUT}s；服务端任务可能仍在执行，进入冷却后继续监测', 'ERROR')
+        return False
+    except OSError as error:
+        log(f'无法执行重启命令（{type(error).__name__}），进入冷却后继续监测', 'ERROR')
+        return False
+    if result.returncode != 0:
+        log(f'重启命令返回非零退出码 {result.returncode}，进入冷却后继续监测', 'ERROR')
+        return False
+    return True
 
 
 def verify_recovery(wait_seconds=20):
@@ -67,58 +75,55 @@ def verify_recovery(wait_seconds=20):
     return check_tunnel()
 
 
-def main():
+def check_once():
+    """执行一轮探活与恢复决策；只有主循环负责轮询间隔。"""
     global fail_count, last_restart
 
+    if check_tunnel():
+        if fail_count > 0:
+            log(f'恢复正常（此前连续失败 {fail_count} 次）')
+        fail_count = 0
+        return
+
+    fail_count += 1
+    log(f'公网不可达（连续第 {fail_count}/{FAIL_THRESHOLD} 次）', 'WARN')
+    if fail_count < FAIL_THRESHOLD:
+        return
+
+    # 使用单调时钟，系统校时不应缩短冷却或延长每小时计数窗口。
+    now = time.monotonic()
+    if last_restart is not None and now - last_restart < COOLDOWN:
+        remaining = int(COOLDOWN - (now - last_restart))
+        log(f'冷却期内（剩 {remaining}s），跳过重启', 'WARN')
+        return
+
+    restart_history[:] = [t for t in restart_history if now - t < 3600]
+    if len(restart_history) >= MAX_RESTARTS_PER_HOUR:
+        log(f'本小时已尝试重启 {len(restart_history)} 次（上限 {MAX_RESTARTS_PER_HOUR}），暂停重启', 'ERROR')
+        return
+
+    # 在执行前预留预算：systemctl 超时后服务端任务仍可能执行，失败也不能无限重试。
+    # 避免命令超时使守护退出、计数重置，或非零返回使每分钟都重启隧道。
+    last_restart = now
+    restart_history.append(now)
+    log(f'连续 {fail_count} 次失败，执行重启 cloudflared（本小时第 {len(restart_history)} 次尝试）…', 'ERROR')
+    if not restart_cloudflared():
+        return
+
+    log('重启命令完成，等待验证公网恢复')
+    if verify_recovery():
+        log('重启后隧道恢复 ✓')
+        fail_count = 0
+    else:
+        log('重启后仍未恢复，进入冷却并继续监测', 'ERROR')
+
+
+def main():
     log(f'Watchdog 启动：每 {CHECK_INTERVAL}s 检测 {CHECK_URL}')
-    log(f'阈值：连续 {FAIL_THRESHOLD} 次失败 → 重启 | 冷却 {COOLDOWN}s | 每小时上限 {MAX_RESTARTS_PER_HOUR} 次')
+    log(f'阈值：连续 {FAIL_THRESHOLD} 次失败 → 重启 | 冷却 {COOLDOWN}s | 每小时最多 {MAX_RESTARTS_PER_HOUR} 次尝试（失败/超时也计入）')
 
     while True:
-        # 检测
-        ok = check_tunnel()
-
-        if ok:
-            if fail_count > 0:
-                log(f'恢复正常（此前连续失败 {fail_count} 次）')
-            fail_count = 0
-        else:
-            fail_count += 1
-            log(f'公网不可达（连续第 {fail_count}/{FAIL_THRESHOLD} 次）', 'WARN')
-
-            # 达到阈值 → 重启
-            if fail_count >= FAIL_THRESHOLD:
-                now = time.time()
-
-                # 冷却期检查
-                if now - last_restart < COOLDOWN:
-                    remaining = int(COOLDOWN - (now - last_restart))
-                    log(f'冷却期内（剩 {remaining}s），跳过重启', 'WARN')
-                    time.sleep(CHECK_INTERVAL)
-                    continue
-
-                # 每小时重启次数检查
-                restart_history[:] = [t for t in restart_history if now - t < 3600]
-                if len(restart_history) >= MAX_RESTARTS_PER_HOUR:
-                    log(f'本小时已重启 {len(restart_history)} 次（上限 {MAX_RESTARTS_PER_HOUR}），暂停重启', 'ERROR')
-                    time.sleep(CHECK_INTERVAL)
-                    continue
-
-                # 执行重启
-                log(f'连续 {fail_count} 次失败，执行重启 cloudflared…', 'ERROR')
-                if restart_cloudflared():
-                    last_restart = now
-                    restart_history.append(now)
-                    log(f'重启命令已发出（本小时第 {len(restart_history)} 次）')
-
-                    # 验证恢复
-                    if verify_recovery():
-                        log('重启后隧道恢复 ✓')
-                        fail_count = 0
-                    else:
-                        log('重启后仍未恢复，将继续监测', 'ERROR')
-                else:
-                    log('重启命令执行失败', 'ERROR')
-
+        check_once()
         time.sleep(CHECK_INTERVAL)
 
 
