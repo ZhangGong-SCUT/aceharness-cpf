@@ -51,4 +51,4 @@ POST /repos/{owner}/{repo}/issues/{number}/comments
 - URL：`{公网 origin}/api/gitcode/webhook?password={ACE_GITCODE_WEBHOOK_SECRET}`
 - 事件：Merge Request + Note
 - `ACE_GITCODE_PR_AUTHOR=你的GitCode用户名`
-- 正式监听：`ACE_GITCODE_WATCH_REPOS=CPF-Flutter/flutter_flutter`
+- 正式监听：`ACE_GITCODE_WATCH_REPOS=CPF-Flutter/*`；如需限定范围，可列出逗号分隔的具体 `owner/repo`。

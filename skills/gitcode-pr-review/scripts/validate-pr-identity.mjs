@@ -34,6 +34,19 @@ function list(value) {
   return String(value || '').split(/[,;\s]+/).map((item) => item.trim().toLowerCase()).filter(Boolean);
 }
 
+function isWatchedRepo(owner, repo, watchedRepos) {
+  if (watchedRepos.length === 0) return true;
+  const ownerName = String(owner || '').trim().toLowerCase();
+  const repoName = String(repo || '').trim().replace(/\.git$/i, '').toLowerCase();
+  const full = `${ownerName}/${repoName}`;
+  if (full === '/') return false;
+  return watchedRepos.some((item) => {
+    const rule = String(item || '').trim().toLowerCase().replace(/\.git$/i, '');
+    if (rule.endsWith('/*')) return rule.slice(0, -2) === ownerName && Boolean(repoName);
+    return rule === full;
+  });
+}
+
 async function main() {
   const outDir = resolve(arg('--out', 'outputs'));
   let fields = {};
@@ -61,14 +74,13 @@ async function main() {
     && parsedUrl.repo.toLowerCase() === repo.toLowerCase()
     && parsedUrl.number === number;
   const allowedAuthors = list(process.env.ACE_GITCODE_PR_AUTHOR);
-  const watchedRepos = list(process.env.ACE_GITCODE_WATCH_REPOS);
+  const watchedRepos = list(process.env.ACE_GITCODE_WATCH_REPOS || 'CPF-Flutter/*');
   const manualAllowed = manualStarter && manualStarter.toLowerCase() === author.toLowerCase();
   // 手动开启时必须是开启者自己的 PR；Webhook 模式才按白名单准入。
   const authorAllowed = manualStarter
     ? Boolean(manualAllowed)
     : allowedAuthors.length === 0 || allowedAuthors.includes(author.toLowerCase());
-  const repoFull = `${owner}/${repo}`.toLowerCase();
-  const repoAllowed = watchedRepos.length === 0 || watchedRepos.includes(repoFull);
+  const repoAllowed = isWatchedRepo(owner, repo, watchedRepos);
   let verdict = 'pass';
   let summary = `PR ${owner}/${repo}#${number} 身份字段完整，作者准入及监听仓校验通过。`;
   if (missing.length) {

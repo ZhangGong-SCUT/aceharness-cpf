@@ -67,7 +67,8 @@ export async function resolveGitcodeWatchRepos(): Promise<string[]> {
   const fromEnv = parseNameList(process.env.ACE_GITCODE_WATCH_REPOS);
   if (fromEnv.length > 0) return fromEnv;
   const settings = await loadSystemSettings();
-  return parseNameList(settings.gitcodeWatchRepos);
+  const fromSettings = parseNameList(settings.gitcodeWatchRepos);
+  return fromSettings.length > 0 ? fromSettings : ['cpf-flutter/*'];
 }
 
 /**

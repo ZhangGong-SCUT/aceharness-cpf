@@ -125,9 +125,15 @@ export function isOwnPrAuthor(author: string | null | undefined, allowedAuthors:
 
 export function isWatchedRepo(owner: string | null | undefined, repo: string | null | undefined, watchedRepos: string[]): boolean {
   if (watchedRepos.length === 0) return true;
-  const full = `${String(owner || '').trim()}/${String(repo || '').trim()}`.toLowerCase().replace(/\.git$/i, '');
+  const ownerName = String(owner || '').trim().toLowerCase();
+  const repoName = String(repo || '').trim().replace(/\.git$/i, '').toLowerCase();
+  const full = `${ownerName}/${repoName}`;
   if (full === '/') return false;
-  return watchedRepos.some((item) => item.toLowerCase() === full || item.toLowerCase() === String(repo || '').trim().toLowerCase());
+  return watchedRepos.some((item) => {
+    const rule = String(item || '').trim().toLowerCase().replace(/\.git$/i, '');
+    if (rule.endsWith('/*')) return rule.slice(0, -2) === ownerName && Boolean(repoName);
+    return rule === full || rule === repoName;
+  });
 }
 
 export function describeIgnoredPr(input: {

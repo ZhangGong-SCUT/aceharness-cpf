@@ -120,7 +120,7 @@ node "<SKILL_ROOT>/scripts/post-pr-comment.mjs" --pr-url "<PR_URL>" --author "<P
 ## 过滤
 
 - `ACE_GITCODE_PR_AUTHOR`：作者白名单，逗号分隔
-- `ACE_GITCODE_WATCH_REPOS`：正式环境用 `CPF-Flutter/flutter_flutter`
+- `ACE_GITCODE_WATCH_REPOS`：正式环境用 `CPF-Flutter/*`；也可用逗号分隔的具体 `owner/repo` 限制范围。未配置时默认只接受 CPF-Flutter 代码仓。
 - `ACE_GITCODE_START_BUILD_MAX`：同一代码版本 `start build` 重试上限，默认 3；新 push 重置
 - Token：每人一条 `GITCODE_TOKEN_{用户名}`。评论 `start build` 和 HTTPS push 必须用该 PR 作者自己的密钥，不要拿别人的覆盖。未匹配到具体人时才回退 `GITCODE_TOKEN` / `ACE_GITCODE_TOKEN`。
 
