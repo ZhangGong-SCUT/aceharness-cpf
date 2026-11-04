@@ -85,7 +85,7 @@ ACEHarness 按“规划、执行、协作、沉淀、扩展、接入”组织工
 快速开始：
 
 ```bash
-npm install -g @cangjielang/aceharness
+npm install -g @ohos-cpf/aceharness
 
 ace --help
 ace
@@ -625,8 +625,12 @@ npm run dev
 |------|------|-----------------|
 | `ACE_PUBLIC_ORIGIN` | 对外访问的绝对地址；用于 webhook、回调 URL、官方微信桥接等场景 | 优先级最高 |
 | `ACE_GITCODE_WEBHOOK_SECRET` | GitCode PR 自修流水线 Webhook 共享密钥；未配置则拒绝 `/api/gitcode/webhook` | 必填才能接收 Git 事件 |
-| `ACE_GITCODE_PR_AUTHOR` | 自己的 GitCode 用户名，只处理该账号提交的 PR | 必填，否则忽略全部 PR |
+| `ACE_GITCODE_PR_AUTHOR` | 自己的 GitCode 用户名，只处理该账号提交的 PR；多人用逗号分隔 | 必填，否则忽略全部 PR |
+| `GITCODE_TOKEN_{用户名}` | 对应用户的 GitCode token，例如 `GITCODE_TOKEN_huhaodong` | 多人时按 PR 作者选用，不要互相覆盖 |
+| `GITCODE_TOKEN` / `ACE_GITCODE_TOKEN` | 未匹配到具体人时的只读回退 | 可与其中一人相同 |
 | `ACE_GITCODE_WATCH_REPOS` | 可选仓库白名单，逗号分隔，如 `owner/repo` | 空则不限制仓库 |
+| `ACE_GITCODE_START_BUILD_MAX` | 同一代码版本 `start build` 重试上限（DCP 门禁对同代码有抖动，失败先重发再修复） | 默认 3，新 push 重置 |
+| `ACE_GITCODE_MAX_PARALLEL` | 同一配置并行处理的 PR run 数上限（每 run 独立 manager/工作区，按 PR 身份精确唤醒） | 默认 3 |
 | `NEXT_PUBLIC_ACE_ORIGIN` | 对外地址回退值 | 次于 `ACE_PUBLIC_ORIGIN` |
 | `NEXT_PUBLIC_APP_ORIGIN` | 对外地址回退值 | 次于 `NEXT_PUBLIC_ACE_ORIGIN` |
 | `ACE_WECHAT_AUTO_RESTORE` | 是否在服务启动后自动恢复官方微信 bridge | 默认开启；设为 `0` / `false` 可关闭 |

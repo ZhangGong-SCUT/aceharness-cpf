@@ -74,7 +74,7 @@ ACEHarness organizes engineering tasks around planning, execution, collaboration
 Get started quickly:
 
 ```bash
-npm install -g @cangjielang/aceharness
+npm install -g @ohos-cpf/aceharness
 
 ace --help
 ace
@@ -220,8 +220,12 @@ Public-origin and channel-recovery variables:
 |------|-------------|----------------------|
 | `ACE_PUBLIC_ORIGIN` | Absolute public origin used for webhook URLs, callbacks, and the official WeChat bridge | Highest priority |
 | `ACE_GITCODE_WEBHOOK_SECRET` | Shared secret for the GitCode self-PR fix pipeline webhook; `/api/gitcode/webhook` rejects requests without it | Required to receive Git events |
-| `ACE_GITCODE_PR_AUTHOR` | Your GitCode username; only PRs from this author are accepted | Required, otherwise all PRs are ignored |
+| `ACE_GITCODE_PR_AUTHOR` | Your GitCode username; only PRs from this author are accepted. Comma-separate multiple names | Required, otherwise all PRs are ignored |
+| `GITCODE_TOKEN_{username}` | That GitCode user's token, e.g. `GITCODE_TOKEN_huhaodong` | Required per author when several people share one host |
+| `GITCODE_TOKEN` / `ACE_GITCODE_TOKEN` | Fallback token when no per-user key matches | May equal one person's token |
 | `ACE_GITCODE_WATCH_REPOS` | Optional comma-separated repo allowlist, e.g. `owner/repo` | Empty means no repo filter |
+| `ACE_GITCODE_START_BUILD_MAX` | Max `start build` attempts per code revision (DCP gates are flaky on identical code; retry before fixing) | Default 3; a new push resets it |
+| `ACE_GITCODE_MAX_PARALLEL` | Max concurrent PR runs per config (each run has its own manager/workspace; wakes are matched by PR identity) | Default 3 |
 | `NEXT_PUBLIC_ACE_ORIGIN` | Public-origin fallback | Lower priority than `ACE_PUBLIC_ORIGIN` |
 | `NEXT_PUBLIC_APP_ORIGIN` | Public-origin fallback | Lower priority than `NEXT_PUBLIC_ACE_ORIGIN` |
 | `ACE_WECHAT_AUTO_RESTORE` | Auto-restore official WeChat bridges after the service starts | Enabled by default; disable with `0` / `false` |

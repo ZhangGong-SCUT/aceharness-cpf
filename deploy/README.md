@@ -11,12 +11,18 @@
 | `install.ps1` | Windows（PowerShell 7+）一键部署脚本 |
 | `README.md` | 本说明 |
 
-## 为什么不用 `npm install -g @cangjielang/aceharness`（公网最新版）
+## 包名说明：@ohos-cpf/aceharness
 
-公开 npm 最新版为 `1.0.0-rc.14`（通用上游版），其 `configs/` **不含** CPF 定制工作流
-（`cpf-ohos-diagnosis.yaml`、`ohos-flutter-sdks.yaml`、`gitcode-pr-review.yaml` 等）。
-本 tgz 从 fork 分支 `cpf-ohos-issue-diagnosis`（源机仓库 /home/flutter/ACEHarness，含未提交的配置改进）
-打包，开箱即带完整诊断工作流。注意 fork 基于 beta.90，落后于上游 rc.14，后续可自行 rebase 上游。
+包名已从上游的 `@cangjielang/aceharness` 改为团队自有 scope **`@ohos-cpf/aceharness`**
+（与 `@ohos-cpf/3rdloop`、`@ohos-cpf/flvm` 同门，对齐 3rdloop 的分发模型）。改名后：
+
+- **发布权回到自己手里**：可发布到私有 registry（Verdaccio/Nexus，配 `@ohos-cpf:registry=...`），
+  内容适合公开时也可直接发公网 scope；
+- 发布打通后，装机 = `npm i -g @ohos-cpf/aceharness@beta`，升级 = `ace update`（从已配置源拉 latest）；
+- 在此之前（未发布），分发仍走本目录的 tgz：`npm install -g dist/ohos-cpf-aceharness-1.0.0-beta.90.tgz`。
+
+> 注意：旧名 `@cangjielang/aceharness` 属于上游仓，本 fork 与之完全脱钩；
+> 已用旧名装过的机器请 `npm uninstall -g @cangjielang/aceharness` 后改用新名安装。
 
 ## 快速开始（目标机，两条命令）
 
@@ -41,8 +47,9 @@ react、better-sqlite3 等）首次安装需从 npm registry 解析约 880 个�
 暂存目录导致后续 ENOTEMPTY——手动删除 `$(npm root -g)/@cangjielang/.aceharness-*` 即可。
 
 **fork 构建的 `ace update` 锁定**：本包为 fork 构建（package.json 标记 `config.aceLineage`），
-`ace update` 会被阻止并提示（它默认拉取上游 `@cangjielang/aceharness@latest`，会抹掉 CPF 定制工作流）。
-确需升上游可设 `ACE_ALLOW_UPSTREAM_UPDATE=1` 绕过；正常升级 = 源机重新 `npm pack` + 目标机重装 tgz。
+`ace update` 会被阻止并提示（在发布到 registry 之前，它会拉取同名包 latest 并抹掉本地定制内容）。
+确需绕过可设 `ACE_ALLOW_UPSTREAM_UPDATE=1`；正常升级 = 源机重新 `npm pack` + 目标机重装 tgz
+（发布到私有 registry 后，`ace update` 自动恢复可用）。
 
 ## 前置条件（脚本不代装，需自行准备）
 
@@ -80,9 +87,9 @@ react、better-sqlite3 等）首次安装需从 npm registry 解析约 880 个�
 ```bash
 # 在源机（有 ACEHarness 仓库的机器）：
 cd /home/flutter/ACEHarness
-npm pack --ignore-scripts --pack-destination /home/flutter/ace-deploy/dist   # 更新 tgz
+npm pack --ignore-scripts --pack-destination ace-deploy/dist   # 更新 tgz（产物名 ohos-cpf-aceharness-*.tgz）
 # 把新 tgz 拷到目标机后：
-npm install -g ./cangjielang-aceharness-<新版本>.tgz
+npm install -g ./ohos-cpf-aceharness-<新版本>.tgz
 # 注意：npm i -g 只更新程序本体；~/.aceharness 下的 configs/skills/scripts 如有更新需对比后手动同步
 ```
 

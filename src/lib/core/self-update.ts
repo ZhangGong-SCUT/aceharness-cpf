@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 
-export const ACE_PACKAGE_NAME = '@cangjielang/aceharness';
+export const ACE_PACKAGE_NAME = '@ohos-cpf/aceharness';
 export const DEFAULT_UPDATE_TARGET = 'latest';
 
 export interface NpmUpdateOptions {

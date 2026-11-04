@@ -1593,7 +1593,7 @@ async function main() {
     return;
   }
   if (command === 'update') {
-    // fork 构建锁定：ace update 会拉取上游 @cangjielang/aceharness latest，抹掉 CPF 定制工作流
+    // fork 构建锁定：ace update 会拉取 registry 上同名包的 latest，发布前可能抹掉本地 CPF 定制工作流
     try {
       const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8'));
       const lineage = pkg?.config?.aceLineage;

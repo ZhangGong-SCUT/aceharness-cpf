@@ -8,7 +8,7 @@ const cmd = process.argv[2];
 if (cmd === 'doctor' || cmd === '自检') {
   import('../scripts/ace-doctor.mjs').catch(err => { console.error('ace doctor 加载失败:', err); process.exit(1); });
 } else if (cmd === 'update') {
-  // fork 构建锁定：ace update 会拉取上游 @cangjielang/aceharness latest，抹掉 CPF 定制工作流
+  // fork 构建锁定：ace update 会拉取 registry 上同名包的 latest，发布前可能抹掉本地 CPF 定制工作流
   const pkg = require('../package.json');
   const lineage = pkg.config && pkg.config.aceLineage;
   if (lineage && !process.env.ACE_ALLOW_UPSTREAM_UPDATE) {
