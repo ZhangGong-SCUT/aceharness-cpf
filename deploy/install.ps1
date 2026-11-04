@@ -1,12 +1,12 @@
 # ACEHarness CPF 诊断平台 一键部署（Windows PowerShell 7+）
-# 用法: .\install.ps1 [-Tgz .\dist\ohos-cpf-aceharness-1.0.0-beta.90.tgz] [-SdkRoot "$HOME\flutter-sdks"]
+# 用法: .\install.ps1 [-Tgz .\dist\cpf-ohos-aceharness-1.0.0-beta.90.tgz] [-SdkRoot "$HOME\flutter-sdks"]
 param(
   [string]$Tgz = "",
   [string]$SdkRoot = "$HOME\flutter-sdks",
   [string]$NpmRegistry = ""
 )
 $ErrorActionPreference = "Stop"
-$TgzName = "ohos-cpf-aceharness-1.0.0-beta.90.tgz"
+$TgzName = "cpf-ohos-aceharness-1.0.0-beta.90.tgz"
 if (-not $Tgz) { $Tgz = "$PSScriptRoot\dist\$TgzName" }
 if (-not (Test-Path $Tgz) -and $env:ACE_DIST_URL) {
   # 远程分发模式：tgz 不在本地时从 ACE_DIST_URL 拉取（给同事装机的一句话场景）
@@ -33,14 +33,14 @@ if ($NpmRegistry) { $regArgs = @('--registry', $NpmRegistry) }
 & npm install -g --prefer-offline @regArgs $Tgz
 if ($LASTEXITCODE -ne 0) {
   Write-Host "    首次安装失败，清理暂存目录并重试..."
-  $gm = "$(npm root -g)\@ohos-cpf"
+  $gm = "$(npm root -g)\@cpf-ohos"
   Get-ChildItem -Path $gm -Filter '.aceharness-*' -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
-  npm ls -g --depth 0 '@ohos-cpf/aceharness' 2>$null | Out-Null
-  if ($LASTEXITCODE -eq 0) { npm uninstall -g '@ohos-cpf/aceharness' }
+  npm ls -g --depth 0 '@cpf-ohos/aceharness' 2>$null | Out-Null
+  if ($LASTEXITCODE -eq 0) { npm uninstall -g '@cpf-ohos/aceharness' }
   & npm install -g --prefer-offline @regArgs $Tgz
   if ($LASTEXITCODE -ne 0) { Write-Host "✗ 安装失败，请检查网络或配置内网镜像源"; exit 1 }
 }
-$aceRoot = "$(npm root -g)\@ohos-cpf\aceharness"
+$aceRoot = "$(npm root -g)\@cpf-ohos\aceharness"
 $ace = Get-Command ace -ErrorAction SilentlyContinue
 if (-not $ace) { Write-Host "✗ ace 未进入 PATH，请重新打开终端或检查 npm global bin"; exit 1 }
 Write-Host "    安装根: $aceRoot"

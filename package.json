@@ -1,5 +1,5 @@
 {
-  "name": "@ohos-cpf/aceharness",
+  "name": "@cpf-ohos/aceharness",
   "version": "1.0.0-beta.90",
   "description": "ACEHarness - Agent Centric Engineering Harness (From Cangjie Team)",
   "scripts": {

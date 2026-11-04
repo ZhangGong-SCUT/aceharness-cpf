@@ -74,7 +74,7 @@ ACEHarness organizes engineering tasks around planning, execution, collaboration
 Get started quickly:
 
 ```bash
-npm install -g @ohos-cpf/aceharness
+npm install -g @cpf-ohos/aceharness
 
 ace --help
 ace

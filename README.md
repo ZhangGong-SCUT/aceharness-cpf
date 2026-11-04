@@ -85,7 +85,7 @@ ACEHarness 按“规划、执行、协作、沉淀、扩展、接入”组织工
 快速开始：
 
 ```bash
-npm install -g @ohos-cpf/aceharness
+npm install -g @cpf-ohos/aceharness
 
 ace --help
 ace

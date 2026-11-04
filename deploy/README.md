@@ -11,15 +11,15 @@
 | `install.ps1` | Windows（PowerShell 7+）一键部署脚本 |
 | `README.md` | 本说明 |
 
-## 包名说明：@ohos-cpf/aceharness
+## 包名说明：@cpf-ohos/aceharness
 
-包名已从上游的 `@cangjielang/aceharness` 改为团队自有 scope **`@ohos-cpf/aceharness`**
-（与 `@ohos-cpf/3rdloop`、`@ohos-cpf/flvm` 同门，对齐 3rdloop 的分发模型）。改名后：
+包名已从上游的 `@cangjielang/aceharness` 改为团队自有 scope **`@cpf-ohos/aceharness`**
+（scope 命名对齐 `@ohos-cpf/3rdloop` 的分发模型）。改名后：
 
-- **发布权回到自己手里**：可发布到私有 registry（Verdaccio/Nexus，配 `@ohos-cpf:registry=...`），
+- **发布权回到自己手里**：可发布到私有 registry（Verdaccio/Nexus，配 `@cpf-ohos:registry=...`），
   内容适合公开时也可直接发公网 scope；
-- 发布打通后，装机 = `npm i -g @ohos-cpf/aceharness@beta`，升级 = `ace update`（从已配置源拉 latest）；
-- 在此之前（未发布），分发仍走本目录的 tgz：`npm install -g dist/ohos-cpf-aceharness-1.0.0-beta.90.tgz`。
+- 发布打通后，装机 = `npm i -g @cpf-ohos/aceharness@beta`，升级 = `ace update`（从已配置源拉 latest）；
+- 在此之前（未发布），分发仍走本目录的 tgz：`npm install -g dist/cpf-ohos-aceharness-1.0.0-beta.90.tgz`。
 
 > 注意：旧名 `@cangjielang/aceharness` 属于上游仓，本 fork 与之完全脱钩；
 > 已用旧名装过的机器请 `npm uninstall -g @cangjielang/aceharness` 后改用新名安装。
@@ -29,7 +29,7 @@
 ### 方式一：同事装机（推荐）——内网静态托管 + 一句话命令
 
 把两个文件放到内网任意静态目录（nginx 目录 / OSS / 文件共享均可，**无需任何登录态**）：
-`install.sh`（Windows 用 `install.ps1`）和 `ohos-cpf-aceharness-1.0.0-beta.90.tgz`。
+`install.sh`（Windows 用 `install.ps1`）和 `cpf-ohos-aceharness-1.0.0-beta.90.tgz`。
 
 同事装好 Node.js 20+（和 DevEco Studio）后，只需一条命令：
 
@@ -66,7 +66,7 @@ react、better-sqlite3 等）首次安装需从 npm registry 解析约 880 个�
 内网/弱网环境请先配镜像源：`NPM_REGISTRY=https://<内网镜像> ./install.sh`（或
 `npm config set registry <镜像>`）。脚本使用 `--prefer-offline`（缓存优先、缺项回退网络），
 失败时自动清理 npm 暂存目录后重试一次。若安装被中途强杀，npm 全局目录可能残留 `.aceharness-*`
-暂存目录导致后续 ENOTEMPTY——手动删除 `$(npm root -g)/@ohos-cpf/.aceharness-*` 即可。
+暂存目录导致后续 ENOTEMPTY——手动删除 `$(npm root -g)/@cpf-ohos/.aceharness-*` 即可。
 
 **fork 构建的 `ace update` 锁定**：本包为 fork 构建（package.json 标记 `config.aceLineage`），
 `ace update` 会被阻止并提示（在发布到 registry 之前，它会拉取同名包 latest 并抹掉本地定制内容）。
@@ -109,9 +109,9 @@ react、better-sqlite3 等）首次安装需从 npm registry 解析约 880 个�
 ```bash
 # 在源机（有 ACEHarness 仓库的机器）：
 cd /home/flutter/ACEHarness
-npm pack --ignore-scripts --pack-destination ace-deploy/dist   # 更新 tgz（产物名 ohos-cpf-aceharness-*.tgz）
+npm pack --ignore-scripts --pack-destination ace-deploy/dist   # 更新 tgz（产物名 cpf-ohos-aceharness-*.tgz）
 # 把新 tgz 拷到目标机后：
-npm install -g ./ohos-cpf-aceharness-<新版本>.tgz
+npm install -g ./cpf-ohos-aceharness-<新版本>.tgz
 # 注意：npm i -g 只更新程序本体；~/.aceharness 下的 configs/skills/scripts 如有更新需对比后手动同步
 ```
 

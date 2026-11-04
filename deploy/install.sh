@@ -5,7 +5,7 @@
 #   ./install.sh ./xxx.tgz /data/flutter-sdks      # 指定 tgz 与 SDK 目录
 set -euo pipefail
 
-TGZ_NAME="ohos-cpf-aceharness-1.0.0-beta.90.tgz"
+TGZ_NAME="cpf-ohos-aceharness-1.0.0-beta.90.tgz"
 TGZ="${1:-}"
 if [ -z "$TGZ" ]; then
   TGZ="$(dirname "$0")/dist/$TGZ_NAME"
@@ -34,13 +34,13 @@ REG_OPT=()
 # 失败恢复：清理 npm 中断残留的暂存目录（会导致 ENOTEMPTY）、必要时卸载后重装，避免"已卸载却没装上"
 if ! npm install -g --prefer-offline "${REG_OPT[@]}" "$TGZ"; then
   echo "    首次安装失败，清理暂存目录并重试..."
-  rm -rf "$(npm root -g)/@ohos-cpf/".aceharness-* 2>/dev/null || true
-  if npm ls -g --depth 0 @ohos-cpf/aceharness >/dev/null 2>&1; then
-    npm uninstall -g @ohos-cpf/aceharness
+  rm -rf "$(npm root -g)/@cpf-ohos/".aceharness-* 2>/dev/null || true
+  if npm ls -g --depth 0 @cpf-ohos/aceharness >/dev/null 2>&1; then
+    npm uninstall -g @cpf-ohos/aceharness
   fi
   npm install -g --prefer-offline "${REG_OPT[@]}" "$TGZ"
 fi
-ACE_ROOT="$(npm root -g)/@ohos-cpf/aceharness"
+ACE_ROOT="$(npm root -g)/@cpf-ohos/aceharness"
 command -v ace >/dev/null || { echo "✗ ace 未进入 PATH，请检查 npm global bin 是否在你的 PATH 中"; exit 1; }
 echo "    安装根: $ACE_ROOT"
 

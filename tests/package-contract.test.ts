@@ -17,7 +17,7 @@ async function projectPathExists(relativePath: string): Promise<boolean> {
 
 describe('package contract', () => {
   test('package exposes the intended global install entrypoints', async () => {
-    expect(packageJson.name).toBe('@ohos-cpf/aceharness');
+    expect(packageJson.name).toBe('@cpf-ohos/aceharness');
     expect(packageJson.main).toBe('server.js');
     expect(packageJson.bin?.ace).toBe('bin/ace.js');
 
