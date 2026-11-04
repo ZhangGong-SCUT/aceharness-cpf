@@ -24,7 +24,29 @@
 > 注意：旧名 `@cangjielang/aceharness` 属于上游仓，本 fork 与之完全脱钩；
 > 已用旧名装过的机器请 `npm uninstall -g @cangjielang/aceharness` 后改用新名安装。
 
-## 快速开始（目标机，两条命令）
+## 快速开始（目标机）
+
+### 方式一：同事装机（推荐）——内网静态托管 + 一句话命令
+
+把两个文件放到内网任意静态目录（nginx 目录 / OSS / 文件共享均可，**无需任何登录态**）：
+`install.sh`（Windows 用 `install.ps1`）和 `ohos-cpf-aceharness-1.0.0-beta.90.tgz`。
+
+同事装好 Node.js 20+（和 DevEco Studio）后，只需一条命令：
+
+```bash
+# Linux / macOS
+curl -fsSL http://<内网地址>/install.sh | ACE_DIST_URL=http://<内网地址> bash
+
+# Windows（PowerShell 7+）
+$env:ACE_DIST_URL = "http://<内网地址>"
+iex (Invoke-WebRequest "http://<内网地址>/install.ps1" -UseBasicParsing).Content
+```
+
+脚本自动完成全部五步（下载 tgz → 全局安装 → 同步 ~/.aceharness → SDK 路径改写 → ace doctor）。
+同事随后按 doctor 提示补三样：SDK（找你 rsync）→ `ace` 向导配 key → 连真机。
+内网无法访问公网 npm 时加 `NPM_REGISTRY=https://<公司npm镜像>`。
+
+### 方式二：拷包装机
 
 ```bash
 # Linux / macOS
@@ -44,7 +66,7 @@ react、better-sqlite3 等）首次安装需从 npm registry 解析约 880 个�
 内网/弱网环境请先配镜像源：`NPM_REGISTRY=https://<内网镜像> ./install.sh`（或
 `npm config set registry <镜像>`）。脚本使用 `--prefer-offline`（缓存优先、缺项回退网络），
 失败时自动清理 npm 暂存目录后重试一次。若安装被中途强杀，npm 全局目录可能残留 `.aceharness-*`
-暂存目录导致后续 ENOTEMPTY——手动删除 `$(npm root -g)/@cangjielang/.aceharness-*` 即可。
+暂存目录导致后续 ENOTEMPTY——手动删除 `$(npm root -g)/@ohos-cpf/.aceharness-*` 即可。
 
 **fork 构建的 `ace update` 锁定**：本包为 fork 构建（package.json 标记 `config.aceLineage`），
 `ace update` 会被阻止并提示（在发布到 registry 之前，它会拉取同名包 latest 并抹掉本地定制内容）。

@@ -1,11 +1,19 @@
 # ACEHarness CPF 诊断平台 一键部署（Windows PowerShell 7+）
 # 用法: .\install.ps1 [-Tgz .\dist\ohos-cpf-aceharness-1.0.0-beta.90.tgz] [-SdkRoot "$HOME\flutter-sdks"]
 param(
-  [string]$Tgz = "$PSScriptRoot\dist\ohos-cpf-aceharness-1.0.0-beta.90.tgz",
+  [string]$Tgz = "",
   [string]$SdkRoot = "$HOME\flutter-sdks",
   [string]$NpmRegistry = ""
 )
 $ErrorActionPreference = "Stop"
+$TgzName = "ohos-cpf-aceharness-1.0.0-beta.90.tgz"
+if (-not $Tgz) { $Tgz = "$PSScriptRoot\dist\$TgzName" }
+if (-not (Test-Path $Tgz) -and $env:ACE_DIST_URL) {
+  # 远程分发模式：tgz 不在本地时从 ACE_DIST_URL 拉取（给同事装机的一句话场景）
+  $Tgz = "$PWD\$TgzName"
+  Write-Host "    从 $env:ACE_DIST_URL 下载 $TgzName ..."
+  Invoke-WebRequest -UseBasicParsing "$env:ACE_DIST_URL/$TgzName" -OutFile $Tgz
+}
 
 Write-Host "==> 1/5 检查 Node.js（需 >= 20，推荐 22 LTS）..."
 $node = Get-Command node -ErrorAction SilentlyContinue

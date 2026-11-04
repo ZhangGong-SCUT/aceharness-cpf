@@ -5,7 +5,17 @@
 #   ./install.sh ./xxx.tgz /data/flutter-sdks      # 指定 tgz 与 SDK 目录
 set -euo pipefail
 
-TGZ="${1:-$(dirname "$0")/dist/ohos-cpf-aceharness-1.0.0-beta.90.tgz}"
+TGZ_NAME="ohos-cpf-aceharness-1.0.0-beta.90.tgz"
+TGZ="${1:-}"
+if [ -z "$TGZ" ]; then
+  TGZ="$(dirname "$0")/dist/$TGZ_NAME"
+fi
+if [ ! -f "$TGZ" ] && [ -n "${ACE_DIST_URL:-}" ]; then
+  # 远程分发模式：tgz 不在本地时从 ACE_DIST_URL 拉取（给同事装机的一句话场景）
+  TGZ="$(pwd)/$TGZ_NAME"
+  echo "    从 $ACE_DIST_URL 下载 $TGZ_NAME ..."
+  curl -fsSL "$ACE_DIST_URL/$TGZ_NAME" -o "$TGZ" || { echo "✗ 下载失败：检查 ACE_DIST_URL 或先手动放置 tgz"; exit 1; }
+fi
 SDK_ROOT="${2:-$HOME/flutter-sdks}"
 
 echo "==> 1/5 检查 Node.js（需 >= 20，推荐 22 LTS）..."
