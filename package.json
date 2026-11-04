@@ -225,6 +225,7 @@
     ".npmignore",
     "bin",
     "dist",
+    "scripts",
     "server.js",
     "runtime",
     "public",
@@ -254,6 +255,10 @@
   ],
   "bin": {
     "ace": "bin/ace.js"
+  },
+  "config": {
+    "aceLineage": "cpf-ohos-issue-diagnosis",
+    "aceLineageCommit": "cf0ffa4+wt"
   },
   "directories": {
     "doc": "docs"

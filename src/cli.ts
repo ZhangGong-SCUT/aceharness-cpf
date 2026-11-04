@@ -208,6 +208,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
       '  ace start        启动 ACEHarness',
       '  ace service      查看并停止 ACE 进程',
       '  ace update [tag|version] 从 npm 更新 ACEHarness',
+      '  ace doctor       环境自检（Node/SDK/hdc/凭据等，--json 结构化输出）',
       '  ace reset --force 重置本地 ACE 配置',
       '  ace --help       查看帮助',
     ].join('\n'),
@@ -298,6 +299,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
       '  ace start         Start ACEHarness',
       '  ace service       Inspect and stop ACE processes',
       '  ace update [tag|version] Update ACEHarness from npm',
+      '  ace doctor        Environment self-check (Node/SDK/hdc/credentials, --json for structured output)',
       '  ace reset --force Reset local ACE state',
       '  ace --help        Show help',
     ].join('\n'),
@@ -401,13 +403,15 @@ function parseArgs(argv: string[]) {
   const help = args.includes('--help') || args.includes('-h');
   const positionals = args.filter((arg) => !arg.startsWith('-'));
   const command = help ? 'help' : (positionals[0] || '');
-  const validCommands = new Set<CliCommand>(['', 'start', 'reset', 'help', 'servive', 'service', 'update', '__run-server', '__daemon']);
+  const validCommands = new Set<CliCommand>(['', 'start', 'reset', 'help', 'servive', 'service', 'update', 'doctor', '__run-server', '__daemon']);
   const commandIsValid = validCommands.has(command as CliCommand);
   const allowedOptions = command === 'reset'
     ? new Set(['--force', '--help', '-h'])
     : command === 'update'
       ? new Set(['--force', '--yes', '-y', '--dry-run', '--stop-running', '--tag', '--version', '--target', '--help', '-h'])
-      : new Set(['--help', '-h', '--service-id', '-V', '--verbose']);
+      : command === 'doctor'
+        ? new Set(['--json', '--no-fix', '-q', '--quiet', '--help', '-h'])
+        : new Set(['--help', '-h', '--service-id', '-V', '--verbose']);
   const unknownOption = args.find((arg) => arg.startsWith('-') && !allowedOptions.has(arg));
   const serviceIdIndex = args.findIndex((arg) => arg === '--service-id');
   const getOptionValue = (names: string[]) => {
@@ -1589,6 +1593,18 @@ async function main() {
     return;
   }
   if (command === 'update') {
+    // fork 构建锁定：ace update 会拉取上游 @cangjielang/aceharness latest，抹掉 CPF 定制工作流
+    try {
+      const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8'));
+      const lineage = pkg?.config?.aceLineage;
+      if (lineage && !process.env.ACE_ALLOW_UPSTREAM_UPDATE) {
+        console.error(`[ACE] 当前为 fork 构建（${lineage}${pkg.config.aceLineageCommit ? '@' + pkg.config.aceLineageCommit : ''}，v${pkg.version}）。`);
+        console.error('[ACE] ace update 会切到上游 npm 版本并丢失 CPF 定制工作流，已阻止。');
+        console.error('[ACE] 升级方式：源机重新 npm pack 后在目标机 npm install -g <新tgz>。');
+        console.error('[ACE] 如确要升上游（将失去定制工作流）：设置 ACE_ALLOW_UPSTREAM_UPDATE=1 后重试。');
+        process.exit(1);
+      }
+    } catch { /* package.json 不可读则不阻断 */ }
     try {
       await updateCommand(locale, { updateTarget, force, yes, dryRun, stopRunning });
     } catch (error) {
@@ -1596,6 +1612,15 @@ async function main() {
       console.error(message.startsWith('[ACE]') ? message : messages.updateFailed(message));
       process.exit(1);
     }
+    return;
+  }
+  if (command === 'doctor') {
+    // 环境自检：分发到包内零依赖脚本（scripts/ace-doctor.mjs），不经服务进程。
+    // 注意：经 new Function 触发动态 import，避免 TS commonjs 降级把 import() 转成 require(ESM 路径)。
+    const { pathToFileURL } = await import('node:url');
+    const { join } = await import('node:path');
+    const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<unknown>;
+    await dynamicImport(pathToFileURL(join(__dirname, '..', 'scripts', 'ace-doctor.mjs')).href);
     return;
   }
   if (command === '__run-server') {

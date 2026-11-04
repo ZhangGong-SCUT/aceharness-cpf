@@ -179,3 +179,25 @@ function transpileFile(inputPath) {
 cleanDir(distDir);
 ensureDir(distDir);
 collectFiles().forEach(transpileFile);
+
+// ── doctor 前置分发（fork）：dist/cli.js 未含 doctor 时打补丁 ──
+// 使 `ace doctor` 在未重新构建 dist 的部署副本上同样可用（对齐 bin/ace.js 的行为）
+(function patchDoctorDispatch() {
+  const cliPath = path.join(distDir, 'cli.js');
+  if (!fs.existsSync(cliPath)) return;
+  let code = fs.readFileSync(cliPath, 'utf8');
+  if (code.includes("=== \"doctor\"")) return; // 已含（新版构建产物自带）
+  const anchor = 'if (command === "help") {';
+  if (!code.includes(anchor)) { console.warn('[build-cli] 未找到 doctor 分发锚点，跳过补丁'); return; }
+  const snippet = [
+    'if (command === "doctor") {',
+    '  const { pathToFileURL } = require("node:url");',
+    '  Promise.resolve().then(() => import(pathToFileURL(require("node:path").join(__dirname, "..", "scripts", "ace-doctor.mjs")).href)).catch((err) => { console.error("ace doctor 加载失败:", err); process.exit(1); });',
+    '  return;',
+    '}',
+    '',
+  ].join('\n    ');
+  code = code.replace(anchor, snippet + anchor);
+  fs.writeFileSync(cliPath, code, 'utf8');
+  console.log('[build-cli] 已注入 doctor 前置分发补丁');
+})();
