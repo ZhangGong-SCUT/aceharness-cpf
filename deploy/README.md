@@ -68,10 +68,9 @@ react、better-sqlite3 等）首次安装需从 npm registry 解析约 880 个�
 失败时自动清理 npm 暂存目录后重试一次。若安装被中途强杀，npm 全局目录可能残留 `.aceharness-*`
 暂存目录导致后续 ENOTEMPTY——手动删除 `$(npm root -g)/@cpf-ohos/.aceharness-*` 即可。
 
-**fork 构建的 `ace update` 锁定**：本包为 fork 构建（package.json 标记 `config.aceLineage`），
-`ace update` 会被阻止并提示（在发布到 registry 之前，它会拉取同名包 latest 并抹掉本地定制内容）。
-确需绕过可设 `ACE_ALLOW_UPSTREAM_UPDATE=1`；正常升级 = 源机重新 `npm pack` + 目标机重装 tgz
-（发布到私有 registry 后，`ace update` 自动恢复可用）。
+**`ace update` 行为**：发布后 `ace update` 拉取 `@cpf-ohos/aceharness@latest`（自有包，升级安全），
+未发布时该命令报 E404 属预期，升级请用新 tgz 重装。注：`config.aceLineage` 标记仅用于
+实验性 fork 构建防误升（本包不含该标记，不受锁定逻辑影响）。
 
 ## 前置条件（脚本不代装，需自行准备）
 

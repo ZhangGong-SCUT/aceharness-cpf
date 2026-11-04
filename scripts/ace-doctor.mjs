@@ -99,10 +99,11 @@ function checkPlatform() {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(INSTALL_ROOT, 'package.json'), 'utf8'));
     const lin = pkg.config?.aceLineage;
+    const commit = pkg.config?.aceLineageCommit;
     add('平台', '构建来源', true,
-      lin ? `fork 构建（${lin}${pkg.config.aceLineageCommit ? `@${pkg.config.aceLineageCommit}` : ''}，v${pkg.version}）— ace update 已锁定，升级请用新 tgz 重装`
-          : `上游构建 v${pkg.version} — 注意：ace update 会拉取 registry latest，若此为 fork 部署请勿使用`,
-      lin ? '' : '如确需更新：确认 registry 版本含所需工作流后再 ace update', !lin);
+      lin ? `fork 构建（${lin}${commit ? `@${commit}` : ''}，v${pkg.version}）— ace update 已锁定，升级请用新 tgz 重装`
+          : `发布版构建 v${pkg.version}${commit ? `（commit ${commit}）` : ''} — ace update 拉取 ${pkg.name}@latest`,
+      lin ? '' : '如 registry 尚无已发布版本，ace update 会报 E404，属预期', false);
   } catch { add('平台', '构建来源', true, '未知（package.json 不可读）', '', true); }
 }
 

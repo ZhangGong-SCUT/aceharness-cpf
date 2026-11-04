@@ -257,8 +257,7 @@
     "ace": "bin/ace.js"
   },
   "config": {
-    "aceLineage": "cpf-ohos-issue-diagnosis",
-    "aceLineageCommit": "cf0ffa4+wt"
+    "aceLineageCommit": "4de8c9f"
   },
   "directories": {
     "doc": "docs"
