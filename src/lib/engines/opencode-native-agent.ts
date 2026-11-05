@@ -45,8 +45,9 @@ export function resolveOpenCodeNativeAgentWriteDirs(options: {
   workingDirectory?: string;
 } = {}): string[] {
   const dirs = [
+    options.workingDirectory ? path.join(options.workingDirectory, '.opencode', 'agent') : '',
     path.join(getWorkspaceRoot(), '.opencode', 'agent'),
-  ];
+  ].filter(Boolean);
   if (!process.env.ACE_HOME?.trim()) {
     const globalRoot = resolveOpenCodeGlobalConfigDirectories({
       workingDirectory: options.workingDirectory,

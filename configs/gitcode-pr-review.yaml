@@ -246,7 +246,9 @@ workflow:
           agent: developer
           role: defender
           task: |
-            checkout fork 的 head_ref 到 repo/；已有则 fetch，不要每次全量 clone。
+            先运行 node skills/gitcode-pr-review/scripts/checkout-pr-head.mjs --run . --base-ref <base_ref> --head-ref <head_ref> --head-sha <head_sha> --head-repo <head_repo>
+            禁止自己执行 git clone，也不要 git fetch --all。脚本会按 base_ref 从本机 ohos-flutter-sdks.yaml 找到仓库，已是 head_sha 则不访问网络，否则只 fetch 该分支，再用 worktree 挂到 repo/。
+            禁止在 repo 里直接 git push：本地分支上游可能是 origin/<base_ref>。推送仍按「推送并触发」写明的 fork URL 和 head_ref。
             只给缺失的 commit 补 Signed-off-by: Name <email>。不要改业务代码。本状态不要 git commit / git push。
             输出 JSON：verdict、summary、fixed_commits。
         - id: challenge-dco
@@ -280,7 +282,8 @@ workflow:
           agent: developer
           role: defender
           task: |
-            checkout fork head_ref 到 repo/。
+            先运行 node skills/gitcode-pr-review/scripts/checkout-pr-head.mjs --run . --base-ref <base_ref> --head-ref <head_ref> --head-sha <head_sha> --head-repo <head_repo>
+            禁止自己执行 git clone。检出完成后再改文件。禁止在 repo 里直接 git push。
             先拉 codeCheck 失败明细：node skills/gitcode-pr-review/scripts/fetch-dcp-report.mjs --report-url <gate-check.json 的 report_url> --out outputs
             读 outputs/dcp-codecheck-defects.json，修 defects 点到的 filepath/line。
             然后同规则扫雷（DCP 一次只报一处，同类问题在 PR 改动里往往多处，逐轮修会浪费多轮 CI）：
@@ -321,8 +324,9 @@ workflow:
           agent: developer
           role: defender
           task: |
-            checkout fork head_ref 到 repo/。对着 DCP 编译失败日志改导致失败的文件。
-            不要在步骤里编 Flutter/OH 全量工程。本状态不要 git commit / git push。
+            先运行 node skills/gitcode-pr-review/scripts/checkout-pr-head.mjs --run . --base-ref <base_ref> --head-ref <head_ref> --head-sha <head_sha> --head-repo <head_repo>
+            禁止自己执行 git clone。检出完成后再对着 DCP 编译失败日志改导致失败的文件。
+            不要在步骤里编 Flutter/OH 全量工程。本状态不要 git commit / git push。禁止在 repo 里直接 git push。
             环境抖动豁免重试（env-jitter-retry）：若日志行级实证根因为 CI 环境问题（唯一失败链属基础设施类，如 npm ENOTEMPTY / hvigor wrapper 竞态 / pub get 超时，且 PR 改动文件零编译错误，无代码可修），依次检查：
             a) outputs/env-jitter-used.txt 已存在 → 本 run 豁免已用过，不再自动重试，fail 转人工确认。
             b) 作者凭据：node skills/gitcode-pr-review/scripts/gitcode-token.mjs --check-author <author小写> 退出码非 0 → 无法代发，fail 转人工确认并在结论写明「作者 Token 未注入，需本人在 PR 评论 start build」。
@@ -360,6 +364,8 @@ workflow:
           agent: developer
           role: defender
           task: |
+            先运行 node skills/gitcode-pr-review/scripts/checkout-pr-head.mjs --run . --base-ref <base_ref> --head-ref <head_ref> --head-sha <head_sha> --head-repo <head_repo>
+            禁止自己执行 git clone。禁止在 repo 里直接 git push。
             先检查 state.yaml 的 globalContext 是否包含 user_fix_feedback: / user_revert: / user_apply_patch:。
             命中任一用户人工指令时，模式C优先：直接执行指令，不要先用目标 PR 的 ai_reviewed 标签或 actionable_count=0 短路；
             也不要重新检视或改动指令范围以外的文件。未命中用户指令时，才运行 fetch-ai-review 并进入模式A/B。
@@ -369,7 +375,7 @@ workflow:
             【模式A：常规检视修复（ai_reviewed=true 或 actionable_count>0）——建议模式，不直接推送】
             actionable_count=0 且 ai_reviewed=true：不要空改，verdict=pass。
             有意见：只处理 comments[]（当前代码的 AI 检视意见和人工行内评论），stale_comments 是旧代码意见不要修。
-            在 repo/ 按 path/line 改，只改检视点到的文件。本状态不要 git commit / git push。
+            在 repo/ 按 path/line 改，只改检视点到的文件。进入本状态前必须先跑 checkout-pr-head.mjs，禁止自己执行 git clone。本状态不要 git commit / git push，也不要在 repo 里直接 git push。
             改完代码后生成建议产物（用户在 AIWeb 面板审阅后才决定是否推送）：
             1. git -C repo diff > outputs/fix.patch（无改动则跳过）
             2. 写 outputs/review-suggestion.json：{"mode":"suggestion","head_sha":"<git -C repo rev-parse HEAD>","comment_count":<actionable 条数>,"generated_at":"<ISO8601>"}
@@ -378,7 +384,7 @@ workflow:
             输出 JSON：verdict、summary、applied_issues。
 
             【模式B：同主题跨分支修复同步（ai_reviewed=false 且 actionable_count=0）】
-            本 PR 未被 AI 检视。checkout fork head_ref 到 repo/ 后：
+            本 PR 未被 AI 检视。先运行 node skills/gitcode-pr-review/scripts/checkout-pr-head.mjs --run . --base-ref <base_ref> --head-ref <head_ref> --head-sha <head_sha> --head-repo <head_repo>，禁止自己执行 git clone。然后：
             1. 运行 skills/gitcode-pr-review/scripts/find-sibling-prs.mjs --pr-url <PR_URL> --author <author> --out outputs
             2. 读 outputs/sibling-prs.json：
                a) 无同主题兄弟 PR（sibling_count=0）→ verdict=pass（无修复可同步）。

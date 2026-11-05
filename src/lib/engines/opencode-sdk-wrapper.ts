@@ -11,7 +11,7 @@
  */
 
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
-import { dirname, delimiter, isAbsolute } from 'node:path';
+import { dirname, delimiter, isAbsolute, resolve } from 'node:path';
 import { EventEmitter } from 'events';
 import { ensureOpenCodeCompatibleMcpServers } from '@/lib/mcp/registry';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
@@ -39,7 +39,8 @@ import { registerOpenCodeNativeAgent, registerOpenCodeVisionInspector } from './
  * 旧实现是全局单例 + env 指纹比对：不同 userId 的引擎交替执行时触发
  * "configured env changed, restarting HTTP server"，杀掉共享 serve 冷启动重启——
  * 多 run 并发时所有 HTTP 路径步骤全部阻塞（派发空转根因之一）。
- * 现改为 userId → 常驻 serve 池：各用户独立 serve 互不干扰，2 小时闲置自动回收
+ * 现改为 userId + 工作目录 → 常驻 serve 池：不同 run 不共用一个 serve，
+ * 避免 config.update 把别人的会话一起打成 Aborted。2 小时闲置自动回收
  * （opencode 会话存于共享存储，跨 serve 实例可 resume）。
  */
 interface SdkServerEntry {
@@ -212,8 +213,13 @@ async function withTemporaryProcessEnv<T>(env: NodeJS.ProcessEnv, action: () => 
   }
 }
 
-async function ensureServer(userId?: string): Promise<{ client: OpenCodeHttpClient; url: string }> {
-  const key = userId || '';
+export function openCodeSdkPoolKey(userId?: string, workingDirectory?: string): string {
+  const dir = workingDirectory?.trim() ? resolve(workingDirectory) : '';
+  return `${userId || ''}::${dir}`;
+}
+
+async function ensureServer(userId?: string, workingDirectory?: string): Promise<{ client: OpenCodeHttpClient; url: string }> {
+  const key = openCodeSdkPoolKey(userId, workingDirectory);
   const serverEnv = buildConfiguredProcessEnvSync(
     undefined,
     process.env,
@@ -396,7 +402,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         detail: options.workingDirectory,
         verbose: true,
       });
-      const { client, url } = await ensureServer(options.userId);
+      const { client, url } = await ensureServer(options.userId, options.workingDirectory);
       stepTimingMark('server-ready');
       this.emitDiagnosticLog({
         message: 'OpenCode SDK server ready',

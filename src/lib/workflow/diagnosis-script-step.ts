@@ -321,7 +321,7 @@ async function collectLocaleLogText(roots: string[]): Promise<string> {
   const parts: string[] = [];
   const seen = new Set<string>();
   const walk = async (root: string, dir: string) => {
-    let entries: Awaited<ReturnType<typeof readdir>> = [];
+    let entries: import('node:fs').Dirent<string>[] = [];
     try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
       if (entry.isSymbolicLink()) continue;

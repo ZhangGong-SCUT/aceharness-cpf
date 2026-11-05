@@ -5,6 +5,8 @@
 
 import { EventEmitter } from 'events';
 import { executePrScript } from '@/lib/workflow/pr-script-step';
+import { ensurePrHeadCheckout, shouldCheckoutPrHead } from '@/lib/workflow/pr-checkout';
+import { resolveRunEngineDirectory } from '@/lib/workflow/run-engine-directory';
 import { executeDiagnosisScript } from '@/lib/workflow/diagnosis-script-step';
 import { randomUUID } from 'crypto';
 import { readFile, readdir, stat, mkdir, rm, writeFile, copyFile } from 'fs/promises';
@@ -6397,6 +6399,13 @@ try {
       }
 
       // Build context (now async)
+      if (shouldCheckoutPrHead(state.name, step.agent || '')) {
+        const checkoutDir = this.getWorkingDirectory();
+        if (checkoutDir) {
+          await ensurePrHeadCheckout({ workingDirectory: checkoutDir, globalContext: this.globalContext || '' });
+        }
+      }
+
       const conditionalPrScript = step.prScript === 'approved-apply' || step.prScript === 'approved-apply-audit';
       const scriptOnly = (!!step.prScript && !conditionalPrScript) || (!!step.diagnosisScript && step.diagnosisScript !== 'restore');
       const context = scriptOnly ? '' : await this.buildStepContext(step, state, config, requirements, extraContext);
@@ -7469,9 +7478,7 @@ try {
       agent.model = model;
     }
     const systemPrompt = roleConfig?.systemPrompt || `你是一个 ${step.role || 'assistant'} 角色的 AI 助手。`;
-    const workingDirectory = config.context?.projectRoot
-      ? this.resolveProjectRootPath(config.context.projectRoot)
-      : this.resolveProjectRootPath();
+    const workingDirectory = this.engineWorkingDirectory(config);
     const timeoutMs = (config.context?.timeoutMinutes || 60) * 60 * 1000;
 
     let currentProcessId = stepId || randomUUID();
@@ -8671,6 +8678,15 @@ try {
     return this.isolatedDir || this.currentProjectRoot || null;
   }
 
+  private engineWorkingDirectory(config?: { context?: { projectRoot?: string | null } }): string {
+    return resolveRunEngineDirectory({
+      isolatedDir: this.isolatedDir,
+      projectRoot: config?.context?.projectRoot,
+      personalDir: this._userPersonalDir,
+      workspaceRoot: getWorkspaceRoot(),
+    });
+  }
+
   private getOhosFlutterSdkPinPaths(): string[] {
     const paths: string[] = [];
     if (this.currentRunId) {
@@ -9243,9 +9259,7 @@ try {
         systemPrompt,
         model,
         {
-          workingDirectory: config.context?.projectRoot
-            ? this.resolveProjectRootPath(config.context.projectRoot)
-            : this.resolveProjectRootPath(),
+          workingDirectory: this.engineWorkingDirectory(config),
           timeoutMs: 60000,
           resumeSessionId: agentState?.sessionId || undefined,
           engineType: selection.engine,

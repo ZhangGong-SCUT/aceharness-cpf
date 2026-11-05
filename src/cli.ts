@@ -398,7 +398,7 @@ function resolveCliLocale(): Locale {
   return normalizeLocale(process.env.ACE_LOCALE || process.env.LANG || process.env.LC_ALL);
 }
 
-type CliCommand = '' | 'start' | 'reset' | 'help' | 'servive' | 'service' | 'update' | '__run-server' | '__daemon';
+type CliCommand = '' | 'start' | 'reset' | 'help' | 'servive' | 'service' | 'update' | 'doctor' | '__run-server' | '__daemon';
 
 function parseArgs(argv: string[]) {
   const args = argv.slice(2);

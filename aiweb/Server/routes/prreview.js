@@ -610,6 +610,7 @@ export function createPrReviewRouter(orchestrator) {
                     username: user.username,
                     email: user.email,
                     role: user.role,
+                    prScope: process.env.AIWEB_DEPLOYMENT === 'personal' ? 'self' : 'org',
                 },
             });
         } catch (err) {
@@ -777,9 +778,14 @@ export function createPrReviewRouter(orchestrator) {
         try {
             const isAdmin = user?.role === 'admin';
             const ownLogin = user && !degraded ? (_gitcodeLoginOfUser(user.username) || '') : '';
+            const personal = process.env.AIWEB_DEPLOYMENT === 'personal';
             const requestedAuthor = String(req.query.author || '').trim();
             let author = '';
-            if (req.query.scope === 'self') {
+            if (personal) {
+                if (!user || degraded) return res.status(503).json({ success: false, message: '当前无法验证账号身份，请稍后重试' });
+                if (!ownLogin) return res.status(422).json({ success: false, message: '当前账号尚未绑定 GitCode 身份，个人部署只能查看本人 PR' });
+                author = ownLogin;
+            } else if (req.query.scope === 'self') {
                 if (!user || degraded) return res.status(503).json({ success: false, message: '当前无法验证账号身份，请稍后重试' });
                 if (!ownLogin) return res.status(422).json({ success: false, message: '当前账号尚未绑定 GitCode 身份，无法筛选本人 PR' });
                 author = ownLogin;
@@ -812,8 +818,11 @@ export function createPrReviewRouter(orchestrator) {
             const pageAuthor = repoFilter && !isAdmin && !isPublicRepo ? (author || ownLogin) : author;
             const data = await getOrgPrPageCached({ page, perPage, state, search, repo: repoFilter, author: pageAuthor }, req.query.fresh === '1');
             // 私有项目的 PR 不能因为服务端令牌权限更高而泄露给普通平台用户；本人仍可查看自己的条目。
-            let prs = data.prs.filter((p) => isAdmin || p.visibilityReason === 'public'
-                || (ownLogin && p.author.toLowerCase() === ownLogin.toLowerCase()));
+            let prs = data.prs.filter((p) => {
+                if (personal) return Boolean(ownLogin && p.author.toLowerCase() === ownLogin.toLowerCase());
+                return isAdmin || p.visibilityReason === 'public'
+                    || (ownLogin && p.author.toLowerCase() === ownLogin.toLowerCase());
+            });
             if (!degraded) {
                 // 标注每条 PR 的监控状态：匹配当前用户名下的 run（仓库+编号双键，防跨仓同号误标）
                 const runs = await listPrReviewRuns(token, 1, 100);
@@ -841,7 +850,7 @@ export function createPrReviewRouter(orchestrator) {
             }
             for (const pr of prs) if (pr.repoFull && !repos.some((name) => name.toLowerCase() === pr.repoFull.toLowerCase())) repos.push(pr.repoFull);
             res.json({ success: true, prs, repo: 'CPF-Flutter', repos, author,
-                identitySource: author ? 'self' : 'organization', degraded,
+                identitySource: personal || author ? 'self' : 'organization', degraded,
                 page: data.page, perPage: data.perPage, hasMore: data.hasMore,
                 searchMode: repoFilter ? 'current-page' : 'organization' });
         } catch (err) {

@@ -39,9 +39,25 @@ const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const ALLOW_UNVERIFIED_ARTIFACT_READ = process.env.ISSUEANALYSIS_ALLOW_UNVERIFIED_ARTIFACT_READ === '1';
 let _degradedWarned = false;
 
-/** 工作目录 outputs（runId 形如 run-1789523871620-38f6bc75，目录名 = runId 本身） */
+/** 工作目录 outputs。优先用 run 自己记下的 workingDirectory，而不是家目录下同名空目录。 */
+function readRecordedWorkingDirectory(runId) {
+    try {
+        const yaml = readFileSync(join(homedir(), '.aceharness', 'runs', runId, 'state.yaml'), 'utf8');
+        const match = /^workingDirectory:\s*(\S+)\s*$/m.exec(yaml);
+        return match ? match[1] : '';
+    } catch {
+        return '';
+    }
+}
+
 function workOutputsDir(runId) {
-    return join(homedir(), runId, 'outputs');
+    const recorded = readRecordedWorkingDirectory(runId);
+    const candidates = [
+        recorded ? join(recorded, 'outputs') : '',
+        join(homedir(), '.aceharness', 'run-workspaces', runId, 'outputs'),
+        join(homedir(), runId, 'outputs'),
+    ].filter(Boolean);
+    return candidates.find((dir) => existsSync(dir)) || candidates[0];
 }
 
 /** 归档目录 outputs */
@@ -60,14 +76,33 @@ function trustRootRaw() {
         : homedir();
 }
 
+function openedFdPath(fd) {
+    const candidates = process.platform === 'darwin'
+        ? [`/dev/fd/${fd}`]
+        : [`/proc/self/fd/${fd}`, `/dev/fd/${fd}`];
+    for (const candidate of candidates) {
+        try { return readlinkSync(candidate); } catch { /* macOS 的 /dev/fd 往往不是符号链接 */ }
+        try { return realpathSync(candidate); } catch { /* 这个平台没有这条 fd 路径 */ }
+    }
+    return null;
+}
+
 /**
  * E01：解析产物目录的真实路径，要求其位于服务端可信根内，且从可信根到该目录的
  * 每一级组件都是真实目录（lstat 逐级校验，任何一级是符号链接即拒绝）。
  * 这样 outputs（或 run 目录、.aceharness 链路上的中间目录）被替换成外部链接时会被拒绝，
  * 而不是把外部目标当作新的可信根。返回 null 表示不可信，由调用方拒绝读取。
  */
-function trustedRealBase(baseDir) {
-    const rawRoot = trustRootRaw();
+function trustedRealBase(baseDir, extraRoots = []) {
+    const roots = [trustRootRaw(), ...extraRoots].filter(Boolean);
+    for (const rawRoot of roots) {
+        const found = trustedRealBaseUnder(rawRoot, baseDir);
+        if (found) return found;
+    }
+    return null;
+}
+
+function trustedRealBaseUnder(rawRoot, baseDir) {
     const target = resolve(baseDir);
     const rel = relative(resolve(rawRoot), target);
     if (rel.startsWith('..') || isAbsolute(rel)) return null;
@@ -193,13 +228,18 @@ export function listRunArtifacts(runId) {
  * @param {string} rel - 目录内相对路径
  * @returns {{ buffer: Buffer, name: string, ext: string }}
  */
-function readWithinTrustedBase(baseDir, rel) {
+function readWithinTrustedBase(baseDir, rel, extraRoots = []) {
     if (typeof rel !== 'string' || rel.includes('\0')) {
         throw new Error('ref 不合法');
     }
+    if (!existsSync(baseDir)) {
+        const err = new Error('文件不存在');
+        err.code = 'ENOENT';
+        throw err;
+    }
     // E01：可信根由服务端确定（家目录或显式配置），且 base 链路上的每一级都必须是真实目录。
-    // outputs / run 目录本身被替换成指向外部的链接时，这里直接判为不可信，不再把外部目录当可信根。
-    const realBase = trustedRealBase(baseDir);
+    // run 自己写入 state.yaml 的 workingDirectory 可以作为附加可信根，产物不在家目录下也能读。
+    const realBase = trustedRealBase(baseDir, extraRoots);
     if (!realBase) {
         throw new Error('路径不合法：产物目录不在可信根内');
     }
@@ -229,8 +269,7 @@ function readWithinTrustedBase(baseDir, rel) {
         if (!st.isFile()) {
             throw new Error('路径不合法：不是普通文件');
         }
-        let actualPath = null;
-        try { actualPath = readlinkSync(`/proc/self/fd/${fd}`); } catch { actualPath = null; }
+        let actualPath = openedFdPath(fd);
         if (actualPath === null) {
             // D02：fd 目标归属校验不可用（平台无 /proc 或查询失败）——默认拒绝，不静默降级。
             if (!ALLOW_UNVERIFIED_ARTIFACT_READ) {
@@ -248,7 +287,9 @@ function readWithinTrustedBase(baseDir, rel) {
             const normalized = actualPath.endsWith(' (deleted)')
                 ? actualPath.slice(0, -' (deleted)'.length)
                 : actualPath;
-            if (!(normalized === realBase || normalized.startsWith(realBase + sep))) {
+            let comparable = normalized;
+            try { comparable = realpathSync(normalized); } catch { /* 已删除文件无法再解析，沿用内核记录的路径 */ }
+            if (!(comparable === realFull || comparable === realBase || comparable.startsWith(realBase + sep))) {
                 throw new Error('路径不合法：打开对象不在产物目录内');
             }
         }
@@ -288,7 +329,10 @@ export function readRunArtifact(runId, ref) {
     }
     let baseDir;
     let rel;
+    let extraRoots = [];
     if (ref.startsWith('work/')) {
+        const recorded = readRecordedWorkingDirectory(runId);
+        if (recorded) extraRoots = [recorded];
         baseDir = workOutputsDir(runId);
         rel = ref.slice(5);
     } else if (ref.startsWith('arch/')) {
@@ -298,7 +342,7 @@ export function readRunArtifact(runId, ref) {
         throw new Error('ref 必须以 work/ 或 arch/ 开头');
     }
 
-    const { buffer, name, ext } = readWithinTrustedBase(baseDir, rel);
+    const { buffer, name, ext } = readWithinTrustedBase(baseDir, rel, extraRoots);
     if (IMAGE_MIME[ext]) {
         return { kind: 'image', buffer, contentType: IMAGE_MIME[ext], name };
     }

@@ -153,6 +153,7 @@ if (!fs.existsSync(envFile)) {
 }
 loadEnvFile(envFile);
 
+if (!process.env.AIWEB_DEPLOYMENT) process.env.AIWEB_DEPLOYMENT = 'personal';
 const acePort = readAcePort();
 const aceUrl = `http://127.0.0.1:${acePort}`;
 if (!process.env.ACEHARNESS_API_BASE_URL) process.env.ACEHARNESS_API_BASE_URL = aceUrl;

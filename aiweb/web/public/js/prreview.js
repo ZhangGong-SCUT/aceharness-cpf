@@ -236,9 +236,13 @@ function setPrOvSearch(q) {
   _prOvSearchTimer = setTimeout(() => loadGitcodePrs(), 300);
 }
 
-/* admin 视图切换：全部用户 ↔ 只看自己 */
+function _personalPrScope() {
+  return getAuth()?.user?.prScope === 'self';
+}
+
+/* admin 视图切换：全部用户 ↔ 只看自己。个人部署固定只看自己。 */
 function toggleAdminScope() {
-  if (!_prOvIsAdmin) return;
+  if (_personalPrScope() || !_prOvIsAdmin) return;
   _prOvScope = _prOvScope === 'self' ? '' : 'self';
   _prOvPage = 1;
   loadGitcodePrs(true, _prOvScope);
@@ -248,7 +252,7 @@ function toggleAdminScope() {
 function _syncAdminScopeBtn() {
   const btn = document.getElementById('pr-admin-scope-btn');
   if (!btn) return;
-  const show = _prOvIsAdmin;
+  const show = _prOvIsAdmin && !_personalPrScope();
   btn.style.display = show ? '' : 'none';
   btn.textContent = _prOvScope === 'self' ? '👤 只看自己' : '🌐 组织全部 PR';
   btn.title = _prOvScope === 'self' ? '切换回 CPF-Flutter 组织全部 PR' : '切换为只看自己绑定身份的 PR';
@@ -397,7 +401,8 @@ async function clearGitcodeToken() {
 
 async function loadGitcodePrs(fresh = false, scope) {
   if (!getAuth()) return;
-  if (scope !== undefined) _prOvScope = scope;
+  if (_personalPrScope()) _prOvScope = 'self';
+  else if (scope !== undefined) _prOvScope = scope;
   if (_prOvLoading) {
     _prOvReloadPending = true;
     _prOvPendingFresh = _prOvPendingFresh || fresh;
@@ -409,7 +414,7 @@ async function loadGitcodePrs(fresh = false, scope) {
   const list = $('pr-ov-list');
   // 首次加载显示提示；轮询/刷新时静默（避免闪烁），失败时才更新提示
   if (!list.children.length || !list.querySelector('.pr-ov-row')) {
-    list.innerHTML = '<div class="pr-ov-loading">正在加载 CPF-Flutter 组织 PR…</div>';
+    list.innerHTML = `<div class="pr-ov-loading">正在加载 ${_personalPrScope() ? '本人的' : 'CPF-Flutter 组织'} PR…</div>`;
   }
   try {
     // 组织总览默认跨作者；管理员可切换到自己的绑定身份。服务端按页读取，30 秒轮询复用短缓存。
@@ -437,11 +442,12 @@ async function loadGitcodePrs(fresh = false, scope) {
     }
     if (lastErr) throw lastErr;
     if (r.status === 422) {
-      // 管理员切换到本人视图时若未绑定身份，仍可回到组织总览。
       _prOvAuthor = '';
       _prOvIdentitySource = 'self';
       $('pr-ov-pagination').style.display = 'none';
-      list.innerHTML = `
+      list.innerHTML = _personalPrScope()
+        ? `<div class="pr-ov-loading" style="color:#d8b06a">个人部署只能查看本人 PR。当前账号尚未绑定 GitCode 身份，请先配置 GitCode 令牌。</div>`
+        : `
         <div class="pr-ov-loading" style="color:#d8b06a">
           🔗 当前账号尚未绑定 GitCode 身份，无法筛选本人 PR。CPF-Flutter 组织总览仍可查看；启动本人 PR 监控前，请先配置 GitCode 令牌或联系管理员配置邮箱映射。
         </div>`;
