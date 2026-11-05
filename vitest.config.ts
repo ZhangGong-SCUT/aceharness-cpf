@@ -15,7 +15,7 @@ export default defineConfig({
     globals: true,
     include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
     exclude: ['tests/ai-integration/**', 'node_modules', '.next', 'dist', 'dist-build'],
-    setupFiles: ['tests/setup/component-test-setup.ts'],
+    setupFiles: ['tests/setup/component-test-setup.ts', 'tests/setup/disk-snapshot-off.ts'],
     testTimeout: 30000,
   },
 });
