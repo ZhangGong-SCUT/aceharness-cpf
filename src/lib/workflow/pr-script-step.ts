@@ -11,6 +11,7 @@ import { markPrInstructionComplete } from '@/lib/workflow/pr-push-recovery';
 import { archivePrRunArtifacts, snapshotPrArtifact } from '@/lib/workflow/pr-artifacts';
 
 import { executeApprovedApply } from './pr-approved-apply';
+import { isSharedWorkflowTemplate } from '@/lib/workflow/template-isolation';
 
 const execute = promisify(execFile);
 export type PrScript = 'identity' | 'gates' | 'route' | 'review' | 'park' | 'ready' | 'human' | 'finish' | 'push-audit' | 'approved-apply' | 'approved-apply-audit';
@@ -20,6 +21,9 @@ export async function executePrScript(input: {
   operation: PrScript; stateName: string; workingDirectory: string;
   runDirectory: string; globalContext: string; userId?: string; signal?: AbortSignal;
 }) {
+  if (isSharedWorkflowTemplate(input.workingDirectory)) {
+    throw new Error('工作目录是共享模板 _template，拒绝写入。本次 run 必须使用自己的隔离目录。');
+  }
   const out = resolve(input.workingDirectory, 'outputs');
   await mkdir(out, { recursive: true });
   const stateFile = resolve(input.runDirectory, 'state.yaml');

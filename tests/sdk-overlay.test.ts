@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { createSdkOverlay, overlayFlutterBinForRun } from '../src/lib/workflow/sdk-overlay';
 
 function makeSdkTree() {
@@ -56,6 +56,71 @@ describe('createSdkOverlay（R08：run 级 SDK overlay）', () => {
 
   it('SDK 根目录不存在时抛错', () => {
     expect(() => createSdkOverlay('/no/such/sdk', mkdtempSync(join(tmpdir(), 'ov-')))).toThrow('不存在');
+  });
+
+  it('跳过指向 SDK 外面的 .agent-skills 链接，Flutter 自己的越界链接仍然拒绝', () => {
+    const src = makeSdkTree();
+    const skill = join(dirname(src), `harness-${basename(src)}`, 'cpf-ohos-issue-analysis');
+    const linkDir = join(src, '.agent-skills', 'private');
+    mkdirSync(skill, { recursive: true });
+    mkdirSync(linkDir, { recursive: true });
+    writeFileSync(join(skill, 'SKILL.md'), 'skill');
+    symlinkSync(relative(linkDir, skill), join(linkDir, 'cpf-ohos-issue-analysis'));
+    const overlayDir = mkdtempSync(join(tmpdir(), 'sdk-overlay-skills-'));
+    const result = createSdkOverlay(src, overlayDir);
+    expect(result.flutterBin).toBe(join(result.sdkLink, 'bin', 'flutter'));
+    expect(existsSync(join(result.sdkLink, '.agent-skills'))).toBe(false);
+    expect(existsSync(join(linkDir, 'cpf-ohos-issue-analysis'))).toBe(true);
+
+    symlinkSync(skill, join(src, 'bin', 'outside-skill'));
+    const badOverlay = mkdtempSync(join(tmpdir(), 'sdk-overlay-bad-'));
+    expect(() => createSdkOverlay(src, badOverlay)).toThrow('越出');
+    rmSync(src, { recursive: true, force: true });
+    rmSync(overlayDir, { recursive: true, force: true });
+    rmSync(badOverlay, { recursive: true, force: true });
+    rmSync(dirname(skill), { recursive: true, force: true });
+  });
+
+  it('跳过越界的 AGENTS.md 和 Xcode 预编译链接，其他越界链接仍然拒绝', () => {
+    const src = makeSdkTree();
+    const outside = dirname(src);
+    const guidance = join(outside, `guidance-${basename(src)}`, 'AGENTS.md');
+    const xcodeSdk = join(outside, `xcode-${basename(src)}`, 'Xcode.app', 'Contents', 'Developer', 'Platforms', 'MacOSX.platform');
+    const stray = join(outside, `stray-${basename(src)}`);
+    mkdirSync(dirname(guidance), { recursive: true });
+    mkdirSync(xcodeSdk, { recursive: true });
+    mkdirSync(stray, { recursive: true });
+    writeFileSync(guidance, 'guidance');
+    writeFileSync(join(xcodeSdk, 'SDKSettings.json'), '{}');
+    writeFileSync(join(stray, 'lib'), 'x');
+    writeFileSync(join(src, 'packages', 'flutter', 'AGENTS.md'), 'flutter-own\n');
+
+    const ci = join(src, 'ci');
+    const prebuilts = join(src, 'engine', 'src', 'flutter', 'prebuilts', 'SDKs');
+    mkdirSync(ci, { recursive: true });
+    mkdirSync(prebuilts, { recursive: true });
+    symlinkSync(relative(ci, guidance), join(ci, 'AGENTS.md'));
+    symlinkSync(xcodeSdk, join(prebuilts, 'MacOSX.sdk'));
+
+    const overlayDir = mkdtempSync(join(tmpdir(), 'sdk-overlay-agents-'));
+    const result = createSdkOverlay(src, overlayDir);
+    expect(result.flutterBin).toBe(join(result.sdkLink, 'bin', 'flutter'));
+    expect(existsSync(join(result.sdkLink, 'ci', 'AGENTS.md'))).toBe(false);
+    expect(existsSync(join(result.sdkLink, 'engine', 'src', 'flutter', 'prebuilts', 'SDKs', 'MacOSX.sdk'))).toBe(false);
+    expect(readFileSync(join(result.sdkLink, 'packages', 'flutter', 'AGENTS.md'), 'utf8')).toBe('flutter-own\n');
+    expect(existsSync(join(ci, 'AGENTS.md'))).toBe(true);
+    expect(existsSync(join(prebuilts, 'MacOSX.sdk'))).toBe(true);
+
+    symlinkSync(stray, join(prebuilts, 'not-xcode'));
+    const badOverlay = mkdtempSync(join(tmpdir(), 'sdk-overlay-prebuilt-bad-'));
+    expect(() => createSdkOverlay(src, badOverlay)).toThrow('越出');
+
+    rmSync(src, { recursive: true, force: true });
+    rmSync(overlayDir, { recursive: true, force: true });
+    rmSync(badOverlay, { recursive: true, force: true });
+    rmSync(dirname(guidance), { recursive: true, force: true });
+    rmSync(join(outside, `xcode-${basename(src)}`), { recursive: true, force: true });
+    rmSync(stray, { recursive: true, force: true });
   });
 });
 

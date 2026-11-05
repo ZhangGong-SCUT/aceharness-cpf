@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { classifyOhosPrGates, commentBelongsToPull, isFlakyTestFailure, routeClassifyState } from '../skills/gitcode-pr-review/scripts/ohos-pr-gates.mjs';
+import { classifyOhosPrGates, commentBelongsToPull, hasAssociatedIssue, isFlakyTestFailure, routeClassifyState } from '../skills/gitcode-pr-review/scripts/ohos-pr-gates.mjs';
 import { findQuoteCandidates, parsePatchAddedLines } from '../skills/gitcode-pr-review/scripts/scan-same-rule-defects.mjs';
 import { decideGitcodeWebhookRun } from '@/lib/workflow/pr-monitor-policy';
 import { parseGitcodeWebhookPayload } from '@/lib/workflow/pr-review-input';
@@ -735,6 +735,30 @@ describe('classifyOhosPrGates', () => {
     });
     expect(result.phase).toBe('green');
     expect(routeClassifyState('分流触发', result.phase).next_state).toBe('就绪');
+  });
+
+  test('GitCode PR issue_url is not an associated issue, and a rejected start build is not still waiting', () => {
+    const pull = {
+      title: 'widget tap path',
+      body: 'no linked issue here',
+      issue_url: 'https://gitcode.com/api/v5/repos/CPF-Flutter/flutter_flutter/pulls/2279/issues',
+    };
+    expect(hasAssociatedIssue(pull, [])).toBe(false);
+    expect(hasAssociatedIssue({ issue_url: 'https://gitcode.com/openharmony/flutter_flutter/issues/88' }, [])).toBe(true);
+    const result = classifyOhosPrGates({
+      labels: ['dco检查成功'],
+      comments: [
+        { author: 'openharmony_ci', body: '感谢提交 Pull Requests！', created_at: '2026-11-05T01:00:00Z' },
+        { author: 'z2036709353', body: 'start build', created_at: '2026-11-05T01:05:00Z' },
+        { author: 'openharmony_ci', body: '该提交没有关联任何Issue。Please associate the PR with one Issue before start build.', created_at: '2026-11-05T01:06:00Z' },
+      ],
+      pull,
+      state: 'open',
+      own_pr: true,
+    });
+    expect(result.issue_associated).toBe(false);
+    expect(result.phase).toBe('blocked_no_issue');
+    expect(result.summary).toContain('关联 Issue');
   });
 
   test('missing issue association after CI rejection blocks start build', () => {

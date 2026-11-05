@@ -1,10 +1,17 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { commentBelongsToPull, commentTimeLE, selectActionableReviews } from './ohos-pr-gates.mjs';
 import { gitcodeRead, gitcodeReadPages } from './gitcode-read.mjs';
 import { resolveGitcodeToken } from './gitcode-token.mjs';
+
+export function assertReviewOutputDir(outDir) {
+  const outputParent = basename(resolve(outDir, '..'));
+  if (outputParent === '_template' || basename(resolve(outDir)) === '_template') {
+    throw new Error('拒绝把检视产物写入共享模板 _template。本次 run 必须使用自己的隔离目录。');
+  }
+}
 
 function arg(name, fallback = '') {
   const index = process.argv.indexOf(name);
@@ -185,6 +192,7 @@ async function main() {
     fetched_at: new Date().toISOString(),
   };
 
+  assertReviewOutputDir(outDir);
   await mkdir(outDir, { recursive: true });
   await writeFile(resolve(outDir, 'ai-review-comments.json'), `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
   await writeFile(resolve(outDir, 'ai-review.md'), `${lines.join('\n')}\n`, 'utf8');

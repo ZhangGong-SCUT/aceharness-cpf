@@ -10,7 +10,8 @@ import { resolveRunEngineDirectory } from '@/lib/workflow/run-engine-directory';
 import { executeDiagnosisScript } from '@/lib/workflow/diagnosis-script-step';
 import { randomUUID } from 'crypto';
 import { readFile, readdir, stat, mkdir, rm, writeFile, copyFile } from 'fs/promises';
-import { resolve, join, dirname, isAbsolute } from 'path';
+import { resolve, join, dirname, isAbsolute, relative } from 'path';
+import { shouldCopyWorkflowTemplateEntry } from '@/lib/workflow/template-isolation';
 import { existsSync, readFileSync } from 'fs';
 import { createDirectoryLinkSync } from '@/lib/core/directory-links';
 import { cpus } from 'os';
@@ -1173,9 +1174,12 @@ export class StateMachineWorkflowManager extends EventEmitter {
         const srcPath = join(cur.src, entry.name);
         const dstPath = join(cur.dst, entry.name);
         if (entry.isDirectory()) {
+          // 模板 outputs 是上一次 run 的产物，不能带进新的 PR。
+          if (relative(srcDir, srcPath) === 'outputs') continue;
           stack.push({ src: srcPath, dst: dstPath });
           continue;
         }
+        if (!shouldCopyWorkflowTemplateEntry(srcDir, srcPath)) continue;
         let size = 0;
         try { size = (await stat(srcPath)).size; } catch { /* keep zero */ }
         files.push({ src: srcPath, dst: dstPath, size });
@@ -1803,28 +1807,32 @@ export class StateMachineWorkflowManager extends EventEmitter {
         // Resolve projectRoot relative to personalDir or runtime root, not install cwd
         const srcDir = this.resolveProjectRootPath(workflowConfig.context.projectRoot);
         if (this.shouldStop) return;
-        if (!existsSync(srcDir)) {
-          this.emit('log', { message: `项目目录不存在: ${srcDir}，跳过目录隔离` });
-        } else {
-          const isoDir = resolve(this._userPersonalDir || join(getWorkspaceRoot(), 'run-workspaces'), runId);
-          try {
-            await mkdir(isoDir, { recursive: true });
-            // Persist target working directory early so cleanup can find it
-            this.isolatedDir = isoDir;
-            this.currentProjectRoot = isoDir;
-            await this.persistState();
+        const isoDir = resolve(this._userPersonalDir || join(getWorkspaceRoot(), 'run-workspaces'), runId);
+        if (resolve(isoDir) === resolve(srcDir)) {
+          throw new Error('隔离目录与共享模板相同，拒绝在模板目录里运行');
+        }
+        try {
+          await mkdir(isoDir, { recursive: true });
+          // 先把工作目录改到本次 run，再复制。模板不存在或复制失败也不回退到 _template。
+          this.isolatedDir = isoDir;
+          this.currentProjectRoot = isoDir;
+          workflowConfig.context.projectRoot = isoDir;
+          await this.persistState();
+          if (!existsSync(srcDir)) {
+            this.emit('log', { message: `项目模板不存在: ${srcDir}，使用空的隔离目录，不会写入共享模板` });
+          } else {
             await this.copyDirectoryWithProgress(srcDir, isoDir, runId, reportPreparingProgress);
             if (this.shouldStop) {
-              // Stopped during copy — clean up incomplete dir
               await rm(isoDir, { recursive: true, force: true }).catch(() => {});
               return;
             }
-            workflowConfig.context.projectRoot = isoDir;
-          } catch (e: any) {
-            if (this.shouldStop) return;
-            this.isolatedDir = null;
-            this.emit('log', { message: `目录隔离复制失败: ${e.message}，使用原目录` });
           }
+        } catch (e: any) {
+          if (this.shouldStop) return;
+          this.isolatedDir = isoDir;
+          this.currentProjectRoot = isoDir;
+          workflowConfig.context.projectRoot = isoDir;
+          this.emit('log', { message: `目录隔离复制失败: ${e.message}，继续使用隔离目录，不会回退到共享模板` });
         }
       }
 

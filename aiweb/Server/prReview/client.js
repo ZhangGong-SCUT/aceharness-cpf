@@ -20,6 +20,7 @@ import { httpRequest, ACEHARNESS_API_BASE_URL } from '../issueAnalysis/aceHarnes
 import config from '../library/config.js';
 import { createLogger } from '../library/logger.js';
 import { readExecutionEvidence } from './executionEvidence.js';
+import { reviewArtifactMatchesPr } from './review-match.js';
 import { readPushedPatch } from './pushedPatch.js';
 import { probeGitcodeCapabilities, saveCapabilities, clearCapabilitiesForLogin } from './capabilities.js';
 import { createHash } from 'node:crypto';
@@ -726,6 +727,7 @@ export function findSiblingReviewSource(sibling, targetMeta = {}, { preparePatch
             let suggestion = null;
             try { review = commentsRaw ? JSON.parse(commentsRaw) : null; } catch { /* 忽略损坏的工件 */ }
             try { suggestion = suggestionRaw ? JSON.parse(suggestionRaw) : null; } catch { /* 忽略损坏的工件 */ }
+            if (review && !reviewArtifactMatchesPr(review, { owner: meta.owner, repo: meta.repo, number: expectedNumber })) continue;
 
             const comments = (Array.isArray(review?.comments) ? review.comments : [])
                 .filter((item) => item && !item.stale && String(item.body || '').trim());
@@ -1129,6 +1131,8 @@ export async function getReviewFixData(token, runId) {
     let reviewSourceRunId = null;
     let approvedComments = [];
     const context = _readRunGlobalContext(runId);
+    const prMeta = _parseGlobalContextMeta(context);
+    if (rawParsed && !reviewArtifactMatchesPr(rawParsed, prMeta)) rawParsed = null;
     const sourceId = /^\s*user_apply_patch:\s*(run-[A-Za-z0-9_-]+)\s*$/m.exec(context)?.[1];
     const normalize = p => String(p || '').replace(/^index [a-f0-9]+\.\.[a-f0-9]+/gm, 'index HASH..HASH').trimEnd();
     const approved = rawParsed?.approved_patch;
@@ -1214,7 +1218,6 @@ export async function getReviewFixData(token, runId) {
         return _classifyReviewComments([...(rawParsed.comments || []), ...staleMarked]);
     })();
 
-    const prMeta = _parseGlobalContextMeta(_readRunGlobalContext(runId));
     const siblingReview = _parseSiblingReviewContext(runId);
 
     // ── patch 三级来源：本 run fix.patch → PR 级持久化（历史 run 推送）→ GitCode 恢复 ──

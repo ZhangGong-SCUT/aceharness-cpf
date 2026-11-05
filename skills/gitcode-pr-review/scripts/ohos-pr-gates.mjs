@@ -484,7 +484,27 @@ export function isSubmitComment(item) {
 }
 
 export function isNeedIssueComment(item) {
-  return /未关联.*issue|必须关联.*issue|请关联.*issue|associated with an issue|associate.*issue/i.test(item.body || '');
+  return /未关联.*issue|没有关联.*issue|必须关联.*issue|请关联.*issue|associated with an issue|associate.*issue/i.test(item.body || '');
+}
+
+/** GitCode 的 PR 对象总会带 issue_url，指向 /pulls/{n}/issues，那不是已关联的 Issue。 */
+function isPullIssuesEndpoint(url) {
+  return /\/pulls\/\d+\/issues\/?(?:[?#].*)?$/i.test(String(url || '').trim());
+}
+
+/**
+ * CI 已经要求关联 Issue，且其后没有「门禁构建开始」。
+ * start build 已经评论过也不能当成还在等 CI：这次构建已被「未关联 Issue」拒绝。
+ */
+function issueAssociationBlocking(comments, issueOk) {
+  if (issueOk) return false;
+  let lastNeed = -1;
+  let lastGateStart = -1;
+  for (let i = 0; i < comments.length; i += 1) {
+    if (isNeedIssueComment(comments[i])) lastNeed = i;
+    if (isGateStartComment(comments[i])) lastGateStart = i;
+  }
+  return lastNeed !== -1 && lastNeed > lastGateStart;
 }
 
 export function extractReportUrl(text) {
@@ -492,8 +512,9 @@ export function extractReportUrl(text) {
   return match ? match[0] : '';
 }
 
-export function hasAssociatedIssue(pull, comments) {
-  if (pull?.issue || pull?.issue_id || pull?.issue_iid || pull?.issue_url) return true;
+export function hasAssociatedIssue(pull, _comments) {
+  if (pull?.issue || pull?.issue_id || pull?.issue_iid) return true;
+  if (pull?.issue_url && !isPullIssuesEndpoint(pull.issue_url)) return true;
   if (Array.isArray(pull?.issues) && pull.issues.length > 0) return true;
   if (Array.isArray(pull?.related_issues) && pull.related_issues.length > 0) return true;
   const blob = `${pull?.title || ''}\n${pull?.body || pull?.description || ''}`;
@@ -637,9 +658,9 @@ export function classifyOhosPrGates(input = {}) {
   } else if (!startBuildPosted && !welcome && !dcoOk && !staticFail && !compileFail && !testFail) {
     phase = 'running';
     summary = '还没有欢迎评论和 DCO 标签，挂起等 Webhook，不要抢先 start build';
-  } else if (!startBuildPosted && comments.some(isNeedIssueComment) && !issueOk) {
+  } else if (issueAssociationBlocking(comments, issueOk)) {
     phase = 'blocked_no_issue';
-    summary = 'CI 要求先关联 Issue，不能 start build';
+    summary = 'CI 要求先关联 Issue，这次 start build 已被拒绝，不能继续等门禁';
   } else if ((staticFail || compileFail || testFail) && attempts.gate_running_after_last_start) {
     phase = 'running';
     summary = '静态/编译/测试失败标签是旧结果，CI 已开始重跑，继续等';
