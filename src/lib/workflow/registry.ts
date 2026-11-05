@@ -154,6 +154,8 @@ class WorkflowRegistry extends EventEmitter {
         if (runId) {
           this.managerKeysByRunId.set(runId, managerKey);
         }
+        tagged.__runId = runId;
+        tagged.__ownerId = (manager as any)._createdBy || manager.getStatus()?.runOwnerId || manager.getStatus()?.createdBy;
         this.emit(evt, tagged);
         if (runId) {
           getWorkflowEventStore().append(runId, `workflow.${evt}`, {

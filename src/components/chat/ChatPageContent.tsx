@@ -25,7 +25,7 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogFooter, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
-import { agentApi, agoraApi, configApi, workflowApi, workspaceApi, type NotebookScope } from '@/lib/core/api';
+import { agentApi, agoraApi, configApi, workflowApi, workspaceApi, createTicketedEventSource, type NotebookScope } from '@/lib/core/api';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { buildNotebookFromConversation, buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat/notebook';
 import { useToast } from '@/components/ui/toast';
@@ -73,7 +73,6 @@ import { computeAdaptiveRecentWindow } from '@/lib/chat/message-window';
 import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assembly';
 import { cn } from '@/lib/core/utils';
 import { resolveWorkspaceLinkTarget } from '@/lib/workspace/link-target';
-import { createSafeEventSource } from '@/lib/core/safe-event-source';
 import {
   WORKFLOW_CLARIFICATION_FACTS_KIND,
   WORKFLOW_CLARIFICATION_GAPS_KIND,
@@ -988,7 +987,7 @@ async function runLightweightWorkflowCreationItem(input: {
     }
 
     return new Promise((resolve, reject) => {
-      const es = createSafeEventSource(`/api/chat/stream?id=${encodeURIComponent(startData.chatId)}`);
+      const es = createTicketedEventSource(`/api/chat/stream?id=${encodeURIComponent(startData.chatId)}`);
       let accumulated = '';
 
       es.addEventListener('delta', (event) => {

@@ -1,0 +1,19 @@
+# 真实样本（原样摘录，非改写）：PR2084 flutter_3.35.7-dev_flutter/20261016-1-00003
+# 来源：https://cidownload.openharmony.cn/Artifacts/flutter_3.35.7-dev_flutter/20261016-1-00003/log/build.log
+#       该地址是指针文件，正文指向 log/build.log.zip（实为未压缩 tar，成员名 ditribute_job_client）
+# 用途：锁定【构建成功 + 测试异步 + 日志噪声过滤】的解析行为。
+[2026/10/16 02:55:53.820 GMT+08:00] [INFO]  : [JobStatusPlugin] onStarted: j_gAB9Ch93 #1
+[2026/10/16 02:55:53.990 GMT+08:00] [INFO] [PRE_ENV:slave_create] : 该步骤开始执行
+[2026/10/16 02:55:53.995 GMT+08:00] [WARNING] [PRE_ENV:slave_create] : [slave] find empty runtime, location: PRE_ENV.slave_create
+[2026/10/16 02:55:55.719 GMT+08:00] [INFO] [PRE_ENV:slave_create] : [slave] create execution node cce-codeci-4e09919a91 ok, waiting for connection...
+[2026/10/16 02:56:19.529 GMT+08:00] [INFO] [PRE_ENV:slave_create] : [slave] Find available executor node:cce-codeci-4e09919a91
+[2026/10/16 02:57:53.056 GMT+08:00] 2026-10-16 02:57:53:     echo "[ERROR] $*" 1>&2
+[2026/10/16 02:56:40.924 GMT+08:00] 2026-10-16 02:56:40: [INFO]timeout 600s repo forall --ignore-missing -c 'git clean -fdx'
+[2026/10/16 02:57:53.054 GMT+08:00] 2026-10-16 02:57:53: has_test=true
+[2026/10/16 02:57:53.049 GMT+08:00] 2026-10-16 02:57:53: EcoTestModule=FLUTTER_FW_TEST_201
+[2026/10/16 02:57:53.055 GMT+08:00] 2026-10-16 02:57:53: testOnline=true
+[2026/10/16 03:13:57.071 GMT+08:00] 2026-10-16 03:13:56: > hvigor BUILD SUCCESSFUL in 12 s 181 ms 
+[2026/10/16 03:32:00.695 GMT+08:00] 2026-10-16 03:31:41: compilation Completed Successfully
+[2026/10/16 03:32:32.449 GMT+08:00] trigger_ecotest result 200 {"statusCode":1,"status":"Success","result":"Success","failReason":"调度系统执行成功,未出现异常","taskId":2298970,"blockId":""}
+[2026/10/16 03:32:32.449 GMT+08:00] trigger ecoTest result: {'statusCode': 1, 'status': 'Success', 'result': 'Success', 'failReason': '调度系统执行成功,未出现异常', 'taskId': 2298970, 'blockId': ''}
+[2026/10/16 03:32:40.073 GMT+08:00] Finished: SUCCESS

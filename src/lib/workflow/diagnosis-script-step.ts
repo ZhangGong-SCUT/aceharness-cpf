@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, writeFile, rename, cp, realpath, rm, readdir,
 import { existsSync, createReadStream } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { parse } from 'yaml';
 import { getInstallPath, getWorkspaceRoot } from '@/lib/core/app-paths';
@@ -317,6 +317,33 @@ async function stepResultText(archive: string, work: string, names: string[], st
   return '';
 }
 
+async function collectLocaleLogText(roots: string[]): Promise<string> {
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  const walk = async (root: string, dir: string) => {
+    let entries: Awaited<ReturnType<typeof readdir>> = [];
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        await walk(root, path);
+        continue;
+      }
+      if (!/hilog|logcat/i.test(entry.name)) continue;
+      const rel = relative(root, path);
+      if (seen.has(rel)) continue;
+      seen.add(rel);
+      const info = await stat(path).catch(() => null);
+      if (!info?.isFile() || info.size > 8_000_000) continue;
+      parts.push(await readFile(path, 'utf8').catch(() => ''));
+    }
+  };
+  for (const root of roots) await walk(root, root);
+  return parts.join('\n');
+}
+
 async function sha256File(file: string): Promise<string | null> {
   try { const hash = createHash('sha256'); for await (const chunk of createReadStream(file)) hash.update(chunk); return hash.digest('hex'); } catch { return null; }
 }
@@ -334,16 +361,161 @@ export async function inspectHarBuildProfile(file: string): Promise<{
   } catch { return null; }
 }
 
+/** 框架仓 patch 是否必须存在。只改了引擎仓时，空的 fix.patch 不适用，不能记成 missing。 */
+export function isPatchExpected(patchName: string, ownership: string, repoHasDiff: boolean, engineHasDiff: boolean): boolean {
+  if (ownership === 'business_code') return false;
+  if (patchName === 'fix-engine.patch') return ownership === 'mixed' || engineHasDiff;
+  if (repoHasDiff) return true;
+  if (engineHasDiff) return false;
+  return ownership !== '';
+}
+
+export interface LocaleJudgmentAssessment {
+  valid_ok: { L1: number; L2: number };
+  valid_bug: { L1: number; L2: number };
+  indeterminate: { L1: number; L2: number };
+  precondition_not_met: { L1: number; L2: number };
+  false_ok: { L1: number; L2: number };
+  executed_native_count: number | null;
+  saw_judgment: boolean;
+}
+
+/**
+ * 只把「native 列表已就绪且两边长度一致」计为 L1 OK。
+ * 长度 0 却打印 OK、或两个长度不相等却打印 OK，记入 false_ok，不进入 valid_ok。
+ * L2 在最近一次 expected 为 null 时打印的 OK 同样记入 false_ok。
+ */
+export function assessLocaleGoldenLog(text: string): LocaleJudgmentAssessment {
+  const result: LocaleJudgmentAssessment = {
+    valid_ok: { L1: 0, L2: 0 }, valid_bug: { L1: 0, L2: 0 },
+    indeterminate: { L1: 0, L2: 0 }, precondition_not_met: { L1: 0, L2: 0 },
+    false_ok: { L1: 0, L2: 0 }, executed_native_count: null, saw_judgment: false,
+  };
+  const noteCount = (n: number) => {
+    if (n >= 2) result.executed_native_count = Math.max(result.executed_native_count ?? 0, n);
+  };
+  let expected: string | null = null;
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    const expectedMatch = /expected MaterialApp locale from native list:\s*(\S+)/.exec(line);
+    if (expectedMatch) expected = expectedMatch[1];
+    if (/L1 INDETERMINATE\b/.test(line)) { result.indeterminate.L1++; result.saw_judgment = true; continue; }
+    if (/L1 PRECONDITION_NOT_MET\b/.test(line)) { result.precondition_not_met.L1++; result.saw_judgment = true; continue; }
+    if (/L2 INDETERMINATE\b/.test(line)) { result.indeterminate.L2++; result.saw_judgment = true; continue; }
+    if (/L2 PRECONDITION_NOT_MET\b/.test(line)) { result.precondition_not_met.L2++; result.saw_judgment = true; continue; }
+    const bug = /L1 BUG REPRODUCED:[^\n]*native has (\d+) preferred/.exec(line);
+    if (bug) { result.valid_bug.L1++; result.saw_judgment = true; noteCount(Number(bug[1])); continue; }
+    if (/L2 BUG REPRODUCED:/.test(line)) { result.valid_bug.L2++; result.saw_judgment = true; continue; }
+    const ok = /L1 OK:[^\n]*length \((\d+)\)[^\n]*length \((\d+)\)/.exec(line);
+    if (ok) {
+      result.saw_judgment = true;
+      const dispatcher = Number(ok[1]);
+      const native = Number(ok[2]);
+      if (native === 0 || dispatcher !== native) result.false_ok.L1++;
+      else if (native < 2) result.precondition_not_met.L1++;
+      else { result.valid_ok.L1++; noteCount(native); }
+      continue;
+    }
+    if (/L1 OK:/.test(line)) { result.valid_ok.L1++; result.saw_judgment = true; continue; }
+    if (/L2 OK:/.test(line)) {
+      result.saw_judgment = true;
+      if (expected === 'null') result.false_ok.L2++;
+      else result.valid_ok.L2++;
+    }
+  }
+  return result;
+}
+
+export function claimedOkMultiplier(text: string, level: 'L1' | 'L2'): number | null {
+  const match = new RegExp(`${level} OK\\s*[×x*]\\s*(\\d+)`, 'i').exec(text || '');
+  return match ? Number(match[1]) : null;
+}
+
+/** 冻结串里的语言个数与日志里实测个数不一致时留下 deviation。含「同长」的通过条件不因此降级。 */
+export function goldenFlagDeviation(frozen: string | null, executed: number | null): {
+  frozen_count: number; executed_count: number; compatible_with_pass_rule: boolean; approved_by: null;
+} | null {
+  const match = /native has (\d+) preferred languages/.exec(frozen || '');
+  if (!match || executed == null) return null;
+  const frozenCount = Number(match[1]);
+  if (frozenCount === executed) return null;
+  return {
+    frozen_count: frozenCount, executed_count: executed, approved_by: null,
+    compatible_with_pass_rule: /同长|列表长度一致/.test(frozen || ''),
+  };
+}
+
+export function resolveRootCauseSummary(own: string, inheritedSummary: string, inheritedFrom: string | null, fallbackText: string): {
+  text: string; provenance: { source_run_id: string | null; inherited: boolean };
+} {
+  const same = !!own && !!inheritedSummary && own.trim() === inheritedSummary.trim();
+  const inheritedBody = same || !own ? inheritedSummary : '';
+  if (inheritedBody && (inheritedFrom || same || !own)) {
+    const header = inheritedFrom
+      ? `[继承自 run ${inheritedFrom}，证据路径以该 run 归档为准]`
+      : '[继承自上一轮归档，证据路径以该次归档为准]';
+    const text = inheritedBody.startsWith(header) ? inheritedBody : `${header}\n\n${inheritedBody}`;
+    return { text, provenance: { source_run_id: inheritedFrom, inherited: true } };
+  }
+  if (own) return { text: own, provenance: { source_run_id: null, inherited: false } };
+  return { text: fallbackText || '', provenance: { source_run_id: null, inherited: false } };
+}
+
+export type EvidencePresence = 'local' | 'archive_only' | 'inherited' | 'broken';
+export function classifyEvidencePresence(flags: { work: boolean; archive: boolean; parent: boolean }): EvidencePresence {
+  if (flags.work) return 'local';
+  if (flags.archive) return 'archive_only';
+  if (flags.parent) return 'inherited';
+  return 'broken';
+}
+
+export function extractOutputRefs(text: string): string[] {
+  return [...new Set([...String(text || '').matchAll(/outputs\/([^\s`<>"'，；。！？、()（）\[\]{}]+\.[A-Za-z0-9_-]+)/g)].map((match) => match[1]))];
+}
+
+export function deviceSnapshotTransition(preflight: any, snapshot: any): {
+  blocked: boolean; transitions: Array<{ at: string; from: string; to: string; evidence_path: string }>;
+} {
+  const blocked = !!preflight && (preflight.runtime_validation === 'blocked_environment'
+    || (preflight.ohos_device_count === 0 && preflight.android_device_count === 0));
+  const devices = [...(Array.isArray(snapshot?.hdc_targets) ? snapshot.hdc_targets : []),
+    ...(Array.isArray(snapshot?.adb_devices) ? snapshot.adb_devices : [])]
+    .map((value: unknown) => String(value || '').trim()).filter(Boolean);
+  const transitions = blocked && devices.length && snapshot?.checked_at
+    ? [{ at: String(snapshot.checked_at), from: 'blocked_environment', to: 'device_available', evidence_path: 'outputs/device-snapshot.json' }]
+    : [];
+  return { blocked, transitions };
+}
+
+function verificationStatusFrom(conflicts: string[], verdict: unknown, flags: Record<string, string>): string {
+  const flagValues = Object.values(flags);
+  return conflicts.length ? 'evidence_conflict'
+    : verdict === 'pass' && flagValues.every((flag) => flag === 'true') ? 'verified'
+    : flagValues.includes('false') || ['fail', 'conditional_pass'].includes(String(verdict)) ? 'needs_runtime_validation'
+    : 'evidence_incomplete';
+}
+
 /** F06：报告与归档证据的矛盾检测（不阻断，产出告警供审计与评分参考） */
 export interface ConsistencyWarning { code: string; detail: string; }
 export function checkReportConsistency(input: {
   reportText: string;
   archiveNames: string[];
   verificationStatus: string;
+  preflightBlocked?: boolean;
+  environmentTransitions?: Array<{ at: string; from: string; to: string; evidence_path?: string }>;
+  measurementText?: string;
 }): ConsistencyWarning[] {
   const warnings: ConsistencyWarning[] = [];
   const { reportText, archiveNames, verificationStatus } = input;
-  if (!reportText.trim()) return warnings;
+  const pushEnvTransition = () => {
+    const measured = input.measurementText ?? reportText;
+    if (input.preflightBlocked && /(?<!未)(?:真机实测|实测确认|实测通过|真机[^\n]{0,8}实测)/.test(measured)
+      && !(input.environmentTransitions || []).length) {
+      warnings.push({ code: 'env_transition_unexplained',
+        detail: '预检时无可用设备，结论含「实测」，但没有 device-snapshot 或 environment_transitions 说明设备是后来接入的' });
+    }
+  };
+  if (!reportText.trim()) { pushEnvTransition(); return warnings; }
   // R03：只把"绝对性否认 Android 证据/执行"的句子判为矛盾。
   // 「本轮未重跑（复现阶段已覆盖）」这类带范围或复用限定的诚实表述不算矛盾——
   // 真实反例 #1941："未执行 Android/iOS 对照构建"（无限定），而归档存在 i1941_android_* 证据。
@@ -367,6 +539,7 @@ export function checkReportConsistency(input: {
     warnings.push({ code: 'verification_status_contradiction',
       detail: `报告声称已验证（verified），但运行级验证状态为 ${verificationStatus}` });
   }
+  pushEnvTransition();
   return warnings;
 }
 
@@ -397,6 +570,7 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
   const recordEntry = (entry: ArchiveEntry) => { archiveEntries.push(entry); };
 
   const repositories: any[] = [];
+  const patchTextByRepo: Record<string, string> = {};
   for (const name of ['repo', 'repo-engine']) {
     if (!existsSync(join(input.workingDirectory, name, '.git'))) continue;
     const repoDir = join(input.workingDirectory, name);
@@ -437,12 +611,10 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
         }
       }
       const patchPath = join(input.runDirectory, 'outputs', patchName);
-      // R04：无 patch 不一律是缺失——business_code 分流本就不改框架/引擎仓；
-      // framework_library 问题不要求引擎仓改动。归属未知时保持 missing（保守、不粉饰）。
+      patchTextByRepo[name] = patch;
+      // 先按当前仓是否有 diff 记账；两边都看完后再把「只改引擎仓」的空 fix.patch 改成 not_applicable。
       const ownership = String(root.problem_ownership || inherited?.problem_ownership || '');
-      const patchExpected = ownership === 'business_code'
-        ? false
-        : name === 'repo-engine' ? ownership === 'mixed' : ownership !== '';
+      const patchExpected = isPatchExpected(patchName, ownership, name === 'repo' && !!patch, name === 'repo-engine' && !!patch);
       recordEntry({
         name: patchName, role: name === 'repo' ? 'fix_patch' : 'fix_engine_patch',
         source_path: patch ? 'git-diff|workdir-outputs' : null,
@@ -459,6 +631,13 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
     }
     repositories.push(repoEntry);
   }
+  const ownership = String(root.problem_ownership || inherited?.problem_ownership || '');
+  const repoHasDiff = !!patchTextByRepo.repo;
+  const engineHasDiff = !!patchTextByRepo['repo-engine'];
+  for (const entry of archiveEntries) {
+    if ((entry.name !== 'fix.patch' && entry.name !== 'fix-engine.patch') || entry.status === 'failed' || entry.status === 'archived') continue;
+    entry.status = isPatchExpected(entry.name, ownership, repoHasDiff, engineHasDiff) ? 'missing' : 'not_applicable';
+  }
   const demoCandidate = reproduction.demo_path || inherited?.demo_path || join(input.workingDirectory, 'demo');
   const demoPath = resolve(input.workingDirectory, demoCandidate);
   const within = demoPath.startsWith(resolve(input.workingDirectory) + sep);
@@ -472,12 +651,7 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
     engine_aligned: tri(verification.engine_aligned),
     bug_fixed: tri(verification.bug_fixed),
   };
-  const flagValues = Object.values(verificationFlags);
-  const verificationStatus =
-    verificationC.conflicts.length ? 'evidence_conflict' :
-    verification.verdict === 'pass' && flagValues.every((f) => f === 'true') ? 'verified'
-    : flagValues.includes('false') || ['fail', 'conditional_pass'].includes(String(verification.verdict)) ? 'needs_runtime_validation'
-    : 'evidence_incomplete';
+  let verificationStatus = verificationStatusFrom(verificationC.conflicts, verification.verdict, verificationFlags);
 
   // F06 报告正文提前计算：R04 引用驱动归档与 R03 一致性检查都要用它。
   // 归档 md 可能只是摘要 stub，完整报告在 step-logs(outputRef)；对两者取并集。
@@ -491,6 +665,7 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
     if (reportParts.length) break;
   }
   const reportText = reportParts.join('\n');
+  const archiveOnlyEvidence: string[] = [];
 
   // Archive the complete outputs tree, with no extension whitelist. Explicit refs are required.
   if (persist) {
@@ -510,6 +685,9 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
       try {
         if (!safeName(name) || generated.has(name)) throw new Error('非法或自引用证据路径');
         const source = existsSync(src) ? src : dst;
+        if (!existsSync(src) && existsSync(dst) && /hilog|logcat|device-snapshot/i.test(name) && !name.startsWith('step-logs/')) {
+          archiveOnlyEvidence.push(name);
+        }
         await withinRoot(source === src ? workOutputs : archiveOutputs, source);
         const info = await stat(source);
         if (!info.isFile()) throw new Error('证据引用必须指向普通文件');
@@ -581,16 +759,90 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
         status: 'failed', bytes: null, sha256: null, error: String(error?.message || error).slice(0, 200) });
     }
   }
+  const localeLog = await collectLocaleLogText([
+    join(input.workingDirectory, 'outputs'), join(input.runDirectory, 'outputs')]);
+  const localeJudgments = assessLocaleGoldenLog(localeLog);
+  let verificationFlagBasis: 'model' | 'measured' | 'unsupported' = 'model';
+  if (verificationFlags.issue_golden_flag_met === 'true' && localeJudgments.saw_judgment
+    && localeJudgments.valid_ok.L1 + localeJudgments.valid_ok.L2 === 0) {
+    verificationFlags.issue_golden_flag_met = 'unknown';
+    verificationFlagBasis = 'unsupported';
+  } else if (localeJudgments.valid_ok.L1 + localeJudgments.valid_ok.L2 > 0) {
+    verificationFlagBasis = 'measured';
+  }
+  verificationStatus = verificationStatusFrom(verificationC.conflicts, verification.verdict, verificationFlags);
+
+  const parentId = typeof inherited?.parent_run_id === 'string' ? inherited.parent_run_id : '';
+  const ownSummary = String(root.root_cause_summary || root.summary || '');
+  const inheritedSummary = String(inherited?.root_cause_summary || '');
+  const resolvedSummary = resolveRootCauseSummary(ownSummary, inheritedSummary, /^run-[A-Za-z0-9_-]{4,80}$/.test(parentId) ? parentId : null, rootC.text);
+  const goldenDeviation = goldenFlagDeviation(golden || null, localeJudgments.executed_native_count);
+  const repoState = {
+    checked_at: new Date().toISOString(),
+    repos: (['repo', 'repo-engine'] as const).filter((name) => name in patchTextByRepo || existsSync(join(input.workingDirectory, name, '.git'))).map((name) => {
+      const patch = patchTextByRepo[name] || '';
+      const files = [...patch.matchAll(/^diff --git /gm)].length;
+      return { name, clean: files === 0, files };
+    }),
+  };
+
+  const preflightData = await optionalJson(join(input.runDirectory, 'outputs', 'diagnosis-preflight.json'))
+    || await optionalJson(join(input.workingDirectory, 'outputs', 'diagnosis-preflight.json'))
+    || (/^run-[A-Za-z0-9_-]{4,80}$/.test(parentId)
+      ? await optionalJson(join(getWorkspaceRoot(), 'runs', parentId, 'outputs', 'diagnosis-preflight.json')) : null);
+  const deviceSnapshot = await optionalJson(join(input.workingDirectory, 'outputs', 'device-snapshot.json'))
+    || await optionalJson(join(input.runDirectory, 'outputs', 'device-snapshot.json'));
+  const environment = deviceSnapshotTransition(preflightData, deviceSnapshot);
+  const evidenceItems = extractOutputRefs(`${verificationC.text}\n${resolvedSummary.text}`).map((path) => ({
+    path,
+    presence: classifyEvidencePresence({
+      work: existsSync(join(input.workingDirectory, 'outputs', path)),
+      archive: existsSync(join(input.runDirectory, 'outputs', path)),
+      parent: /^run-[A-Za-z0-9_-]{4,80}$/.test(parentId) && existsSync(join(getWorkspaceRoot(), 'runs', parentId, 'outputs', path)),
+    }),
+  }));
+  const hilogRefs = evidenceItems.filter((item) => /hilog|logcat/i.test(item.path));
+  if (verificationFlags.issue_golden_flag_met === 'true' && !localeJudgments.saw_judgment && hilogRefs.length
+    && hilogRefs.every((item) => item.presence === 'inherited' || item.presence === 'broken')) {
+    verificationFlags.issue_golden_flag_met = 'unknown';
+    verificationFlagBasis = 'unsupported';
+    verificationStatus = verificationStatusFrom(verificationC.conflicts, verification.verdict, verificationFlags);
+  }
+  const evidenceLocality = {
+    value: !evidenceItems.length ? 'unknown'
+      : evidenceItems.some((item) => item.presence === 'inherited' || item.presence === 'broken') ? 'mixed'
+      : 'local',
+    local: evidenceItems.filter((item) => item.presence === 'local').map((item) => item.path),
+    archive_only: evidenceItems.filter((item) => item.presence === 'archive_only').map((item) => item.path),
+    inherited: evidenceItems.filter((item) => item.presence === 'inherited').map((item) => item.path),
+    broken: evidenceItems.filter((item) => item.presence === 'broken').map((item) => item.path),
+  };
+
   // F06：报告与证据的一致性交叉检查（非阻断，记录告警）
   const consistencyWarnings = [...checkReportConsistency({
     reportText,
     archiveNames: archiveEntries.filter((e) => e.status !== 'missing').map((e) => e.name),
     verificationStatus,
+    preflightBlocked: environment.blocked,
+    environmentTransitions: environment.transitions,
+    measurementText: `${reportText}\n${resolvedSummary.text}`,
   })];
+  if (localeJudgments.false_ok.L1 + localeJudgments.false_ok.L2 > 0) {
+    const claimed = claimedOkMultiplier(`${reportText}\n${verificationC.text}`, 'L1');
+    consistencyWarnings.push({ code: 'false_ok_in_log',
+      detail: `日志含无效 OK（L1 ${localeJudgments.false_ok.L1}，L2 ${localeJudgments.false_ok.L2}），有效 L1 OK ${localeJudgments.valid_ok.L1}`
+        + (claimed != null ? `；正文写成 L1 OK×${claimed}` : '') });
+  }
+  if (repoState.repos.some((repo) => !repo.clean) && /两仓干净|未动\s*repo/.test(resolvedSummary.text)) {
+    consistencyWarnings.push({ code: 'repo_state_stale',
+      detail: '摘要仍写仓库干净，但收尾时 git diff 已非空：' + repoState.repos.filter((repo) => !repo.clean).map((repo) => `${repo.name}(${repo.files})`).join('，') });
+  }
+  for (const name of [...new Set(archiveOnlyEvidence)]) {
+    consistencyWarnings.push({ code: 'archive_only_evidence',
+      detail: `${name} 只在运行归档目录，工作区 outputs/ 没有副本` });
+  }
 
   // F11：共享 SDK HAR 指纹复核——发现共享缓存被本流程改动则如实告警（检测，不掩盖）
-  const preflightData = await optionalJson(join(input.runDirectory, 'outputs', 'diagnosis-preflight.json'))
-    || await optionalJson(join(input.workingDirectory, 'outputs', 'diagnosis-preflight.json'));
   let sharedSdkIntegrity: any = { checked: false };
   if (Array.isArray(preflightData?.shared_sdk_fingerprints)) {
     const diff = diffSharedSdkFingerprints(preflightData.shared_sdk_fingerprints, await fingerprintSharedSdkHars());
@@ -608,14 +860,21 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
 
   const context = { version: 2, run_id: basename(input.runDirectory), working_directory: input.workingDirectory,
     checked_at: new Date().toISOString(), repositories, issue_golden_flag: golden || null,
+    golden_flag_deviation: goldenDeviation,
     demo_path: within && existsSync(demoPath) ? demoPath : null,
     context_completeness: golden && within && existsSync(demoPath) && repositories.length
       && repositories.every((r) => r.baseline_confirmed) ? 'complete' : 'partial',
-    root_cause_summary: root.root_cause_summary || root.summary || inherited?.root_cause_summary || rootC.text,
+    root_cause_summary: resolvedSummary.text,
+    root_cause_provenance: resolvedSummary.provenance,
     problem_ownership: root.problem_ownership || inherited?.problem_ownership || null,
     verification_status: verificationStatus,
     verification_flags: verificationFlags,
+    verification_flag_basis: verificationFlagBasis,
     verification_conflicts: verificationC.conflicts,
+    locale_judgments: localeJudgments.saw_judgment ? localeJudgments : null,
+    evidence_locality: evidenceLocality,
+    environment_transitions: environment.transitions,
+    repo_state: repoState,
     evaluation_mode: field(input.globalContext, 'evaluation-mode') || 'guided_replay',
     evaluation_integrity: 'not_independent',
     consistency_warnings: consistencyWarnings,

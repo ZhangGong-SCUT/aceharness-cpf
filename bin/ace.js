@@ -7,6 +7,8 @@ const cmd = process.argv[2];
 // doctor 前置分发：跑包内零依赖脚本，不经 dist 构建产物，保证刚装完即可自检
 if (cmd === 'doctor' || cmd === '自检') {
   import('../scripts/ace-doctor.mjs').catch(err => { console.error('ace doctor 加载失败:', err); process.exit(1); });
+} else if (cmd === 'aiweb' || cmd === 'workbench') {
+  import('../scripts/ace-aiweb.mjs').catch(err => { console.error('ace aiweb 加载失败:', err); process.exit(1); });
 } else if (cmd === 'update') {
   // fork 构建锁定：ace update 会拉取 registry 上同名包的 latest，发布前可能抹掉本地 CPF 定制工作流
   const pkg = require('../package.json');

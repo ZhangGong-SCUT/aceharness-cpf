@@ -9,7 +9,7 @@ import { useTheme } from 'next-themes';
 import type { RichTextEditorHandle } from '@/components/ui/RichTextEditor';
 import { ClipLoader } from 'react-spinners';
 import BrandLoadingScreen from '@/components/BrandLoadingScreen';
-import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi, workspaceApi, specCodingApi, type GitBrowserSummaryResponse, type NotebookScope } from '@/lib/core/api';
+import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi, workspaceApi, specCodingApi, createTicketedEventSource, type GitBrowserSummaryResponse, type NotebookScope } from '@/lib/core/api';
 import { useWorkflowState } from '@/hooks/useWorkflowState';
 import type { ViewMode } from '@/hooks/useWorkflowState';
 import FlowDiagram from '@/components/FlowDiagram';
@@ -115,7 +115,6 @@ import type {
 import type { WorkflowAgentExecutionOverride } from '@/lib/core/schemas';
 import { GitWorkspaceDiffPanel } from '@/components/workflow/GitWorkspaceDiffPanel';
 import { cn } from '@/lib/core/utils';
-import { createSafeEventSource } from '@/lib/core/safe-event-source';
 import { resolveWorkspaceLinkTarget } from '@/lib/workspace/link-target';
 import styles from './page.module.css';
 
@@ -3481,7 +3480,7 @@ export default function WorkbenchPage({
       }
 
       const finalContent = await new Promise<string>((resolve, reject) => {
-        const es = createSafeEventSource(`/api/chat/stream?id=${encodeURIComponent(startData.chatId)}`);
+        const es = createTicketedEventSource(`/api/chat/stream?id=${encodeURIComponent(startData.chatId)}`);
         let accumulated = '';
         let thinkingAccumulated = '';
         let settled = false;
@@ -3820,7 +3819,7 @@ export default function WorkbenchPage({
       }
 
       const finalContent = await new Promise<string>((resolve, reject) => {
-        const es = createSafeEventSource(`/api/chat/stream?id=${encodeURIComponent(startData.chatId)}`);
+        const es = createTicketedEventSource(`/api/chat/stream?id=${encodeURIComponent(startData.chatId)}`);
         let accumulated = '';
         let thinkingAccumulated = '';
         let settled = false;

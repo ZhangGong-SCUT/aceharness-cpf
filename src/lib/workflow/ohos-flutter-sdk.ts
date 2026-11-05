@@ -58,6 +58,16 @@ export function extractRepoBranch(text: string): string | null {
   return null;
 }
 
+/** 从步骤输出/全局上下文提取 PR 的 base 分支（如 oh-3.35.7-dev）。
+ *  feature 分支名往往不含版本号（如 pixelmapPurgeableFinal），SDK 对号入座要靠 base 兜底。 */
+export function extractBaseBranch(text: string): string | null {
+  const json = String(text || '').match(/"base_ref"\s*:\s*"([^"]+)"/);
+  if (json?.[1] && json[1] !== 'missing') return json[1].trim();
+  const line = String(text || '').match(/(?:^|\n)\s*[-*]?\s*\**base_ref\**\s*[:：]\s*`?([^\s`,]+)`?/i);
+  if (line?.[1] && line[1] !== 'missing') return line[1].trim();
+  return null;
+}
+
 export function readRepoBranchFromDisk(repoPath: string): string | null {
   const headPath = join(repoPath, '.git', 'HEAD');
   if (!existsSync(headPath)) return null;
@@ -197,11 +207,13 @@ export function listInventoryEntries(inventory: OhosFlutterSdkInventory): OhosFl
 
 export function resolveOhosFlutterSdk(input: {
   branch?: string | null;
+  fallbackBranch?: string | null;
   inventory?: OhosFlutterSdkInventory;
   configPath?: string;
 }): ResolvedOhosFlutterSdk {
   const inventory = input.inventory || loadOhosFlutterSdkInventory(input.configPath);
   const branch = input.branch?.trim() || null;
+  const fallbackBranch = input.fallbackBranch?.trim() || null;
   const versionHint = extractVersionHint(branch);
   const entries = listInventoryEntries(inventory);
   const usable = entries.filter((entry) => isUsableOhosFlutterSdk(entry.path));
@@ -227,18 +239,28 @@ export function resolveOhosFlutterSdk(input: {
     return empty('清单里没有装好的 OHOS Flutter SDK（需要 bin/flutter + bin/cache 引擎产物）');
   }
 
-  const branchNorm = normalize(branch);
-  const scored = usable.map((entry) => {
-    const aliases = [entry.id, entry.version, ...(entry.aliases || [])].map(normalize);
-    let score = 0;
-    if (aliases.includes(branchNorm)) score = 100;
-    else if (versionHint && aliases.includes(normalize(versionHint))) score = 80;
-    else if (versionHint && aliases.some((alias) => alias.includes(normalize(versionHint)))) score = 60;
-    else if (versionHint && normalize(entry.path).includes(normalize(versionHint))) score = 40;
-    return { entry, score };
-  }).filter((item) => item.score > 0).sort((left, right) => right.score - left.score);
+  // feature 分支名可能不含版本号（pixelmapPurgeableFinal）：主分支对不上时用 base 分支（oh-3.35.7-dev）兜底
+  const candidates = branch === fallbackBranch ? [branch] : [branch, fallbackBranch].filter(Boolean) as string[];
+  let winner: { entry: OhosFlutterSdkEntry; score: number; branch: string; viaFallback: boolean } | null = null;
+  for (const [index, candidate] of candidates.entries()) {
+    const candidateHint = extractVersionHint(candidate);
+    const candidateNorm = normalize(candidate);
+    const scored = usable.map((entry) => {
+      const aliases = [entry.id, entry.version, ...(entry.aliases || [])].map(normalize);
+      let score = 0;
+      if (aliases.includes(candidateNorm)) score = 100;
+      else if (candidateHint && aliases.includes(normalize(candidateHint))) score = 80;
+      else if (candidateHint && aliases.some((alias) => alias.includes(normalize(candidateHint)))) score = 60;
+      else if (candidateHint && normalize(entry.path).includes(normalize(candidateHint))) score = 40;
+      return { entry, score };
+    }).filter((item) => item.score > 0).sort((left, right) => right.score - left.score);
 
-  const winner = scored[0];
+    if (scored[0]) {
+      winner = { ...scored[0], branch: candidate, viaFallback: index > 0 };
+      break;
+    }
+  }
+
   if (!winner) {
     return empty(`没有与 ${branch} 对应的 SDK。已登记可用：${inventoryIds.join(', ') || '无'}。禁止改用日常 SDK。`);
   }
@@ -246,14 +268,16 @@ export function resolveOhosFlutterSdk(input: {
   const sdkRoot = resolve(winner.entry.path);
   return {
     matched: true,
-    branch,
+    branch: winner.branch,
     versionHint,
     sdkId: winner.entry.id,
     sdkRoot,
     flutterBin: flutterExecutable(sdkRoot),
     dailySdk,
     inventory: inventoryIds,
-    reason: `按 ${branch} 选中 ${winner.entry.id}`,
+    reason: winner.viaFallback
+      ? `按 base 分支 ${winner.branch} 选中 ${winner.entry.id}（feature 分支 ${branch} 不含版本号）`
+      : `按 ${winner.branch} 选中 ${winner.entry.id}`,
   };
 }
 

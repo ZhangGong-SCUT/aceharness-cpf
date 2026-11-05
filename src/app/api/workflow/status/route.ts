@@ -3,6 +3,7 @@ import { readFile } from 'fs/promises';
 import { parse } from 'yaml';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { loadRunState } from '@/lib/run/state-persistence';
+import { requireAuth } from '@/lib/auth/middleware';
 import { loadCreationSession, loadLatestCreationSessionByFilename } from '@/lib/spec/coding-store';
 import {
   findRelevantWorkflowExperiences,
@@ -585,11 +586,43 @@ function createWorkflowStatusStream(request: NextRequest, configFile?: string | 
 }
 
 export async function GET(request: NextRequest) {
+  const live = request.nextUrl.searchParams.get('live') === '1';
+  if (request.nextUrl.searchParams.has('stream_ticket') && !live) {
+    return NextResponse.json({ error: '短时 SSE 凭证仅可用于实时流' }, { status: 401 });
+  }
+  const auth = await requireAuth(request, { streamScope: 'workflow/status' });
+  if (auth instanceof Response) return auth;
+
   try {
-    const configFile = request.nextUrl.searchParams.get('configFile');
-    const requestedRunId = request.nextUrl.searchParams.get('runId');
-    const live = request.nextUrl.searchParams.get('live') === '1';
+    let configFile = request.nextUrl.searchParams.get('configFile');
+    let requestedRunId = request.nextUrl.searchParams.get('runId');
     const compact = request.nextUrl.searchParams.get('compact') === '1';
+
+    // Resolve only a run owned by this user. Legacy runs without owner metadata
+    // remain available to administrators only.
+    if (auth.role !== 'admin') {
+      if (requestedRunId) {
+        const state = await loadRunState(requestedRunId, { hydrateLargeOutputs: false });
+        const ownerId = state?.runOwnerId || state?.createdBy;
+        if (!state || !ownerId || ownerId !== auth.id
+          || (configFile && state.configFile !== configFile)) {
+          return NextResponse.json({ error: '运行记录不存在或无权访问' }, { status: 404 });
+        }
+        configFile = state.configFile;
+      } else {
+        const owned = workflowRegistry.getAllManagers()
+          .filter((entry) => (!configFile || entry.configFile === configFile)
+            && ((entry.manager as any)._createdBy === auth.id
+              || entry.manager.getStatus()?.runOwnerId === auth.id
+              || entry.manager.getStatus()?.createdBy === auth.id))
+          .map((entry) => ({ entry, status: entry.manager.getStatus() }))
+          .filter(({ status }) => status?.runId)
+          .sort((a, b) => Number(b.status.updatedAt || 0) - Number(a.status.updatedAt || 0));
+        if (!owned.length) return NextResponse.json({ error: '没有可访问的运行记录' }, { status: 404 });
+        configFile = owned[0].entry.configFile;
+        requestedRunId = String(owned[0].status.runId);
+      }
+    }
 
     if (live) {
       return createWorkflowStatusStream(request, configFile, requestedRunId);

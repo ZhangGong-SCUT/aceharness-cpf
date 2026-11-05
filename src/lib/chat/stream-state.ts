@@ -5,6 +5,7 @@ export type EngineStreamStatus = 'running' | 'completed' | 'failed' | 'killed';
 
 export interface EngineStreamState {
   chatId: string;
+  ownerId?: string;
   frontendSessionId?: string;
   backendSessionId?: string;
   engine?: string;
@@ -78,9 +79,10 @@ function emitEngineStreamState(state: EngineStreamState | undefined): void {
   } satisfies EngineStreamStateEvent);
 }
 
-export function registerEngineStream(chatId: string, frontendSessionId?: string, engine?: string, model?: string): void {
+export function registerEngineStream(chatId: string, frontendSessionId?: string, engine?: string, model?: string, ownerId?: string): void {
   chatsById.set(chatId, {
     chatId,
+    ownerId,
     frontendSessionId,
     engine,
     model,

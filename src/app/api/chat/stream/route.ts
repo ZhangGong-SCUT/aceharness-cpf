@@ -175,6 +175,7 @@ const activeChats = new Map<string, {
   promise: Promise<any>;
   settled: boolean;
   chatId: string;
+  ownerId: string;
   cancel?: () => void;
 }>();
 const engineStreamEvents = new EventEmitter();
@@ -281,7 +282,7 @@ export async function POST(request: NextRequest) {
 
     // Non-Claude engines: stream through Engine wrapper events
     if (engine) {
-      registerEngineStream(chatId, streamRecoveryKey, configuredEngine, useModel);
+      registerEngineStream(chatId, streamRecoveryKey, configuredEngine, useModel, auth.id);
       const saveLiveSessionSnapshot = createLiveSessionSaver();
       if (baseLiveSession) {
         setEngineStreamLiveSession(chatId, baseLiveSession);
@@ -529,6 +530,7 @@ export async function POST(request: NextRequest) {
         promise: execPromise,
         settled: false,
         chatId,
+        ownerId: auth.id,
         cancel: () => {
           setEngineStreamStatus(chatId, 'killed');
           engine.cancel();
@@ -560,6 +562,12 @@ export async function POST(request: NextRequest) {
   }
 }
 export async function GET(request: NextRequest) {
+  if (request.nextUrl.searchParams.has('stream_ticket')
+    && (!request.nextUrl.searchParams.has('id') || request.nextUrl.searchParams.has('checkActive'))) {
+    return NextResponse.json({ error: '短时 SSE 凭证仅可用于实时流' }, { status: 401 });
+  }
+  const auth = await requireAuth(request, { streamScope: 'chat/stream' });
+  if (auth instanceof Response) return auth;
   const chatId = request.nextUrl.searchParams.get('id');
   const checkSession = request.nextUrl.searchParams.get('checkActive');
   const streamScope = request.nextUrl.searchParams.get('streamScope') || undefined;
@@ -568,7 +576,7 @@ export async function GET(request: NextRequest) {
   if (checkSession) {
     const recoveryKey = resolveStreamRecoveryKey(checkSession, streamScope);
     const engineState = recoveryKey ? getEngineStreamByFrontendSessionId(recoveryKey) : undefined;
-    if (engineState) {
+    if (engineState && (auth.role === 'admin' || engineState.ownerId === auth.id)) {
       return NextResponse.json({
         active: engineState.status === 'running',
         found: true,
@@ -583,7 +591,8 @@ export async function GET(request: NextRequest) {
     }
 
     const activeChatId = recoveryKey ? processManager.getActiveStreamChatId(recoveryKey) : undefined;
-    if (activeChatId && activeChats.has(activeChatId)) {
+    if (activeChatId && activeChats.get(activeChatId)
+      && (auth.role === 'admin' || activeChats.get(activeChatId)?.ownerId === auth.id)) {
       const proc = processManager.getProcess(activeChatId);
       return NextResponse.json({
         active: true,
@@ -603,7 +612,7 @@ export async function GET(request: NextRequest) {
   }
 
   const entry = activeChats.get(chatId);
-  if (!entry) {
+  if (!entry || (auth.role !== 'admin' && entry.ownerId !== auth.id)) {
     return NextResponse.json({ error: 'Chat not found' }, { status: 404 });
   }
 
@@ -687,6 +696,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth instanceof Response) return auth;
   const frontendSessionId = request.nextUrl.searchParams.get('frontendSessionId');
   const streamScope = request.nextUrl.searchParams.get('streamScope') || undefined;
   const preserveSession = request.nextUrl.searchParams.get('preserveSession') === '1';
@@ -694,6 +705,10 @@ export async function DELETE(request: NextRequest) {
     const recoveryKey = resolveStreamRecoveryKey(frontendSessionId, streamScope);
     const engineState = recoveryKey ? getEngineStreamByFrontendSessionId(recoveryKey) : undefined;
     const activeChatId = engineState?.chatId || (recoveryKey ? processManager.getActiveStreamChatId(recoveryKey) : undefined);
+    if (auth.role !== 'admin' && engineState?.ownerId !== auth.id
+      && activeChats.get(activeChatId || '')?.ownerId !== auth.id) {
+      return NextResponse.json({ error: 'Chat not found' }, { status: 404 });
+    }
     if (!activeChatId) {
       return NextResponse.json({ killed: true, count: 0 });
     }
@@ -726,11 +741,14 @@ export async function DELETE(request: NextRequest) {
   }
 
   const entry = activeChats.get(chatId);
+  const state = getEngineStream(chatId);
+  if (auth.role !== 'admin' && entry?.ownerId !== auth.id && state?.ownerId !== auth.id) {
+    return NextResponse.json({ error: 'Chat not found' }, { status: 404 });
+  }
   if (entry?.cancel) {
     entry.cancel();
   }
   activeChats.delete(chatId);
-  const state = getEngineStream(chatId);
   if (state?.frontendSessionId) {
     processManager.removeActiveStream(state.frontendSessionId);
   }

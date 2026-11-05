@@ -13,11 +13,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
 
 function parseArgs(argv) {
-  const out = { branch: '', repo: '', config: '' };
+  const out = { branch: '', baseBranch: '', repo: '', config: '' };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
     const value = argv[i + 1];
     if (key === '--branch') out.branch = value || '';
+    if (key === '--base-branch') out.baseBranch = value || '';
     if (key === '--repo') out.repo = value || '';
     if (key === '--config') out.config = value || '';
   }
@@ -114,17 +115,30 @@ const discovered = inventory.sdkRoot && existsSync(inventory.sdkRoot)
 const entries = [...discovered, ...inventory.sdks].filter((entry) => usable(entry.path));
 const branch = args.branch || (args.repo ? readBranch(resolve(args.repo)) : null);
 const hint = versionHint(branch);
-const winner = entries
-  .map((entry) => {
-    const aliases = [entry.id, entry.version, ...(entry.aliases || [])].map(normalize);
-    let score = 0;
-    if (branch && aliases.includes(normalize(branch))) score = 100;
-    else if (hint && aliases.includes(normalize(hint))) score = 80;
-    else if (hint && aliases.some((alias) => alias.includes(normalize(hint)))) score = 60;
-    return { entry, score };
-  })
-  .filter((item) => item.score > 0)
-  .sort((left, right) => right.score - left.score)[0];
+const scoreEntry = (entry, candidate) => {
+  const aliases = [entry.id, entry.version, ...(entry.aliases || [])].map(normalize);
+  const candidateHint = versionHint(candidate);
+  let score = 0;
+  if (candidate && aliases.includes(normalize(candidate))) score = 100;
+  else if (candidateHint && aliases.includes(normalize(candidateHint))) score = 80;
+  else if (candidateHint && aliases.some((alias) => alias.includes(normalize(candidateHint)))) score = 60;
+  return score;
+};
+// feature 分支名可能不含版本号（pixelmapPurgeableFinal）：主分支对不上时用 --base-branch 兜底
+const candidates = branch && args.baseBranch && branch !== args.baseBranch
+  ? [{ name: branch, viaFallback: false }, { name: args.baseBranch, viaFallback: true }]
+  : [{ name: branch, viaFallback: false }];
+let winner = null;
+for (const candidate of candidates) {
+  const best = entries
+    .map((entry) => ({ entry, score: scoreEntry(entry, candidate.name) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score)[0];
+  if (best) {
+    winner = { ...best, branchName: candidate.name, viaFallback: candidate.viaFallback };
+    break;
+  }
+}
 
 const result = winner
   ? {
@@ -136,7 +150,9 @@ const result = winner
     flutterBin: flutterBin(winner.entry.path),
     dailySdk: inventory.dailySdk || null,
     inventory: entries.map((entry) => entry.id),
-    reason: `按 ${branch} 选中 ${winner.entry.id}`,
+    reason: winner.viaFallback
+      ? `按 base 分支 ${winner.branchName} 选中 ${winner.entry.id}（feature 分支 ${branch} 不含版本号）`
+      : `按 ${winner.branchName} 选中 ${winner.entry.id}`,
   }
   : {
     matched: false,

@@ -6,6 +6,8 @@ import { chatSessionEvents, type ChatSessionEvent } from '@/lib/chat/persistence
 import { engineStreamStateEvents, listPublicEngineStreams, type EngineStreamStateEvent } from '@/lib/chat/stream-state';
 import { loadRunState, type HumanQuestion } from '@/lib/run/state-persistence';
 import { isStateMachineManagerLike, workflowRegistry } from '@/lib/workflow/registry';
+import { requireAuth } from '@/lib/auth/middleware';
+import { getRunOwnerId } from '@/lib/workflow/run-access';
 import {
   compactWorkflowEventPayloadForLive,
   compactWorkflowStatusDeltaForLive,
@@ -16,12 +18,14 @@ export const dynamic = 'force-dynamic';
 
 const INACTIVE_RUN_STATUSES = new Set(['stopped', 'completed', 'failed', 'crashed']);
 
-async function listPendingHumanQuestions(): Promise<HumanQuestion[]> {
+async function listPendingHumanQuestions(user: { id: string; role: string }): Promise<HumanQuestion[]> {
   const byId = new Map<string, HumanQuestion>();
 
   for (const { manager } of workflowRegistry.getRunningManagers()) {
     if (!isStateMachineManagerLike(manager)) continue;
     const managerStatus = manager.getStatus();
+    const ownerId = (manager as any)._createdBy || managerStatus.runOwnerId || managerStatus.createdBy;
+    if (user.role !== 'admin' && ownerId !== user.id) continue;
     for (const question of manager.getHumanQuestions()) {
       if (question.status !== 'unanswered') continue;
       byId.set(question.id, {
@@ -41,6 +45,7 @@ async function listPendingHumanQuestions(): Promise<HumanQuestion[]> {
     if (!entry.isDirectory()) continue;
     const state = await loadRunState(entry.name, { hydrateLargeOutputs: false }).catch(() => null);
     if (!state?.humanQuestions?.length) continue;
+    if (user.role !== 'admin' && getRunOwnerId(state) !== user.id) continue;
     if (INACTIVE_RUN_STATUSES.has(state.status)) continue;
     for (const question of state.humanQuestions) {
       if (question.status !== 'unanswered' || byId.has(question.id)) continue;
@@ -54,28 +59,35 @@ async function listPendingHumanQuestions(): Promise<HumanQuestion[]> {
   return Array.from(byId.values()).sort((a, b) => Date.parse(b.createdAt || '') - Date.parse(a.createdAt || ''));
 }
 
-function getWorkflowStatusSnapshot(configFile?: string | null): any | null {
+function getWorkflowStatusSnapshot(configFile?: string | null, runId?: string | null): any | null {
   if (!configFile) return null;
-  const entry = workflowRegistry.getAllManagers().find((item) => item.configFile === configFile);
+  const entry = workflowRegistry.getAllManagers().find((item) => runId
+    ? item.manager.getStatus?.()?.runId === runId
+    : item.configFile === configFile);
   const status = entry?.manager?.getStatus?.();
   if (!status) return null;
   return compactWorkflowStatusForLive(status, configFile);
 }
 
-function getWorkflowStatusDelta(configFile?: string | null): any | null {
+function getWorkflowStatusDelta(configFile?: string | null, runId?: string | null): any | null {
   if (!configFile) return null;
-  const entry = workflowRegistry.getAllManagers().find((item) => item.configFile === configFile);
+  const entry = workflowRegistry.getAllManagers().find((item) => runId
+    ? item.manager.getStatus?.()?.runId === runId
+    : item.configFile === configFile);
   const status = entry?.manager?.getStatus?.();
   if (!status) return null;
   return compactWorkflowStatusDeltaForLive(status, configFile);
 }
 
-function buildLiveSnapshot(workflowStatusesFallback: Record<string, any> = {}) {
+function buildLiveSnapshot(user: { id: string; role: string }, workflowStatusesFallback: Record<string, any> = {}) {
   const workflowStatuses: Record<string, any> = { ...workflowStatusesFallback };
   const runStatusById: Record<string, string> = {};
 
   for (const entry of workflowRegistry.getAllManagers()) {
-    const statusSnapshot = getWorkflowStatusSnapshot(entry.configFile);
+    const managerStatus = entry.manager.getStatus?.();
+    const ownerId = (entry.manager as any)._createdBy || managerStatus?.runOwnerId || managerStatus?.createdBy;
+    if (user.role !== 'admin' && ownerId !== user.id) continue;
+    const statusSnapshot = getWorkflowStatusSnapshot(entry.configFile, managerStatus?.runId);
     const configFile = statusSnapshot?.currentConfigFile || entry.configFile;
     if (!configFile) continue;
     workflowStatuses[configFile] = statusSnapshot;
@@ -87,11 +99,14 @@ function buildLiveSnapshot(workflowStatusesFallback: Record<string, any> = {}) {
   return {
     workflowStatuses,
     runStatusById,
-    chatStreams: listPublicEngineStreams(),
+    chatStreams: user.role === 'admin' ? listPublicEngineStreams() : [],
   };
 }
 
 export async function GET(request: NextRequest) {
+  const auth = await requireAuth(request, { streamScope: 'workflow/events' });
+  if (auth instanceof Response) return auth;
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -144,11 +159,14 @@ export async function GET(request: NextRequest) {
 
       for (const evt of eventTypes) {
         handlers[evt] = (data: any) => {
-          const { __configFile, ...rest } = data;
+          const { __configFile, __ownerId, __runId, ...rest } = data;
+          if (auth.role !== 'admin' && __ownerId !== auth.id) return;
           const compactRest = compactWorkflowEventPayloadForLive(rest) as any;
           const mappedType = smTypeMap[evt];
           const configFile = typeof __configFile === 'string' ? __configFile : undefined;
-          const statusSnapshot = getWorkflowStatusDelta(configFile);
+          const statusSnapshot = __runId || auth.role === 'admin'
+            ? getWorkflowStatusDelta(configFile, __runId)
+            : null;
           if (configFile && statusSnapshot) {
             workflowStatusesFallback[configFile] = statusSnapshot;
           }
@@ -198,6 +216,7 @@ export async function GET(request: NextRequest) {
       }
 
       const onEngineStreamState = (event: EngineStreamStateEvent) => {
+        if (auth.role !== 'admin') return;
         sendEvent({
           type: event.type === 'remove' ? 'chat-stream-removed' : 'chat-stream-state',
           data: event.type === 'remove'
@@ -208,6 +227,7 @@ export async function GET(request: NextRequest) {
       engineStreamStateEvents.on('change', onEngineStreamState);
 
       const onChatSessionEvent = (event: ChatSessionEvent) => {
+        if (auth.role !== 'admin') return;
         sendEvent({
           type: event.type === 'removed' ? 'chat-session-removed' : 'chat-session-updated',
           data: {
@@ -230,11 +250,11 @@ export async function GET(request: NextRequest) {
       heartbeatTimer = setInterval(() => {
         sendEvent({ type: 'heartbeat', data: { timestamp: Date.now() } });
       }, 15000);
-      const pendingHumanQuestions = await listPendingHumanQuestions().catch(() => []);
+      const pendingHumanQuestions = await listPendingHumanQuestions(auth).catch(() => []);
       sendEvent({
         type: 'snapshot',
         data: {
-          ...buildLiveSnapshot(workflowStatusesFallback),
+          ...buildLiveSnapshot(auth, workflowStatusesFallback),
           pendingHumanQuestions,
         },
       });

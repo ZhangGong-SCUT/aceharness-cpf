@@ -297,6 +297,16 @@ models:
       - opencode
       - nga
       - codegenie
+  - value: 火山AI网关/glm-5.3
+    label: GLM-5.3（火山AI）
+    costMultiplier: 0.02
+    endpoints:
+      - openai
+    engines:
+      - opencode
+      - nga
+      - codegenie
+    contextWindow: 1000000
   - value: big-pickle
     label: Big Pickle
     costMultiplier: 0.02

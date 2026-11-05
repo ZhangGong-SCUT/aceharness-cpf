@@ -22,8 +22,10 @@ const ChatProvider = dynamic(() => import('@/contexts/ChatContext').then(m => m.
   loading: () => null,
 });
 
-// 登录页不需要 ChatProvider
-const NO_CHAT_PATHS = ['/login', '/setup'];
+// 登录/注册/密保重置/首次设置等访客页不需要 ChatProvider：
+// ChatContext 会经 live-store 连工作流 SSE 并拉取带鉴权的 event-log，
+// 未登录访客会因 401 被 authFetch 硬跳转踢离页面（注册页曾因此无法使用）
+const NO_CHAT_PATHS = ['/login', '/setup', '/register'];
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

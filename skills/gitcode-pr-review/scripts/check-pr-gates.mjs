@@ -4,6 +4,7 @@ import { realpathSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { classifyOhosPrGates, commentBelongsToPull, DEFAULT_START_BUILD_MAX, DEFAULT_JITTER_RETRY_MAX, normalizeComments, normalizeLabels } from './ohos-pr-gates.mjs';
+import { extractBuildLogUrls, extractEcoTestReportUrls } from './gate-log-analysis.mjs';
 import { gitcodeRead, gitcodeReadPages } from './gitcode-read.mjs';
 import { resolveGitcodeToken } from './gitcode-token.mjs';
 
@@ -84,8 +85,62 @@ async function fetchDcpDefectCount(comments, labels, outDir, headSha) {
   }
 }
 
-const gitcodeGet = gitcodeRead;
-const gitcodeGetOptional = (path, token) => gitcodeRead(path, token, { optional: true });
+const GATE_LOG_FAIL_LABEL_RE = /(静态检查失败|编译失败|冒烟测试失败|测试失败)/;
+
+/** 评论按时间倒序——日志地址要从最新一轮的 CI 评论里取。 */
+function sortCommentsDesc(comments) {
+  return [...(Array.isArray(comments) ? comments : [])].sort((a, b) => (
+    (Date.parse(String(b?.created_at || '')) || 0) - (Date.parse(String(a?.created_at || '')) || 0)
+  ));
+}
+
+/**
+ * 有失败标签时拉门禁日志做根因核对（fetch-gate-logs.mjs）：
+ * 构建日志真实可下载 → 能证实"编译错误"或"基础设施失败"；跑测报告通常不可达 → 记为未验证。
+ * 这是把"疑似抖动"从字符串猜测升级为日志证据的唯一入口。
+ * 失败/超时一律返回 null（不阻断分类）；`ACE_GITCODE_GATE_LOGS=0` 可关闭。
+ */
+async function fetchGateLogAnalysis(comments, labels, outDir, headSha) {
+  if (process.env.ACE_GITCODE_GATE_LOGS === '0') return null;
+  if (!labels.some((item) => GATE_LOG_FAIL_LABEL_RE.test(String(item || '')))) return null;
+  const ordered = sortCommentsDesc(comments);
+  const buildLogUrl = extractBuildLogUrls(ordered)[0] || '';
+  const reportUrl = extractEcoTestReportUrls(ordered)[0] || '';
+  if (!buildLogUrl && !reportUrl) return null;
+
+  const cacheKey = `${headSha}|${buildLogUrl}|${reportUrl}`;
+  try {
+    const cached = JSON.parse(await readFile(resolve(outDir, 'gate-logs-cache.json'), 'utf8'));
+    if (cached.key === cacheKey && cached.analysis && Date.now() - cached.savedAt < 600000) return cached.analysis;
+  } catch { /* 无缓存 */ }
+
+  try {
+    const script = resolve(new URL(import.meta.url).pathname, '../fetch-gate-logs.mjs');
+    const args = [script, '--out', outDir];
+    if (buildLogUrl) args.push('--build-log-url', buildLogUrl);
+    if (reportUrl) args.push('--report-url', reportUrl);
+    await new Promise((fulfil, reject) => {
+      const child = spawn(process.execPath, args, {
+        stdio: ['ignore', 'ignore', 'pipe'],
+        timeout: 90000,
+      });
+      let err = '';
+      child.stderr?.on('data', (chunk) => { err += String(chunk); });
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code === 0) fulfil(undefined);
+        else reject(new Error(`fetch-gate-logs 退出 ${code}: ${err.slice(0, 200)}`));
+      });
+    });
+    const analysis = JSON.parse(await readFile(resolve(outDir, 'gate-log-analysis.json'), 'utf8'));
+    await writeFile(resolve(outDir, 'gate-logs-cache.json'), JSON.stringify({ key: cacheKey, analysis, savedAt: Date.now() }));
+    return analysis;
+  } catch {
+    return null;
+  }
+}
+
+const gitcodeGet = gitcodeRead;const gitcodeGetOptional = (path, token) => gitcodeRead(path, token, { optional: true });
 
 function collectLabels(...sources) {
   const labels = [];
@@ -157,11 +212,24 @@ async function main() {
 
   const pullPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(number)}`;
   const issuePath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(number)}`;
-  const [pull, issueComments, pullComments] = await Promise.all([
-    gitcodeGet(pullPath, token),
-    fetchCommentPages(`${issuePath}/comments`, token),
-    fetchCommentPages(`${pullPath}/comments`, token),
-  ]);
+  // 只读补查模式：--from-source <gate-source.json> 时重放已保存的快照做分类，
+  // 不访问 GitCode、不评论、不触发构建（补查旧产物新增字段用）。
+  const sourceFile = arg('--from-source');
+  let pull, issueComments, pullComments, sourceCheckedAt = '';
+  if (sourceFile) {
+    const saved = JSON.parse(await readFile(resolve(sourceFile), 'utf8'));
+    pull = saved.pull || {};
+    issueComments = saved.issueComments || [];
+    pullComments = saved.pullComments || [];
+    sourceCheckedAt = String(saved.checked_at || '');
+    process.stderr.write(`[recheck] 只读补查：复用 ${sourceFile}（未访问 GitCode / 未评论 / 未触发构建）\n`);
+  } else {
+    [pull, issueComments, pullComments] = await Promise.all([
+      gitcodeGet(pullPath, token),
+      fetchCommentPages(`${issuePath}/comments`, token),
+      fetchCommentPages(`${pullPath}/comments`, token),
+    ]);
+  }
   const commentPages = mergeComments(issueComments, pullComments).filter(commentBelongsToPull);
 
   const author = String(pull.user?.login || pull.user?.username || pull.author?.username || '').trim();
@@ -210,6 +278,9 @@ async function main() {
   await mkdir(outDir, { recursive: true });
   const dcpDefectCount = closed || !ownPr ? 0
     : await fetchDcpDefectCount(normalizeComments(commentPages), labels, outDir, pull.head?.sha || '');
+  // 有失败标签时先核对门禁日志（构建日志可下载 / 跑测报告通常不可达 → 未验证）
+  const logAnalysis = closed || !ownPr ? null
+    : await fetchGateLogAnalysis(commentPages, labels, outDir, pull.head?.sha || '');
   const classified = classifyOhosPrGates({
     labels,
     comments: normalizeComments(commentPages),
@@ -219,6 +290,7 @@ async function main() {
     closed,
     own_pr: ownPr,
     dcp_defect_count: dcpDefectCount,
+    log_analysis: logAnalysis,
     start_build_max: Number(process.env.ACE_GITCODE_START_BUILD_MAX || 0)
       || DEFAULT_START_BUILD_MAX,
     jitter_retry_max: Number(process.env.ACE_GITCODE_JITTER_RETRY_MAX || 0)
@@ -248,6 +320,12 @@ async function main() {
     classified.verdict = 'fail';
     classified.summary = `测试人已全部通过（${(Array.isArray(pull?.testers) ? pull.testers : []).map((t) => t?.login).filter(Boolean).join('、')}），等待合入即可——监控推送代码会重置测试状态`;
   }
+  // 补查 provenance：保留旧 checked_at 的历史来源，避免把"只读补查"当成新一次 CI 执行记录。
+  let previousCheckedAt = '';
+  try {
+    previousCheckedAt = JSON.parse(await readFile(resolve(outDir, 'gate-check.json'), 'utf8')).checked_at || '';
+  } catch { /* 首次产出没有旧记录 */ }
+  const checkedAt = sourceCheckedAt || new Date().toISOString();
   const result = {
     ...classified,
     pr_url: prUrl || `https://gitcode.com/${owner}/${repo}/merge_requests/${number}`,
@@ -259,14 +337,21 @@ async function main() {
     head_ref: pull.head?.ref || pull.head_branch || pull.source_branch || '',
     head_sha: pull.head?.sha || pull.head?.id || '',
     base_ref: pull.base?.ref || pull.base_branch || pull.target_branch || '',
-    checked_at: new Date().toISOString(),
-    source: 'labels+comments',
+    checked_at: checkedAt,
+    source: sourceFile ? 'recheck:labels+comments' : 'labels+comments',
+    ...(sourceFile
+      ? { rechecked_at: new Date().toISOString(), recheck_source: resolve(sourceFile), recheck: true }
+      : (previousCheckedAt && previousCheckedAt !== checkedAt
+        ? { previous_checked_at: previousCheckedAt, recheck: true }
+        : {})),
   };
 
   await mkdir(outDir, { recursive: true });
-  await writeFile(resolve(outDir, 'gate-source.json'), JSON.stringify({
-    owner, repo, number, checked_at: result.checked_at, pull, issueComments, pullComments,
-  }));
+  if (!sourceFile) {
+    await writeFile(resolve(outDir, 'gate-source.json'), JSON.stringify({
+      owner, repo, number, checked_at: result.checked_at, pull, issueComments, pullComments,
+    }));
+  }
   await writeFile(resolve(outDir, 'gate-check.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8');
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (result.verdict === 'fail' && (closed || !ownPr)) process.exit(2);

@@ -70,6 +70,11 @@ workflow:
             5. phase=tester_approved → fail：测试人已全部通过（网页"测试人 ✓ 已通过"），PR 等待合入，监控推送代码会重置测试状态——去终止，summary 注明原因
             6. 已关闭/不是自己的 PR → fail
             7. 其余 phase → pass，交给分类处置
+            有失败标签时脚本会额外拉门禁日志做根因核对，产出 outputs/gate-log-analysis.json（log_verdict / root_cause_verified / log_reasons / evidence）。
+            跑测报告已可读：评论里的 download.ci.openharmony.cn 是内网别名，脚本会改写为可达镜像 cidownload.openharmony.cn 下载 report.zip 后归因——
+            log_verdict=harness_env_failure（用例未跑到断言、测试环境准备失败，如切换 Flutter 版本时 worktree 同步失败）为**平台/环境侧、非 PR 代码问题**；
+            log_verdict=test_assertion（run/pass/failure 计数显示真失败）为确定性问题。
+            root_cause_verified=false（取不到报告时的 test_stage_unverified）时，summary 已写明"根因未验证"——向用户/评论汇报时**禁止**断言"平台抖动"，只能说"疑似基础设施超时、根因未验证"。
             欢迎评论没到之前不要 start build。不要等 AI已检视 才往下走。
             输出 JSON：verdict、phase、summary、artifact_path。
       transitions:

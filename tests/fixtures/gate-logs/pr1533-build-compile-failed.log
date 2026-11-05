@@ -1,0 +1,16 @@
+# 真实样本（原样摘录，非改写）：PR1533 flutter_3.22.3-dev_engine/20260917-1-00056
+# 来源：https://cidownload.openharmony.cn/Artifacts/flutter_3.22.3-dev_engine/20260917-1-00056/log/build.log
+#       成员名 ditribute_job_client_failed（失败轮次的 tar 成员名带 _failed 后缀）
+# 用途：锁定【编译错误证据优先于 tbuild 脚本失败】的归因。
+[2026/09/17 13:56:30.899 GMT+08:00] [INFO]  : [JobStatusPlugin] onStarted: j_GIXEcH0d #1
+[2026/09/17 14:13:57.096 GMT+08:00] 2026-09-17 14:13:56: npm WARN tar TAR_ENTRY_ERROR ENOENT: no such file or directory, open '/root/.hvigor/wrapper/tools/node_modules/pnpm/dist/node_modules/node-gyp/gyp/LICENSE'
+[2026/09/17 14:13:37.377 GMT+08:00] 2026-09-17 14:13:36: ERROR:root:runCommand error, code = 255, command = cd ./obj/ohos/flutter_embedding_native && hvigorw clean --mode module -p module=flutter_native@default -p product=default -p buildMode=debug assembleHar --no-daemon
+[2026/09/17 14:13:59.573 GMT+08:00] 2026-09-17 14:13:59: ninja: build stopped: subcommand failed.
+[2026/09/17 14:13:59.574 GMT+08:00] 2026-09-17 14:13:59: [ERROR] Engine compilation failed for mode: debug
+[2026/09/17 14:13:59.574 GMT+08:00] 2026-09-17 14:13:59: [ERROR] ✗ Compile Flutter engine failed with exit code: 1
+[2026/09/17 14:13:59.574 GMT+08:00] 2026-09-17 14:13:59: [ERROR] Required step failed, stopping execution
+[2026/09/17 14:14:03.842 GMT+08:00] [ERROR]:compile failed
+[2026/09/17 14:14:04.349 GMT+08:00] [CloudCache] 2026/09/17 14:14:03 build failed, cmd: [bash -c bash ***//entrance_script/generate_ci_build.sh compile_build] err: exit status 1
+[2026/09/17 14:14:04.866 GMT+08:00] [ERROR] [tbuild_execute:tbuild_execute#tbuild_execute] : TBuild failed, 执行脚本失败
+[2026/09/17 14:14:07.237 GMT+08:00] [ERROR] [tbuild_execute:tbuild_execute#tbuild_execute] : 错误信息: 执行脚本失败
+[2026/09/17 14:14:16.426 GMT+08:00] Finished: FAILURE

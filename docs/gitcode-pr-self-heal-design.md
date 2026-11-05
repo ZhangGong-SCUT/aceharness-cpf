@@ -247,7 +247,7 @@ GET https://gitcode.com/api/v5/repos/CPF-Flutter/flutter_flutter/pulls?only_coun
 
 1. 估机器一天会碰到多少新 PR，用 **创建量**：工作日 8–10 个全仓新开。白名单是约 30 人里的子集，自修 run 会更少，但不要按「偶尔一条」设计等待和锁。
 2. 合入量不能当负载。门禁一轮约 60 分钟，一条 PR 从开到合往往跨天，工作日同时开着的不只有当天新开的那 8–10 条（统计日开启中 45）。
-3. 现在引擎按 yaml 一把锁，全仓共用一条自修；第 8 节改成按 PR 锁之后，要能同时扛白名单作者的多条开着的 PR，而不是一天串行修完 8 个。
+3. 引擎支持同一 yaml 多 run 并行（每 run 独立 manager 与工作区）：webhook 按 PR 身份精确匹配唤醒，未匹配且未达 `ACE_GITCODE_MAX_PARALLEL`（默认 3）就新起 run，白名单作者多条开着的 PR 可同时自修。
 4. 周日基本没有新开和合入。Webhook 过滤（非白名单 / 已关 / 已合）必须便宜，因为 GitCode 会对仓里每一次 MR 事件都 POST，噪声按全仓 8–10 个/工作日计，不是按白名单计。
 
 ---
@@ -467,7 +467,9 @@ start new run
 | `ACE_GITCODE_WEBHOOK_SECRET` | Webhook 共享密钥，URL 上 `?password=` |
 | `ACE_GITCODE_PR_AUTHOR` | 作者白名单 |
 | `ACE_GITCODE_WATCH_REPOS` | 仓白名单，正式为 `CPF-Flutter/flutter_flutter` |
-| `GITCODE_TOKEN` / `ACE_GITCODE_TOKEN` | 拉 PR、评论 `start build`、HTTPS push |
+| `ACE_GITCODE_START_BUILD_MAX` | 同一代码版本 `start build` 重试上限，默认 3；DCP 门禁对同一代码存在抖动，静态/编译失败且预算未用完时 phase=need_start_build 直接重发，新 push 重置预算 |
+| `GITCODE_TOKEN_{用户名}` | 该 GitCode 用户自己的密钥；评论 `start build`、HTTPS push 必须用对应人的，不能互相覆盖 |
+| `GITCODE_TOKEN` / `ACE_GITCODE_TOKEN` | 未匹配到具体人时的只读回退 |
 | `ACE_INTERNAL_BASE_URL` | 本机 `http://127.0.0.1:3000`，供 Webhook 内调 start |
 
 Webhook URL：
@@ -488,7 +490,7 @@ Webhook URL：
 | 推完结束 | 评论 `start build` 后回到等待 |
 | 无 DCO | commit 必须 Signed-off-by |
 | `maxSelfTransitions: 3` 空等 CI | 挂起等 Webhook |
-| 同一 yaml 一把锁 | 同一 PR 一把锁，不同 PR 可并行 |
+| 同一 yaml 一把锁 | 同一 PR 一把锁，不同 PR 可并行（`ACE_GITCODE_MAX_PARALLEL`，默认 3） |
 | 探测仓 `z2036709353/works` | 正式听 `CPF-Flutter/flutter_flutter` |
 
 `works` 上已验证的只有：Webhook 能打到本机、密码校验、作者过滤、GitCode payload 能解析并 **拉起** 流水线。门禁分类、fork push、`start build`、循环等待 **都未验证**。

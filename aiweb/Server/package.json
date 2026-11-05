@@ -1,0 +1,21 @@
+{
+  "name": "cpp-ai-library-server",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "CPP AILibrary Server - CLI 控制层",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test:opencode": "node server.js opencode",
+    "test:copilot": "node server.js copilot"
+  },
+  "dependencies": {
+    "@github/copilot-sdk": "^0.3.0",
+    "@opencode-ai/sdk": "^1.14.22",
+    "better-sqlite3": "11.7.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "marked": "^18.0.3",
+    "uuid": "^14.0.0"
+  }
+}

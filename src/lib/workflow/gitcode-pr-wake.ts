@@ -16,10 +16,10 @@ export type RunningPrSnapshot = {
 };
 
 export type WebhookRunDecision =
-  | { action: 'start' }
+  | { action: 'start'; activeCount?: number }
   | { action: 'ignore'; reason: string }
   | { action: 'wake'; mode: 'resume-wait' | 'queue'; runId: string; currentState: string; reason: string }
-  | { action: 'busy-other-pr'; reason: string; runId: string; currentState: string };
+  | { action: 'busy-parallel'; reason: string; activeCount: number; runIds: string[] };
 
 export function identityFromPrInput(input: Pick<PrReviewInput, 'owner' | 'repo' | 'number'>): string {
   return prIdentityKey(input.owner, input.repo, input.number);
@@ -30,49 +30,68 @@ export function identityFromGlobalContext(globalContext?: string | null): string
   return prIdentityKey(parsed.owner, parsed.repo, parsed.number);
 }
 
+export const DEFAULT_GITCODE_MAX_PARALLEL = 3;
+
+export function resolveGitcodeMaxParallel(): number {
+  const raw = Number(process.env.ACE_GITCODE_MAX_PARALLEL || 0);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_GITCODE_MAX_PARALLEL;
+}
+
+/**
+ * 多 PR 并行调度：同一配置可同时活跃多个 run（每 run 独立 manager 与工作区）。
+ * 进来的事件按 PR 身份匹配——匹配到就唤醒那个 run，没匹配到且未达并发上限就新起 run。
+ * running 兼容单快照（旧调用方/测试）与快照数组两种形态。
+ */
 export function decideGitcodeWebhookRun(input: {
   incoming: PrReviewInput;
-  running?: RunningPrSnapshot | null;
+  running?: RunningPrSnapshot | RunningPrSnapshot[] | null;
+  maxParallel?: number;
 }): WebhookRunDecision {
   const incomingKey = identityFromPrInput(input.incoming);
   if (!incomingKey) {
     return { action: 'ignore', reason: 'payload 缺少 owner/repo/number' };
   }
 
-  const running = input.running;
-  const runningStatus = String(running?.status || '');
-  const isActive = runningStatus === 'running' || runningStatus === 'preparing';
-  if (!running || !isActive) {
-    return { action: 'start' };
-  }
+  const rawRunning = input.running;
+  const snapshots = Array.isArray(rawRunning)
+    ? rawRunning
+    : rawRunning
+      ? [rawRunning]
+      : [];
+  const active = snapshots.filter((item) => {
+    const status = String(item?.status || '');
+    return (status === 'running' || status === 'preparing') && String(item?.runId || '').trim();
+  });
 
-  const runningKey = identityFromGlobalContext(running.globalContext);
-  const runId = String(running.runId || '').trim();
-  const currentState = String(running.currentState || '');
-  if (!runId) {
-    return { action: 'start' };
-  }
-
-  if (runningKey && runningKey !== incomingKey) {
+  const matched = active.find((item) => identityFromGlobalContext(item.globalContext) === incomingKey);
+  if (matched) {
+    const runId = String(matched.runId || '').trim();
+    const currentState = String(matched.currentState || '');
+    const waiting = WAIT_WAKE_STATES.has(currentState) || Boolean(matched.pendingHumanQuestion);
+    const midFix = FIX_STATES.has(currentState);
     return {
-      action: 'busy-other-pr',
-      reason: `gitcode-pr-review 正在处理 ${runningKey}，引擎仍按 yaml 一把锁`,
+      action: 'wake',
+      mode: waiting ? 'resume-wait' : 'queue',
       runId,
-      currentState,
+      currentState: currentState || 'unknown',
+      reason: waiting
+        ? `同一 PR ${incomingKey} 正在等待门禁，唤醒现有 run`
+        : `同一 PR ${incomingKey} 正在 ${midFix ? currentState : (currentState || '修复')}，门禁快照排队不打断`,
     };
   }
 
-  const waiting = WAIT_WAKE_STATES.has(currentState) || Boolean(running.pendingHumanQuestion);
-  const midFix = FIX_STATES.has(currentState);
-  return {
-    action: 'wake',
-    mode: waiting ? 'resume-wait' : 'queue',
-    runId,
-    currentState: currentState || 'unknown',
-    reason: waiting
-      ? `同一 PR ${incomingKey} 正在等待门禁，唤醒现有 run`
-      : `同一 PR ${incomingKey} 正在 ${midFix ? currentState : (currentState || '修复')}，门禁快照排队不打断`,
-  };
+  const maxParallel = Number(input.maxParallel || DEFAULT_GITCODE_MAX_PARALLEL);
+  if (active.length >= maxParallel) {
+    const runIds = active.map((item) => String(item.runId || ''));
+    return {
+      action: 'busy-parallel',
+      reason: `并发已达上限 ${maxParallel}（活跃 ${active.length} 个 PR run：${runIds.join(', ')}），本次事件丢弃，稍后请重新触发`,
+      activeCount: active.length,
+      runIds,
+    };
+  }
+
+  return { action: 'start', activeCount: active.length };
 }
 
 export function formatWakeInstruction(input: {

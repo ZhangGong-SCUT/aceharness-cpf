@@ -3,6 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, test } from 'vitest';
 import {
+  extractBaseBranch,
   extractRepoBranch,
   extractVersionHint,
   parseOhosFlutterSdkInventory,
@@ -85,6 +86,73 @@ sdks:
     });
     expect(resolved.matched).toBe(false);
     expect(resolved.flutterBin).toBeNull();
+    expect(resolved.reason).toContain('禁止改用日常 SDK');
+  });
+
+  test('extracts base_ref from collector JSON and markdown', () => {
+    expect(extractBaseBranch('{"base_ref":"oh-3.35.7-dev"}')).toBe('oh-3.35.7-dev');
+    expect(extractBaseBranch('base_ref: `oh-3.44.9-dev`')).toBe('oh-3.44.9-dev');
+    expect(extractBaseBranch('branch: oh-3.35.7-dev')).toBeNull();
+  });
+
+  test('feature branch without version hint falls back to base branch (pixelmapPurgeableFinal)', () => {
+    const sdk335 = fakeSdk('335');
+    const inventory = parseOhosFlutterSdkInventory(`
+sdks:
+  - id: 3.35.7-ohos
+    version: 3.35.7
+    aliases: [oh-3.35.7-dev, oh-3.35.7]
+    path: ${sdk335.replace(/\\/g, '/')}
+`);
+    const resolved = resolveOhosFlutterSdk({
+      branch: 'pixelmapPurgeableFinal',
+      fallbackBranch: 'oh-3.35.7-dev',
+      inventory,
+    });
+    expect(resolved.matched).toBe(true);
+    expect(resolved.sdkId).toBe('3.35.7-ohos');
+    expect(resolved.reason).toContain('base 分支');
+  });
+
+  test('primary branch match takes precedence over fallback', () => {
+    const sdk335 = fakeSdk('335');
+    const sdk344 = fakeSdk('344');
+    const inventory = parseOhosFlutterSdkInventory(`
+sdks:
+  - id: 3.35.7-ohos
+    version: 3.35.7
+    aliases: [oh-3.35.7-dev]
+    path: ${sdk335.replace(/\\/g, '/')}
+  - id: 3.44.9-ohos
+    version: 3.44.9
+    aliases: [oh-3.44.9-dev]
+    path: ${sdk344.replace(/\\/g, '/')}
+`);
+    const resolved = resolveOhosFlutterSdk({
+      branch: 'plugin_restore_3.44',
+      fallbackBranch: 'oh-3.35.7-dev',
+      inventory,
+    });
+    expect(resolved.matched).toBe(true);
+    expect(resolved.sdkId).toBe('3.44.9-ohos');
+    expect(resolved.reason).not.toContain('base 分支');
+  });
+
+  test('no hint and no matching fallback stays unmatched', () => {
+    const sdk335 = fakeSdk('335');
+    const inventory = parseOhosFlutterSdkInventory(`
+sdks:
+  - id: 3.35.7-ohos
+    version: 3.35.7
+    aliases: [oh-3.35.7-dev]
+    path: ${sdk335.replace(/\\/g, '/')}
+`);
+    const resolved = resolveOhosFlutterSdk({
+      branch: 'pixelmapPurgeableFinal',
+      fallbackBranch: 'some-random-base',
+      inventory,
+    });
+    expect(resolved.matched).toBe(false);
     expect(resolved.reason).toContain('禁止改用日常 SDK');
   });
 

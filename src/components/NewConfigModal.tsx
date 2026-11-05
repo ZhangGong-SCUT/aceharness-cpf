@@ -68,9 +68,8 @@ import {
 } from '@/lib/ai/workflow-creation-items';
 import WorkspaceDirectoryPicker from './common/WorkspaceDirectoryPicker';
 import { useChat } from '@/contexts/ChatContext';
-import { agentApi } from '@/lib/core/api';
+import { agentApi, createTicketedEventSource, stopChatStreamById } from '@/lib/core/api';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
-import { createSafeEventSource } from '@/lib/core/safe-event-source';
 import { cn } from '@/lib/core/utils';
 
 const MonacoEditor = dynamic(
@@ -3375,7 +3374,7 @@ export default function NewConfigModal({
       return;
     }
     if (activeChatId) {
-      fetch(`/api/chat/stream?id=${encodeURIComponent(activeChatId)}`, { method: 'DELETE' }).catch(() => {});
+      void stopChatStreamById(activeChatId).catch(() => {});
     }
     chatIdRef.current = null;
   }, [detachStreamSubscription]);
@@ -4271,7 +4270,7 @@ export default function NewConfigModal({
       chatIdRef.current = chatId;
 
       return new Promise((resolve, reject) => {
-        const es = createSafeEventSource(`/api/chat/stream?id=${chatId}`);
+        const es = createTicketedEventSource(`/api/chat/stream?id=${chatId}`);
         eventSourceRef.current = es;
         let accumulated = '';
         let thinkingAccumulated = '';
@@ -4818,7 +4817,7 @@ export default function NewConfigModal({
     if (!stageKey) return;
 
     const reconnect = async () => {
-      const checkRes = await fetch(`/api/chat/stream?checkActive=${encodeURIComponent(planningFrontendSessionId)}&streamScope=${encodeURIComponent(PLANNING_STREAM_SCOPE)}`);
+      const checkRes = await modalAuthFetch(`/api/chat/stream?checkActive=${encodeURIComponent(planningFrontendSessionId)}&streamScope=${encodeURIComponent(PLANNING_STREAM_SCOPE)}`);
       const checkData = await checkRes.json().catch(() => null);
       if (cancelled || !checkData?.found || !checkData.chatId) return;
       if (reconnectingPlanningChatIdRef.current === checkData.chatId) return;
@@ -4861,7 +4860,7 @@ export default function NewConfigModal({
         setBackendSessionId(checkData.backendSessionId);
       }
 
-      const es = createSafeEventSource(`/api/chat/stream?id=${encodeURIComponent(checkData.chatId)}`);
+      const es = createTicketedEventSource(`/api/chat/stream?id=${encodeURIComponent(checkData.chatId)}`);
       eventSourceRef.current = es;
       let accumulated = checkData.streamContent || '';
       let thinkingAccumulated = '';

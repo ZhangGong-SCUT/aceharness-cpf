@@ -29,6 +29,7 @@ vi.mock('@/lib/workflow/preflight', () => ({
 vi.mock('@/lib/workflow/registry', () => ({
   workflowRegistry: {
     getManager: vi.fn(),
+    createManagerForRun: vi.fn(),
   },
 }));
 
@@ -169,6 +170,7 @@ describe('workflow start flow', () => {
     };
     const { workflowRegistry } = await import('@/lib/workflow/registry');
     (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
+    (workflowRegistry.createManagerForRun as any).mockResolvedValue(mockManager);
 
     const { runWorkflowPreflight } = await import('@/lib/workflow/preflight');
 
@@ -211,7 +213,9 @@ describe('workflow start flow', () => {
     expect(json.rehearsal.summary).toBeTruthy();
   });
 
-  test('returns 409 when workflow is already running', async () => {
+  test('parallel runs of the same config are allowed (no more single-run 409)', async () => {
+    // createManagerForRun 改造后，同一配置并行多 run 是设计行为（多 PR 并行自修）；
+    // 旧的「已在运行 → 409」单锁语义已废弃
     const { requireAuth } = await import('@/lib/auth/middleware');
     (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
 
@@ -229,6 +233,7 @@ describe('workflow start flow', () => {
     };
     const { workflowRegistry } = await import('@/lib/workflow/registry');
     (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
+    (workflowRegistry.createManagerForRun as any).mockResolvedValue(mockManager);
 
     const { POST } = await import('@/app/api/workflow/start/route');
     const response = await POST(makeRequest('/api/workflow/start', {
@@ -236,9 +241,10 @@ describe('workflow start flow', () => {
       json: { configFile: 'test.yaml' },
     }));
 
-    expect(response.status).toBe(409);
-    const json = await responseJson(response);
-    expect(json.error).toContain('已在运行');
+    expect(response.status).toBe(200);
+    const json = await response.json();
+    expect(json.success).toBe(true);
+    expect(workflowRegistry.createManagerForRun).toHaveBeenCalled();
   });
 
   test('normal start calls manager.start()', async () => {
@@ -260,6 +266,7 @@ describe('workflow start flow', () => {
     };
     const { workflowRegistry } = await import('@/lib/workflow/registry');
     (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
+    (workflowRegistry.createManagerForRun as any).mockResolvedValue(mockManager);
 
     const { POST } = await import('@/app/api/workflow/start/route');
     const response = await POST(makeRequest('/api/workflow/start', {
@@ -285,7 +292,9 @@ describe('workflow start flow', () => {
     );
   });
 
-  test('concurrent start requests cannot both pass while run-starting message is pending', async () => {
+  test('concurrent starts each get their own run manager (parallel design)', async () => {
+    // 并行改造后，同配置并发启动各自拿到独立 manager（createManagerForRun），
+    // 都能成功——不再有「run-starting 消息 pending → 第二个请求 409」的单锁语义
     const { requireAuth } = await import('@/lib/auth/middleware');
     (requireAuth as any).mockResolvedValue({ id: 'user-1', username: 'User', personalDir: '/tmp' });
 
@@ -297,26 +306,20 @@ describe('workflow start flow', () => {
       cwd: '/tmp',
     });
 
-    let releaseRunStartingMessage!: () => void;
-    const runStartingMessage = new Promise<void>((resolve) => {
-      releaseRunStartingMessage = resolve;
-    });
-    agoraMocks.appendWorkflowAgoraMessage.mockImplementation(() => runStartingMessage);
+    agoraMocks.appendWorkflowAgoraMessage.mockReset().mockResolvedValue(undefined);
 
-    let managerStatus: 'idle' | 'preparing' | 'running' | 'failed' = 'idle';
-    const mockManager = {
-      getStatus: vi.fn(() => ({ status: managerStatus })),
-      start: vi.fn().mockImplementation(() => {
-        if (managerStatus === 'preparing' || managerStatus === 'running') {
-          return Promise.reject(new Error('工作流已在运行中'));
-        }
-        managerStatus = 'preparing';
-        return new Promise(() => {});
-      }),
+    const makeManager = () => ({
+      getStatus: vi.fn().mockReturnValue({ status: 'running' }),
+      start: vi.fn().mockResolvedValue(undefined),
       emit: vi.fn(),
-    };
+    });
+    const managerA = makeManager();
+    const managerB = makeManager();
     const { workflowRegistry } = await import('@/lib/workflow/registry');
-    (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
+    (workflowRegistry.getManager as any).mockResolvedValue(managerA);
+    (workflowRegistry.createManagerForRun as any)
+      .mockResolvedValueOnce(managerA)
+      .mockResolvedValueOnce(managerB);
 
     const { POST } = await import('@/app/api/workflow/start/route');
     const first = POST(makeRequest('/api/workflow/start', {
@@ -328,17 +331,13 @@ describe('workflow start flow', () => {
       json: { configFile: 'test.yaml', frontendSessionId: 'sess-1' },
     }));
 
-    await vi.waitFor(() => {
-      expect(agoraMocks.appendWorkflowAgoraMessage).toHaveBeenCalledTimes(1);
-      expect(mockManager.start).toHaveBeenCalledTimes(1);
-    });
-    await expect(second).resolves.toHaveProperty('status', 409);
-
-    releaseRunStartingMessage();
-
     const firstResponse = await first;
+    const secondResponse = await second;
     expect(firstResponse.status).toBe(200);
-    expect(mockManager.start).toHaveBeenCalledTimes(1);
+    expect(secondResponse.status).toBe(200);
+    expect(managerA.start).toHaveBeenCalledTimes(1);
+    expect(managerB.start).toHaveBeenCalledTimes(1);
+    expect((workflowRegistry.createManagerForRun as any)).toHaveBeenCalledTimes(2);
   });
 
   test('already-running start rejection does not mark the active manager failed', async () => {
@@ -362,6 +361,7 @@ describe('workflow start flow', () => {
     };
     const { workflowRegistry } = await import('@/lib/workflow/registry');
     (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
+    (workflowRegistry.createManagerForRun as any).mockResolvedValue(mockManager);
 
     const { POST } = await import('@/app/api/workflow/start/route');
     const response = await POST(makeRequest('/api/workflow/start', {

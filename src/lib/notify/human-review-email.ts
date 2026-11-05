@@ -82,7 +82,10 @@ export async function sendHumanReviewEmailNotification(question: HumanQuestion):
   if (deliveredQuestionIds.has(question.id)) return { ok: true, reason: 'already-sent' };
   // 挂起是「等 CI 结果、webhook 唤醒后自动恢复」的自动等待，不是真需要人工处理——
   // 发"需人工处理"邮件会误导（CJ 案例：等 CI 期间收到人工审查邮件）。真正的人工确认状态照发。
-  if (String(question.currentState || '').trim() === '挂起') {
+  // 注意：审批中 currentState 恒为 __human_approval__，来源状态在 previousState（pr1958 教训：
+  // 旧条件查 currentState 永远不命中，挂起审批邮件照发）。
+  if (String(question.currentState || '').trim() === '挂起'
+    || String(question.previousState || '').trim() === '挂起') {
     return { ok: false, reason: 'parked-auto-resume' };
   }
 

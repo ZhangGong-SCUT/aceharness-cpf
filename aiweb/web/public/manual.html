@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PR 监控使用手册 - CPF AIWeb 工作台</title>
+<style>
+ :root {
+  --bg: #0d1117; --surface: #151b26; --surface2: #1a2230;
+  --border: rgba(255,255,255,.09); --text: #e8ecf4; --text-aux: #9aa3b8; --dim: #6b7490;
+  --accent: #4d8cf7; --ok: #3ab571; --warn: #d8b06a; --err: #df4545;
+ }
+ * { margin: 0; padding: 0; box-sizing: border-box; }
+ html { scroll-behavior: smooth; }
+ body {
+  background: var(--bg); color: var(--text);
+  font-family: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  line-height: 1.75; padding: 32px 16px 60px;
+ }
+ .wrap { max-width: 1000px; margin: 0 auto; }
+
+ header { text-align: center; margin-bottom: 22px; }
+ header h1 { font-size: 26px; background: linear-gradient(90deg, #6ea4ff, #a855f7); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+ header p { color: var(--text-aux); margin-top: 8px; font-size: 14.5px; }
+
+ /* ── 30 秒了解 ── */
+ .intro {
+  background: linear-gradient(145deg, rgba(77,140,247,.09), rgba(168,85,247,.06));
+  border: 1px solid rgba(120,130,255,.25);
+  border-radius: 16px; padding: 20px 24px; margin-bottom: 16px;
+ }
+ .intro h2 { font-size: 16.5px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+ .intro p { font-size: 14.5px; color: var(--text-aux); }
+ .intro b { color: var(--text); }
+ .flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; font-size: 13px; color: var(--text-aux); }
+ .flow .node { background: var(--surface2); border: 1px solid var(--border); padding: 3px 12px; border-radius: 16px; white-space: nowrap; }
+ .flow .arr { color: var(--dim); }
+
+ /* ── 开始前准备 ── */
+ .prep {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; padding: 18px 24px; margin-bottom: 16px;
+ }
+ .prep h2 { font-size: 16.5px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+ .prep ul { list-style: none; }
+ .prep li { font-size: 14px; color: var(--text-aux); padding: 5px 0 5px 30px; position: relative; }
+ .prep li::before { content: '✓'; position: absolute; left: 4px; color: var(--ok); font-weight: 800; }
+ .prep li b { color: var(--text); }
+ .prep li.none::before { content: '✗'; color: var(--dim); }
+
+ /* ── GitCode 权限范围排版（分组 + 读写/只读/禁止三选一）── */
+ .gitcode-scopes {
+  margin-top: 14px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface2); overflow: hidden;
+ }
+ .gs-title {
+  font-size: 14.5px; font-weight: 700; color: var(--text);
+  padding: 11px 16px; border-bottom: 1px solid var(--border);
+  background: rgba(77,140,247,.06);
+ }
+ .gs-sub {
+  font-size: 12.5px; color: var(--text-aux); padding: 9px 16px 3px;
+ }
+ .gs-sub b { color: #5fd69b; }
+ .gs-group { border-top: 1px solid rgba(255,255,255,.05); }
+ .gs-group:first-of-type { border-top: none; }
+ .gs-group-name {
+  font-size: 13px; font-weight: 800; color: #7fa8ff;
+  padding: 9px 16px 2px; letter-spacing: .05em;
+ }
+ .gs-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 7.5px 16px;
+  border-bottom: 1px solid rgba(255,255,255,.045);
+ }
+ .gs-row:last-child { border-bottom: none; }
+ .gs-row:hover { background: rgba(255,255,255,.025); }
+ .gs-row.sub { padding-left: 34px; }
+ .gs-row.sub .gs-label { font-size: 12.5px; color: var(--text-aux); }
+ .gs-label { flex: 1; font-size: 13.5px; color: var(--text); line-height: 1.5; min-width: 0; }
+ .gs-arrow { color: var(--dim); font-size: 11px; margin-left: 4px; }
+ /* 三段互斥选择器 */
+ .gs-opts { display: inline-flex; flex-shrink: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+ .opt {
+  font-size: 12px; font-weight: 700; color: var(--dim);
+  padding: 3.5px 12px; cursor: default; white-space: nowrap;
+  border-right: 1px solid var(--border); line-height: 1.5;
+ }
+ .opt:last-child { border-right: none; }
+ .opt.sel-rw { background: rgba(58,181,113,.22); color: #7ed8a9; }
+ .opt.sel-ro { background: rgba(77,140,247,.2); color: #7fa8ff; }
+ .opt.sel-ban { background: rgba(223,69,69,.16); color: #ee8d8d; }
+ .perm-note {
+  margin-top: 12px; font-size: 13px; color: var(--warn);
+  background: rgba(216,176,106,.06); border: 1px dashed rgba(216,176,106,.3);
+  padding: 9px 14px; border-radius: 10px; line-height: 1.8;
+ }
+ .perm-note b { color: #e6c583; }
+
+ /* ── 黏性导航 ── */
+ .anchor-nav {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+  padding: 12px 0; margin-bottom: 18px;
+  background: linear-gradient(180deg, var(--bg) 82%, transparent);
+ }
+ .anchor-nav a {
+  font-size: 13px; font-weight: 700; color: var(--text-aux); text-decoration: none;
+  background: var(--surface2); border: 1px solid var(--border);
+  padding: 5px 15px; border-radius: 20px; white-space: nowrap; transition: all .15s;
+ }
+ .anchor-nav a:hover { color: #fff; border-color: rgba(77,140,247,.45); }
+ .anchor-nav a b { color: #7fa8ff; margin-right: 4px; }
+
+ /* ── 步骤 ── */
+ section.step {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; padding: 22px 24px; margin-bottom: 20px;
+  scroll-margin-top: 70px;
+ }
+ section.step h2 { font-size: 18px; display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+ .step-no {
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+  background: linear-gradient(135deg, #4d8cf7, #a855f7); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 800;
+ }
+ .step-meta { font-size: 12.5px; color: var(--dim); margin-left: auto; }
+ section.step p.desc { color: var(--text-aux); font-size: 14.5px; margin: 8px 0 14px; }
+ section.step p.desc b { color: var(--text); }
+ section.step img {
+  width: 100%; border-radius: 12px; border: 1px solid var(--border); display: block;
+ }
+ section.step img + img { margin-top: 10px; }
+
+ /* ── ⑤ 门禁标签与邮件通知 ── */
+ .sub-title { font-size: 15.5px; margin: 20px 0 8px; color: var(--text); display: flex; align-items: center; gap: 7px; }
+ .sub-title:first-of-type { margin-top: 2px; }
+
+ .gate-demo {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 12px; padding: 12px 16px; margin: 10px 0 12px;
+  display: flex; flex-direction: column; gap: 9px;
+ }
+ .gate-demo-row { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+ .gate-demo-note { font-size: 12.5px; color: var(--dim); margin-left: 8px; }
+
+ .pr-gate-tag {
+  font-size: 12.5px; font-weight: 700; padding: 2px 9px;
+  border-radius: 11px; white-space: nowrap;
+ }
+ .pr-gate-tag.ok   { color: #5fd69b; background: rgba(58, 181, 113, .12); border: 1px solid rgba(58, 181, 113, .3); }
+ .pr-gate-tag.fail  { color: #ff8080; background: rgba(255, 99, 99, .12); border: 1px solid rgba(255, 99, 99, .34); }
+ .pr-gate-tag.pending { color: #9aa3c4; background: rgba(83, 91, 122, .16); border: 1px solid rgba(83, 91, 122, .3); }
+ .pr-gate-tag.warn  { color: #d8b06a; background: rgba(216, 176, 106, .1); border: 1px solid rgba(216, 176, 106, .3); }
+
+ /* 完成标志 */
+ .expect {
+  margin-top: 12px; font-size: 13.5px; color: #7ed8a9;
+  background: rgba(58,181,113,.07); border: 1px solid rgba(58,181,113,.25);
+  padding: 9px 14px; border-radius: 10px;
+ }
+ .expect b { color: #a3e8c4; }
+
+ .tip {
+  margin-top: 12px; font-size: 13.5px; color: var(--warn);
+  background: rgba(216,176,106,.07); border: 1px solid rgba(216,176,106,.25);
+  padding: 9px 14px; border-radius: 10px;
+ }
+ .tip b { color: #e6c583; }
+
+ /* ── 状态图例 ── */
+ .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+ .legend-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; padding: 18px 22px;
+ }
+ .legend-card h3 { font-size: 15px; margin-bottom: 12px; display: flex; align-items: center; gap: 7px; }
+ .lg-row { display: flex; align-items: flex-start; gap: 10px; padding: 4.5px 0; font-size: 13.5px; color: var(--text-aux); }
+ .lg-badge { flex-shrink: 0; font-size: 12px; font-weight: 700; padding: 2px 11px; border-radius: 14px; white-space: nowrap; }
+ .lg-b-run  { color: #7fa8ff; background: rgba(77,140,247,.14); border: 1px solid rgba(77,140,247,.32); }
+ .lg-b-done { color: #5fd69b; background: rgba(58,181,113,.13); border: 1px solid rgba(58,181,113,.3); }
+ .lg-b-fail { color: #ee8d8d; background: rgba(223,69,69,.14); border: 1px solid rgba(223,69,69,.32); }
+ .lg-b-off  { color: #9aa3c4; background: rgba(83,91,122,.18); border: 1px solid rgba(83,91,122,.3); }
+ .lg-b-approval { color: #fff; background: linear-gradient(135deg, rgba(224,108,117,.85), rgba(230,130,100,.8)); }
+
+ /* ── FAQ ── */
+ .faq h2 { font-size: 18px; margin-bottom: 14px; }
+ .faq details {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px 18px; margin-bottom: 10px; cursor: pointer;
+ }
+ .faq summary { font-weight: 700; font-size: 14.5px; color: var(--text); }
+ .faq details p { color: var(--text-aux); font-size: 14px; margin-top: 8px; }
+ .faq details p b { color: var(--text); }
+
+ footer { text-align: center; color: var(--dim); font-size: 13px; margin-top: 34px; }
+ footer a { color: #7fa8ff; text-decoration: none; }
+
+ @media (max-width: 720px) {
+  body { padding: 20px 10px 40px; }
+  section.step, .intro, .prep, .legend-card { padding: 15px; }
+  .legend { grid-template-columns: 1fr; }
+  .step-meta { display: none; }
+ }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+ <header>
+  <h1>PR 监控使用手册</h1>
+  <p>让 AI 自动检视你的 PR，并把评审结论回写到 GitCode · 全程约 3 分钟配置</p>
+ </header>
+
+ <!-- 30 秒了解 -->
+ <div class="intro">
+  <h2>功能概述</h2>
+  <p>开启监控后，系统会<b>以你的身份</b>自动完成 PR 检视，你不需要守着页面等：</p>
+  <div class="flow">
+   <span class="node">你在页面点「开启监控」</span><span class="arr">→</span>
+   <span class="node">自动读取 PR 的 diff / 门禁 / 评论</span><span class="arr">→</span>
+   <span class="node">AI 逐步检视代码</span><span class="arr">→</span>
+   <span class="node">给出评审结论</span><span class="arr">→</span>
+   <span class="node">回写评论到 GitCode PR</span>
+  </div>
+  <p style="margin-top:10px">全过程<b>人工控制</b>：只有你点「开启」才会启动，随时可「关闭」。</p>
+ </div>
+
+ <!-- 开始前准备 -->
+ <div class="prep">
+  <h2>前置条件</h2>
+  <ul>
+   <li><b>GitCode 账号</b>，且在监听仓库（CPF-Flutter/flutter_flutter）已提交过 PR</li>
+   <li><b>GitCode 私人令牌</b>一枚，按下方的权限范围勾选（创建入口：GitCode → 设置 → 安全设置 → 私人令牌，或访问 <a href="https://gitcode.com/setting/token-classic/create" target="_blank" rel="noopener noreferrer" style="color:#7fa8ff">新建访问令牌</a>）</li>
+  </ul>
+
+  <!-- 模拟 GitCode「配置访问令牌的权限范围」页面：分组 + 每行读写/只读/禁止三选一 -->
+  <div class="gitcode-scopes">
+   <div class="gs-title">配置访问令牌的权限范围</div>
+   <p class="gs-sub">对照 GitCode 令牌创建页逐行设置（<b>绿色为推荐档位</b>，其余保持默认或选「禁止」）：</p>
+
+   <!-- 组1：用户 -->
+   <div class="gs-group">
+    <div class="gs-group-name">用户</div>
+    <div class="gs-row">
+     <span class="gs-label">访问你的个人信息、最新动态等 <span class="gs-arrow" title="可展开子权限">▾</span></span>
+     <span class="gs-opts"><span class="opt">读写</span><span class="opt sel-ro">只读</span><span class="opt">禁止</span></span>
+    </div>
+    <div class="gs-row sub">
+     <span class="gs-label">key：查看、部署、删除你的公钥</span>
+     <span class="gs-opts"><span class="opt">读写</span><span class="opt">只读</span><span class="opt sel-ban">禁止</span></span>
+    </div>
+   </div>
+
+   <!-- 组2：组织 -->
+   <div class="gs-group">
+    <div class="gs-group-name">组织</div>
+    <div class="gs-row">
+     <span class="gs-label">查看、管理你的组织以及成员</span>
+     <span class="gs-opts"><span class="opt">读写</span><span class="opt">只读</span><span class="opt sel-ban">禁止</span></span>
+    </div>
+   </div>
+
+   <!-- 组3：企业 -->
+   <div class="gs-group">
+    <div class="gs-group-name">企业</div>
+    <div class="gs-row">
+     <span class="gs-label">查看、管理你的企业标签信息</span>
+     <span class="gs-opts"><span class="opt">读写</span><span class="opt">只读</span><span class="opt sel-ban">禁止</span></span>
+    </div>
+   </div>
+
+   <!-- 组4：项目 -->
+   <div class="gs-group">
+    <div class="gs-group-name">项目</div>
+    <div class="gs-row">
+     <span class="gs-label">查看、创建、更新你的项目 <span class="gs-arrow" title="可展开子权限">▾</span></span>
+     <span class="gs-opts"><span class="opt">读写</span><span class="opt sel-ro">只读</span><span class="opt">禁止</span></span>
+    </div>
+    <div class="gs-row sub">
+     <span class="gs-label">PR：查看、发布、更新你的 Pull Request</span>
+     <span class="gs-opts"><span class="opt sel-rw">读写</span><span class="opt">只读</span><span class="opt">禁止</span></span>
+    </div>
+    <div class="gs-row sub">
+     <span class="gs-label">Issue：查看、发布、更新你的 Issue</span>
+     <span class="gs-opts"><span class="opt">读写</span><span class="opt sel-ro">只读</span><span class="opt">禁止</span></span>
+    </div>
+    <div class="gs-row sub">
+     <span class="gs-label">Notes：查看、发布、管理你在项目、代码片段中的评论</span>
+     <span class="gs-opts"><span class="opt sel-rw">读写</span><span class="opt">只读</span><span class="opt">禁止</span></span>
+    </div>
+    <div class="gs-row sub">
+     <span class="gs-label">Hook：查看、部署、更新你的 Webhook</span>
+     <span class="gs-opts"><span class="opt">读写</span><span class="opt">只读</span><span class="opt sel-ban">禁止</span></span>
+    </div>
+    <div class="gs-row sub">
+     <span class="gs-label">Repository：bash客户端的上传下载</span>
+     <span class="gs-opts"><span class="opt sel-rw">读写</span><span class="opt">只读</span><span class="opt">禁止</span></span>
+    </div>
+   </div>
+  </div>
+
+  <div class="perm-note">
+   <b>为什么这样选</b>——<b>用户·只读</b>：校验令牌归属（保存时读账号信息）；<b>项目·只读</b>：读 PR 详情、diff、变更文件；<b>PR·读写</b>：读 PR 与门禁状态，并回写检视结论；<b>Notes·读写</b>：发布评论（结论回写 PR 评论）；<b>Issue·只读</b>：读 PR 同号 Issue 的标签与评论（门禁检查、AI 评审读取的实际依赖）。<br/>
+   页面默认几乎全为「读写」，请把 <b>key、组织、企业、Hook 设为「禁止」</b>（监控完全用不到）。<b>Repository</b> 仅在你需要平台<b>代推修复</b>时才设为「读写」（上传下载）；只做只读检视可设为「禁止」。若发现结论未回写 PR 评论，确认 Notes 为「读写」；只想只读检视时，PR/Notes 可降为「只读」（结论仅在页面查看）。保存令牌时平台会对目标仓库做一次<b>只读</b>能力探测，探测不到的能力显示「未知」，不会用真实推送去试探。
+  </div>
+ </div>
+
+ <!-- 黏性导航 -->
+ <nav class="anchor-nav">
+  <a href="#s1">1. 注册并登录</a>
+  <a href="#s2">2. 配置令牌</a>
+  <a href="#s3">3. 开启监控</a>
+  <a href="#s4">4. 查看检视结果</a>
+  <a href="#s5">5. 门禁标签与邮件通知</a>
+  <a href="#s6">6. 检视修复决策闭环</a>
+  <a href="#legend">附：状态说明</a>
+  <a href="#faq">附：常见问题</a>
+ </nav>
+
+ <!-- ① -->
+ <section class="step" id="s1">
+  <h2><span class="step-no">1</span>注册并登录<span class="step-meta"> 约 1 分钟</span></h2>
+  <p class="desc">打开平台 <b>https://aiweb.cpf-manager.xyz</b>，点左侧菜单 <b>「PR 监控」</b>进入功能页，再点 <b>「登录 / 注册」</b>。没有账号就切到 <b>「注册」</b> 标签填表创建；有账号直接登录。</p>
+  <img src="img/manual/01-open.png" alt="进入 PR 监控">
+  <img src="img/manual/03-register.png" alt="注册表单">
+  <div class="expect"><b>完成标志</b>：登录后进入 PR 监控页，能看到「我的 GitCode PR」列表和你的身份徽章（见下图）。</div>
+  <img src="img/manual/04-first-view.png" alt="登录后的页面">
+  <div class="tip"><b>密保问答</b>用于找回密码，请牢记答案。若提示"等待管理员审核"，请联系管理员开通。</div>
+ </section>
+
+ <!-- ② -->
+ <section class="step" id="s2">
+  <h2><span class="step-no">2</span>配置 GitCode 令牌<span class="step-meta"> 约 1 分钟 · 只需一次</span></h2>
+  <p class="desc">点右上角 <b>「令牌」</b>，粘贴你的 GitCode 私人令牌（准备清单里已生成），点 <b>「✓ 校验并保存」</b>。</p>
+  <img src="img/manual/05-token.png" alt="令牌配置">
+  <div class="expect"><b>完成标志</b>：令牌按钮的圆点<b>变绿</b>，显示"已配置：你的用户名"；「我的 GitCode PR」自动变成<b>你的 PR 列表</b>。</div>
+  <div class="tip">令牌仅保存在你的个人配置中，页面只显示脱敏值（如 <b>v6xh****7gR5</b>），可随时更新或清除。若暂不想配令牌，也可联系管理员把你的账号邮箱与 GitCode 用户名做绑定（邮箱绑定）。</div>
+ </section>
+
+ <!-- ③ -->
+ <section class="step" id="s3">
+  <h2><span class="step-no">3</span>开启监控<span class="step-meta"> 数秒</span></h2>
+  <p class="desc">「我的 GitCode PR」列表支持<b>双仓切换</b>（flutter / engine 标签）、<b>搜索编号/标题</b>、按 open/merged/closed 状态筛选。找到想检视的 PR，点它右侧的 <b>「开启监控」</b>。系统是<b>人工模式</b>——Webhook 推送不会自动启动任何监控，开关完全由你掌握。</p>
+  <img src="img/manual/11-repo-filter.png" alt="仓库筛选与搜索">
+  <img src="img/manual/06-start-monitor.png" alt="开启监控">
+  <div class="expect"><b>完成标志</b>：该 PR 显示 <b>「监控中」</b>，下方同步出现一张监控任务卡片（见下图）。之后你<b>可以关掉页面</b>，检视在服务器上继续进行。</div>
+  <img src="img/manual/07-monitoring.png" alt="监控中状态">
+  <div class="tip">不需要时点 <b>「关闭监控」</b> 即可终止；已结束的任务再次点「开启监控」会<b>保留旧任务历史</b>（不再删除旧记录）。<b>已合入/已关闭的 PR 无法开启</b>（按钮置灰 + 422 拦截）；批量开启按 <b>250ms 短暂错峰</b>串行启动，无需重复点击。</div>
+ </section>
+
+ <!-- ④ -->
+ <section class="step" id="s4">
+  <h2><span class="step-no">4</span>查看检视结果<span class="step-meta"> 自动送达</span></h2>
+  <p class="desc">任务区顶部有<b>统计栏</b>（全部任务 / 监控中 / 需人工确认 / 监控完成，可点击快速筛选）。检视完成后结果在两个地方：<b>① 页面</b>——点任务卡片标题行展开，看步骤时间线、每步耗时与最终评审结论；点「步骤输出」看详情（自动三分类：关键产物 / 按阶段分组 / 折叠的历史归档）；点「检视修复」进入决策闭环（见第 ⑥ 步）。<b>② GitCode</b>——评审结论会自动<b>回写成 PR 评论</b>。</p>
+  <img src="img/manual/12-task-stats.png" alt="任务统计与任务卡片">
+  <img src="img/manual/08-detail.png" alt="任务详情">
+  <div class="expect"><b>完成标志</b>：任务状态变为 <b>「监控完成·待评审」</b>，展开卡片能看到「最终评审」结论；GitCode PR 评论区出现检视报告。</div>
+  <div class="tip">页面每 10 秒自动刷新，也可点 <b>↻</b> 立即刷新；工作流遇到需要人工确认的环节，卡片会显示 <b>「需人工确认」</b> 并附工作台链接。</div>
+ </section>
+
+ <!-- ⑤ -->
+ <section class="step" id="s5">
+  <h2><span class="step-no">5</span>门禁标签与邮件通知</h2>
+
+  <h3 class="sub-title">门禁状态标签</h3>
+  <p class="desc">「我的 PR 列表」的每一行都会实时显示 DCP 门禁五项检查的标签：<b>AI / DCO / 静态 / 编译 / 冒烟</b>。不用点进 GitCode，扫一眼就知道哪个 PR 卡在哪一关、该不该去处理：</p>
+  <div class="gate-demo">
+   <div class="gate-demo-row"><span class="pr-gate-tag ok">✓AI</span><span class="pr-gate-tag ok">✓DCO</span><span class="pr-gate-tag ok">✓静态</span><span class="pr-gate-tag ok">✓编译</span><span class="pr-gate-tag ok">✓冒烟</span><span class="gate-demo-note">→ 全部通过，等人工评审合入即可</span></div>
+   <div class="gate-demo-row"><span class="pr-gate-tag ok">✓AI</span><span class="pr-gate-tag ok">✓DCO</span><span class="pr-gate-tag ok">✓静态</span><span class="pr-gate-tag ok">✓编译</span><span class="pr-gate-tag fail">✗冒烟</span><span class="gate-demo-note">→ 冒烟测试失败（红色），该处理的 PR</span></div>
+   <div class="gate-demo-row"><span class="pr-gate-tag pending">AI</span><span class="pr-gate-tag pending">DCO</span><span class="pr-gate-tag pending">静态</span><span class="pr-gate-tag pending">编译</span><span class="pr-gate-tag pending">冒烟</span><span class="gate-demo-note">→ 灰色 = 该项还没跑（或进行中），等 CI 出结果</span></div>
+   <div class="gate-demo-row"><span class="pr-gate-tag warn">…AI</span><span class="pr-gate-tag ok">✓DCO</span><span class="pr-gate-tag pending">静态</span><span class="pr-gate-tag pending">编译</span><span class="pr-gate-tag pending">冒烟</span><span class="gate-demo-note">→ 黄色 = AI 检视进行中</span></div>
+  </div>
+  <img src="img/manual/09-gate-tags.png" alt="PR 列表门禁标签">
+  <img src="img/manual/09b-gate-fail.png" alt="红色失败标签示例（冒烟测试失败）">
+  <div class="tip">标签数据来自 GitCode 实时同步（约 30 秒缓存）；鼠标悬停在标签组上可看<b>原始标签全名</b>。</div>
+
+  <h3 class="sub-title">邮件通知开关</h3>
+  <p class="desc">工具栏（令牌旁边）的 <b>「邮件通知」</b> 按钮控制工作流的邮件提醒：<b>人工确认、门禁全绿、run 结束</b> 等关键节点会发邮件给任务所属人。圆点绿色 = 开启，灰色 = 关闭，<b>点击即切换、立即生效</b>：</p>
+  <img src="img/manual/10-email-on.png" alt="邮件通知开启（绿点）">
+  <img src="img/manual/10-email-off.png" alt="邮件通知关闭（灰点）">
+  <div class="tip">邮件按 <b>PR 归档成一个会话</b>（同一 PR 的所有通知折叠在一起，不会刷屏）；SMTP 未配置时按钮仍可打开，但不会实际发信。</div>
+ </section>
+
+ <!-- ⑥ -->
+ <section class="step" id="s6">
+  <h2><span class="step-no">6</span>检视修复决策闭环</h2>
+  <p class="desc">展开任务卡片点 <b>「检视修复」</b>，AI 检视意见与修复建议<b>逐条配对</b>展示：左边是检视意见（文件/行号/问题），右边是对应的修复改动（fix.patch diff），每条底部是你的<b>逐条决策</b>：</p>
+  <div class="gate-demo">
+   <div class="gate-demo-row"><span class="pr-gate-tag ok">认可</span><span class="gate-demo-note">采纳该条修复（可再点取消）</span></div>
+   <div class="gate-demo-row"><span class="pr-gate-tag fail">驳回</span><span class="gate-demo-note">不采纳（可再点取消）</span></div>
+   <div class="gate-demo-row"><span class="pr-gate-tag warn">补充建议</span><span class="gate-demo-note">对该条意见补充你的要求</span></div>
+   <div class="gate-demo-row"><span class="pr-gate-tag pending">按建议修改此条</span><span class="gate-demo-note">让工作流只按这一条意见重新修复</span></div>
+  </div>
+  <img src="img/manual/13-review-fix.png" alt="检视修复面板">
+  <div class="tip">底部「整体决策」实时显示进度（N 认可 · N 驳回 · N 条已决策）。意见发布后 PR 又有新提交的旧意见会自动置灰并标注"↻ 意见后有 push，修复状态未验证"——<b>有新提交不等于已修复</b>。「提交的修改」区即使原任务被清理，也会从历史任务 / GitCode 提交记录<b>自动恢复</b>展示。面板顶部还会显示本次动作的<b>执行回执</b>（已认可→待应用→已提交→已推送→待 CI→已验证，受阻时给出原因）与<b>令牌能力提示</b>。</div>
+ </section>
+
+ <!-- 状态说明 -->
+ <section class="step" id="legend" style="padding-bottom:16px">
+  <h2><span class="step-no">附</span>状态说明<span class="step-meta">看不懂徽章时查这里</span></h2>
+  <div class="legend">
+   <div class="legend-card">
+    <h3>PR 监控状态（我的 PR 列表）</h3>
+    <div class="lg-row"><span class="lg-badge lg-b-run">监控中</span><span>检视正在进行，结果未出</span></div>
+    <div class="lg-row"><span class="lg-badge lg-b-done">已监控 ×N</span><span>该 PR 监控过 N 次，当前无进行中任务</span></div>
+    <div class="lg-row"><span class="lg-badge lg-b-off">未监控</span><span>从未开启过监控</span></div>
+   </div>
+   <div class="legend-card">
+    <h3>任务状态（监控任务卡片）</h3>
+    <div class="lg-row"><span class="lg-badge lg-b-run">监控中</span><span>正在运行（含准备/等待阶段）</span></div>
+    <div class="lg-row"><span class="lg-badge lg-b-approval">需人工确认</span><span>工作流暂停等你处理，点卡片里的链接前往</span></div>
+    <div class="lg-row"><span class="lg-badge lg-b-done">监控完成·待评审</span><span>检视完成，结论已生成并回写 PR</span></div>
+    <div class="lg-row"><span class="lg-badge lg-b-fail">已崩溃</span><span>因服务重启等异常中断，可点「重新开启监控」</span></div>
+    <div class="lg-row"><span class="lg-badge lg-b-off">已停止</span><span>你主动关闭或正常结束</span></div>
+   </div>
+   <div class="legend-card">
+    <h3>门禁标签（PR 行内，详见第 5 步）</h3>
+    <div class="lg-row"><span class="pr-gate-tag ok">✓冒烟</span><span><b>绿色 ✓</b> 该项检查通过</span></div>
+    <div class="lg-row"><span class="pr-gate-tag fail">✗冒烟</span><span><b>红色 ✗</b> 该项失败——优先处理的信号</span></div>
+    <div class="lg-row"><span class="pr-gate-tag pending">冒烟</span><span><b>灰色</b> 未验证（还没跑到 / 进行中）</span></div>
+    <div class="lg-row"><span class="pr-gate-tag warn">…AI</span><span><b>黄色 …</b> AI 检视进行中</span></div>
+   </div>
+  </div>
+ </section>
+
+ <!-- FAQ -->
+ <section class="faq" id="faq">
+  <h2>常见问题</h2>
+  <details>
+   <summary>提示"未绑定 GitCode 身份"怎么办？</summary>
+   <p>两种方式任选：① 点「令牌」配置私人令牌（推荐，<b>保存即自动绑定</b>）；② 联系管理员在服务端配置你的账号邮箱与 GitCode 用户名的映射（邮箱绑定）。</p>
+  </details>
+  <details>
+   <summary>开启监控后可以关掉网页吗？</summary>
+   <p><b>可以</b>。检视在服务器上运行，关页面、关电脑都不影响。下次打开页面会自动看到最新进度（也可点 ↻ 立即刷新）。</p>
+  </details>
+  <details>
+   <summary>检视要跑多久？我怎么知道完成了？</summary>
+   <p>视 PR 复杂度而定，可能持续较长时间。完成后无需你做任何事：任务状态自动变为「监控完成·待评审」，评审结论同时<b>回写为 GitCode PR 评论</b>，你去 PR 页面就能看到。</p>
+  </details>
+  <details>
+   <summary>能看到或监控别人的 PR 吗？</summary>
+   <p><b>不能</b>。PR 列表只展示你绑定身份的 PR，监控任务按账号隔离——你只能看到和操作自己的。（管理员可切换「全部用户」视角并查看管理统计页）</p>
+  </details>
+  <details>
+   <summary>能监控 flutter_engine 仓的 PR 吗？</summary>
+   <p><b>可以</b>。平台同时监听 <b>flutter_flutter 与 flutter_engine 双仓</b>，列表顶部有仓库切换标签；engine 的 PR 行带 engine 徽章，跨仓同号 PR 不会混淆。</p>
+  </details>
+  <details>
+   <summary>批量开启多个监控，怎么有的还没开始跑？</summary>
+   <p>为防并发压垮引擎，批量开启按 <b>250ms 短暂错峰</b>串行启动。排队中的任务卡片会有提示，无需重复点击。</p>
+  </details>
+  <details>
+   <summary>「检视修复」里点「按建议修改此条」后会发生什么？</summary>
+   <p>工作流会带着该条意见<b>重新进入检视修复</b>，只按这条意见修改后推送并重新触发门禁——不会动其他已认可的修复。多条意见想一起处理时，先逐条「认可/驳回」再用整体决策。</p>
+  </details>
+  <details>
+   <summary>令牌权限怎么设置？每行的读写/只读/禁止选哪个？</summary>
+   <p>推荐配置：<b>用户→只读</b>（校验令牌归属）、<b>项目→只读</b>（读 PR 详情/diff/变更文件）、<b>PR→读写</b>（读门禁状态 + 回写结论）、<b>Notes→读写</b>（发布评论）、<b>Issue→只读</b>（门禁/AI 评审需读 PR 同号 Issue）；<b>key、组织、企业、Hook 选「禁止」</b>；<b>Repository</b> 仅在需要平台<b>代推修复</b>时选「读写」，只读检视可「禁止」。只想只读检视、不回写评论时，把 PR/Notes 降为「只读」即可。完整对照表见顶部「开始前准备」。</p>
+  </details>
+  <details>
+   <summary>任务状态"已崩溃"是什么意思？会丢数据吗？</summary>
+   <p>通常是服务重启等异常导致的中断，历史步骤仍可查看。点「重新开启监控」会开始一次新检视（旧记录自动替换，一个 PR 只保留最新一条任务）。</p>
+  </details>
+  <details>
+   <summary>任务卡片显示"等待 CI 门禁结果"，之后一直不动了？</summary>
+   <p>工作流在门禁出结果后会<b>自动继续</b>（无需操作）。若长时间不动，说明处于人工监控模式——需要你到任务卡片附带的 <b>工作台链接</b> 里操作：可在检查点弹窗<b>提交反馈并点「开始迭代」</b>（工作流会带着你的反馈重新检查门禁），或等 CI 评论 webhook 自动唤醒。</p>
+  </details>
+  <details>
+   <summary>「提交反馈，开始迭代」是干什么的？什么时候用？</summary>
+   <p>当工作流停在检查点（如等待门禁、需人工确认）时，你可以在工作台输入反馈（例如"我已评论 start build，请去检查门禁"）并点「开始迭代」——工作流会<b>把反馈注入上下文并立即带着反馈继续执行</b>，而不是干等。单纯想放行则点「批准」。</p>
+  </details>
+  <details>
+   <summary>邮件通知开了但没收到邮件？</summary>
+   <p>依次检查：① 任务是不是<b>你自己开启的监控</b>（邮件只发给任务所属人）；② 按钮圆点是否为绿色；③ 邮件是否进了<b>垃圾箱</b>（外部 SMTP 来信常被误判）；④ 服务端 SMTP 是否已配置（未配置时不会实际发信，联系管理员）。</p>
+  </details>
+  <details>
+   <summary>忘记密码怎么办？</summary>
+   <p>在登录页使用注册时设置的密保问答找回密码。</p>
+  </details>
+ </section>
+
+ <footer>
+  CPF AIWeb 工作台 · PR 监控使用手册 ·
+  <a href="index.html">返回平台</a> ·
+  <a href="https://gitcode.com/huangyouhua/ACEHarness/tree/cpf-ohos-issue-diagnosis" target="_blank" rel="noopener noreferrer">AceHarness 仓库</a>
+ </footer>
+
+</div>
+</body>
+</html>

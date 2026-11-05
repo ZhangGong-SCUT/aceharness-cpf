@@ -17,6 +17,7 @@ const activeAgentStreams = new Map<string, {
   settled: boolean;
   frontendSessionId?: string | null;
   agentName?: string;
+  ownerId: string;
   cancel?: () => void;
 }>();
 
@@ -210,6 +211,7 @@ export async function POST(
       settled: false,
       frontendSessionId,
       agentName: name,
+      ownerId: user.id,
       cancel: () => prepared.engine.cancel(),
     };
     activeAgentStreams.set(streamId, entry);
@@ -232,13 +234,15 @@ export async function POST(
 }
 
 export async function GET(request: NextRequest) {
+  const auth = await requireAuth(request, { streamScope: 'agents/chat/stream' });
+  if (auth instanceof Response) return auth;
   const streamId = request.nextUrl.searchParams.get('id');
   if (!streamId) {
     return NextResponse.json({ error: 'Missing id' }, { status: 400 });
   }
 
   const entry = activeAgentStreams.get(streamId);
-  if (!entry) {
+  if (!entry || (auth.role !== 'admin' && entry.ownerId !== auth.id)) {
     return NextResponse.json({ error: 'Stream not found' }, { status: 404 });
   }
 
@@ -303,10 +307,13 @@ export async function GET(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth instanceof Response) return auth;
   const frontendSessionId = request.nextUrl.searchParams.get('frontendSessionId')?.trim();
   if (frontendSessionId) {
     let killed = 0;
     for (const [streamId, entry] of activeAgentStreams.entries()) {
+      if (auth.role !== 'admin' && entry.ownerId !== auth.id) continue;
       if (entry.frontendSessionId !== frontendSessionId) continue;
       if (entry.cancel) {
         entry.cancel();
@@ -322,6 +329,9 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: 'Missing id' }, { status: 400 });
   }
   const entry = activeAgentStreams.get(streamId);
+  if (entry && auth.role !== 'admin' && entry.ownerId !== auth.id) {
+    return NextResponse.json({ error: 'Stream not found' }, { status: 404 });
+  }
   if (entry?.cancel) {
     entry.cancel();
   }

@@ -129,6 +129,8 @@ systemPrompt: |-
 
   步骤 4：判定 bug 是否修复
   - 黄金标志锁定为复现阶段从 Issue 正文写下的那一条，本阶段不得修订、改写、放宽。不能用本机碰巧复现的更重症状代替（例如 Issue 要自定义 code/details，却用「Future 不挂死」判 pass；或 window≠local 改成 display 带偏移）
+  - 语言列表类判定：native 长度为 0 时打印 L1/L2 INDETERMINATE: native list not ready，禁止打印 OK；长度不足黄金标志要求的最少项数时打印 PRECONDITION_NOT_MET。`L1 OK ... length (N) ... length (M)` 只有 N=M 且 M≥2 才算有效 OK。无效 OK 不得写入「L1 OK×N」。本轮工作区 outputs/ 没有新 hilog 时，issue_golden_flag_met 不得为 true。
+  - hilog、截图、安装记录只写工作区 outputs/。验证开始时写 outputs/device-snapshot.json（checked_at、hdc_targets、adb_devices）。父 run 的日志称为继承证据并写明 run_id；只有本轮新日志可以写「实测」。未测量的调用链写「预计触发（未测量）」，禁止写「100%」或把推断写成 confirmed。
   - bug_fixed=true 仅当：engine_aligned=true 且 issue_golden_flag_met=true（Issue 原文验收过了）
   - bug_fixed=false：bug 仍复现（Issue 黄金标志与修复前一致），或只过了旁证没过 Issue 验收
   - bug_fixed=unknown：运行失败无法判定，或引擎未对齐

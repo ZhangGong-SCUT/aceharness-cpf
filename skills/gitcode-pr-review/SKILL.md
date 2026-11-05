@@ -27,7 +27,8 @@ source: aceharness
 
 | 文件 | 用途 |
 |------|------|
-| `outputs/gate-check.json` | phase、标签、CI 评论、fork 信息 |
+| `outputs/gate-check.json` | phase、标签、CI 评论、fork 信息；`log_verdict`/`root_cause_verified`/`log_reasons`/`log_evidence`（日志核对），`retry_budget_exhausted`/`needs_maintainer`/`maintainer_hint`（重试用尽 → 前端提示联系门禁维护人员） |
+| `outputs/gate-log-analysis.json` | 门禁日志根因核对（构建日志证据 / 跑测报告是否可读） |
 | `outputs/ai-review.md` | PR 上已有的 AI 检视意见 |
 | `outputs/ai-review-comments.json` | 检视意见结构化数据 |
 | `outputs/fix.patch` | 本轮修复 diff |
@@ -60,10 +61,44 @@ phase 会返回 `need_start_build`：**不改代码、不 push，直接重发 `s
 **测试失败的抖动识别**：冒烟测试失败但最近一条门禁评论里的失败详情**全部是 `ecotest timeout`**（含 `failed(IGNORE)`，
 #1927/#1978 同款平台抖动、无断言失败）时，同样走 `need_start_build` 重试，预算内不进人工确认；
 混入任何真实断言失败、裸 `failed`（无原因）或预算用完，仍按 `test_failed` 人工确认。
+这层是**评论字符串**判定；一旦拉到跑测报告（见下"门禁日志根因核对"）就以报告为准：
+`harness_env_failure`（平台/环境侧）继续重试，`test_assertion`（真断言失败）立即停手。
 但 `check-pr-gates.mjs` 检测到静态失败时会先拉 DCP codeCheck 明细（`fetch-dcp-report.mjs`），
 `dcp_defect_count > 0`（真实缺陷，文件/行/规则可查）时跳过重试直接进静态修复；拉不到明细才走抖动重试。
 限流判定只认「限流评论之后 CI 又开始过构建」之前的窗口——CI 重新接受过 start build 即视为已解除。
 重试用完仍失败才进静态修复/编译修复。新 push 会重置重试预算。CI 已开始重跑时 phase=running，不要重复发。
+
+**门禁日志根因核对（防"抖动"臆断）**：有失败标签时 `check-pr-gates.mjs` 自动拉门禁日志，写 `outputs/gate-log-analysis.json`：
+
+- **构建日志可下载**（CI 评论里的 `.../log/build.log` 是指针文件，正文指向 `build.log.zip`，实为未压缩 tar），可证实三类结论：
+  `compile_error`（有明确编译错误 → 确定性问题，不重试）；`infra_failure`（拉镜像/分配执行节点等基础设施错误 → 平台问题）；
+  `build_script_failure`（脚本/tbuild 失败但无编译错误证据 → 根因未确认）。
+- **跑测报告可读**：评论里的 `download.ci.openharmony.cn` 是内网别名（本机不可解析），但同一路径在
+  `cidownload.openharmony.cn` 可达 → 脚本自动改写镜像域名下载 `report.zip`，读 `report_data.json` / `summary.ini` /
+  `result/*.xml` / `log/*/module_run.log` 归因，得到两类结论：
+  - `harness_env_failure`（用例**未执行到断言**：测试框架/环境准备失败，如切换 Flutter 版本时 `flutter_flutter PR worktree sync failed`）
+    → **平台/环境侧，不是 PR 代码问题**（已验证），可按抖动预算重发 `start build`；
+  - `test_assertion`（用例真跑了并失败，`run=N pass=M failure=K`，K>0）→ 确定性问题，不重试。
+  取不到报告时才降级为 `test_stage_unverified`。
+
+`gate-check.json` 的 `root_cause_verified` = 根因是否有**日志证据**。为 `false` 时 summary 会写明"根因未验证"，
+**禁止**对外断言"平台抖动"（此时仍可按抖动预算重试，但人工确认/评论里必须说明根因未验证）。`ACE_GITCODE_GATE_LOGS=0` 可关闭核对。
+日志证据升级为确定性（编译错误/真实断言失败）时，脚本不再烧抖动重试预算，直接进对应修复；
+`harness_env_failure` 为已验证的**平台侧**结论，重试文案会直说"不是 PR 代码问题"，不再用"疑似抖动"含糊措辞。
+**重试预算用尽**（普通 + 抖动都用完）且非代码问题时，`gate-check.json` 置 `needs_maintainer=true`、`maintainer_hint` 写明原因并
+提示"请携带门禁报告链接联系门禁维护人员"；`log_platform_verified=true` 表示日志已核实属门禁/平台侧（此时才可说"不是 PR 代码问题"），
+否则为"根因未核实，需维护人员协助排查"。CPF-AIWeb 前端在 PR **普通详情**（`/status` 的 `gateDiagnosis`）与"检视修复"面板
+（`gateSummary`）都渲染"门禁根因（日志核对）"与"联系门禁维护人员"提醒块。
+
+**只读补查**（产物由旧版分类脚本写出、缺日志核对字段时）：`check-pr-gates.mjs --from-source <gate-source.json>` 会从已保存的
+快照重放分类（不访问 GitCode、不评论、不触发构建），生成带新字段的 `gate-check.json`，并保留原 `checked_at`、附 `rechecked_at` /
+`recheck_source` / `recheck: true` 以示这是补查而非新一次 CI 执行；覆盖已有产物时（非 `--from-source`）也会把旧 `checked_at` 记入
+`previous_checked_at`。
+
+```powershell
+node "<SKILL_ROOT>/scripts/check-pr-gates.mjs" --owner CPF-Flutter --repo flutter_flutter --number 2084 `
+  --from-source outputs/gate-source.json --out outputs
+```
 
 分流：
 
@@ -122,6 +157,7 @@ node "<SKILL_ROOT>/scripts/post-pr-comment.mjs" --pr-url "<PR_URL>" --author "<P
 - `ACE_GITCODE_PR_AUTHOR`：作者白名单，逗号分隔
 - `ACE_GITCODE_WATCH_REPOS`：正式环境用 `CPF-Flutter/*`；也可用逗号分隔的具体 `owner/repo` 限制范围。未配置时默认只接受 CPF-Flutter 代码仓。
 - `ACE_GITCODE_START_BUILD_MAX`：同一代码版本 `start build` 重试上限，默认 3；新 push 重置
+- `ACE_GITCODE_GATE_LOGS`：设为 `0` 关闭门禁失败时的日志根因核对（默认开启）
 - Token：每人一条 `GITCODE_TOKEN_{用户名}`。评论 `start build` 和 HTTPS push 必须用该 PR 作者自己的密钥，不要拿别人的覆盖。未匹配到具体人时才回退 `GITCODE_TOKEN` / `ACE_GITCODE_TOKEN`。
 
 Webhook 勾 **Merge Request** 和 **Note**。同一条 PR 已有 run 时只唤醒，不新开。

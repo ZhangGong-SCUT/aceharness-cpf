@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth/middleware';
 import fs from 'fs/promises';
 import path from 'path';
 import { execFile } from 'child_process';
@@ -7,6 +8,7 @@ import {
   WORKSPACE_TEXT_FILE_SIZE_LIMIT,
   resolveExistingInsideWorkspace,
   resolveWorkspaceRoot,
+  isInsidePath,
   workspaceErrorResponse,
 } from '@/lib/core/workspace-path-safety';
 
@@ -634,6 +636,12 @@ function createGitBrowserSummaryStream(
 }
 
 export async function GET(request: NextRequest) {
+  const live = request.nextUrl.searchParams.get('live') === '1';
+  if (request.nextUrl.searchParams.has('stream_ticket') && !live) {
+    return NextResponse.json({ error: '短时 SSE 凭证仅可用于实时流' }, { status: 401 });
+  }
+  const auth = await requireAuth(request, { streamScope: 'workspace/git-browser' });
+  if (auth instanceof Response) return auth;
   try {
     const { searchParams } = new URL(request.url);
     const workspace = searchParams.get('workspace');
@@ -642,13 +650,17 @@ export async function GET(request: NextRequest) {
     const file = searchParams.get('file');
     const commitOffset = Number(searchParams.get('commitOffset') || 0);
     const commitLimit = Number(searchParams.get('commitLimit') || 40);
-    const live = searchParams.get('live') === '1';
-
+    if (searchParams.has('stream_ticket') && (commit || scope || file)) {
+      return NextResponse.json({ error: '短时 SSE 凭证仅可用于摘要实时流' }, { status: 401 });
+    }
     if (!workspace) {
       return NextResponse.json({ error: '缺少 workspace 参数' }, { status: 400 });
     }
 
     const workspaceRoot = await resolveWorkspaceRoot(workspace);
+    if (auth.role !== 'admin' && (!auth.personalDir || !isInsidePath(auth.personalDir, workspaceRoot))) {
+      return NextResponse.json({ error: '无权访问此工作区' }, { status: 403 });
+    }
 
     try {
       if (live && !commit && !scope && !file) {

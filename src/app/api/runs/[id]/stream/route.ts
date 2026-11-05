@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { loadStreamContent, loadRunState } from '@/lib/run/state-persistence';
 import { processManager } from '@/lib/core/process-manager';
+import { requireAuth } from '@/lib/auth/middleware';
+import { getRunOwnerId } from '@/lib/workflow/run-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,13 +10,23 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const live = request.nextUrl.searchParams.get('live') === '1';
+  if (request.nextUrl.searchParams.has('stream_ticket') && !live) {
+    return NextResponse.json({ error: '短时 SSE 凭证仅可用于实时流' }, { status: 401 });
+  }
+  const auth = await requireAuth(request, { streamScope: 'runs/stream' });
+  if (auth instanceof Response) return auth;
+
   const id = (await params).id;
+  const runState = await loadRunState(id, { hydrateLargeOutputs: false });
+  const ownerId = getRunOwnerId(runState);
+  if (auth.role !== 'admin' && (!runState || !ownerId || ownerId !== auth.id)) {
+    return NextResponse.json({ error: '运行记录不存在或无权访问' }, { status: 404 });
+  }
   const step = request.nextUrl.searchParams.get('step');
   if (!step) {
     return NextResponse.json({ error: '缺少 step 参数' }, { status: 400 });
   }
-
-  const live = request.nextUrl.searchParams.get('live');
 
   // Legacy non-SSE mode: return persisted content as JSON
   if (!live) {

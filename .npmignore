@@ -11,3 +11,6 @@ cache
 .aceharness
 .npm-publish-cache/
 .tmp-opencode-src/
+aiweb/**/node_modules
+aiweb/**/.env
+aiweb/**/*.log

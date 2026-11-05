@@ -114,4 +114,110 @@ describe('finish 收尾（F01+F02+F05 集成）', () => {
     expect(typeof result.error_code).toBe('string');
     expect(result.error_code.length).toBeGreaterThan(0);
   });
+
+  it('只改 repo-engine 时，空的 fix.patch 记 not_applicable，摘要里的「两仓干净」标过期', async () => {
+    const root = makeTmp();
+    const runDir = join(root, 'run');
+    const workDir = join(root, 'work');
+    const mirror = join(root, 'mirror.git');
+    mkdirSync(runDir, { recursive: true });
+    mkdirSync(join(workDir, 'outputs'), { recursive: true });
+    git(root, ['init', '-q', '--bare', mirror]);
+    for (const name of ['repo', 'repo-engine']) {
+      const repo = join(workDir, name);
+      mkdirSync(repo, { recursive: true });
+      git(repo, ['init', '-q']);
+      git(repo, ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'baseline']);
+      git(repo, ['remote', 'add', 'origin', mirror]);
+    }
+    writeFileSync(join(workDir, 'repo-engine', 'LocalizationPlugin.ets'), 'export const fixed = true;\n');
+    git(join(workDir, 'repo-engine'), ['add', 'LocalizationPlugin.ets']);
+    writeFileSync(join(workDir, 'outputs', '根因分析-根因定位.md'), [
+      '```json',
+      '{"problem_ownership":"framework_library","root_cause_summary":"未动 repo/ 与 repo-engine/（两仓干净）"}',
+      '```',
+    ].join('\n'));
+    writeFileSync(join(workDir, 'outputs', '修复验证-修复方案对抗验证.md'), R7_STYLE_VERIFICATION);
+
+    const output = await executeDiagnosisScript({
+      operation: 'finish', workingDirectory: workDir, runDirectory: runDir, globalContext: '',
+    });
+    const result = parseConclusion(output);
+    expect(result.verdict).toBe('pass');
+    expect(result.artifact_status).toBe('complete');
+    const manifest = JSON.parse(readFileSync(join(runDir, 'outputs', 'diagnosis-archive-manifest.json'), 'utf8'));
+    expect(manifest.entries.find((entry: any) => entry.name === 'fix.patch').status).toBe('not_applicable');
+    expect(manifest.entries.find((entry: any) => entry.name === 'fix-engine.patch').status).toBe('archived');
+    const context = JSON.parse(readFileSync(join(runDir, 'outputs', 'diagnosis-context.json'), 'utf8'));
+    expect(context.consistency_warnings.map((warning: any) => warning.code)).toContain('repo_state_stale');
+    expect(context.evaluation_integrity).toBe('not_independent');
+  });
+
+  it('只有无效 L1 OK 时，issue_golden_flag_met 降为 unknown', async () => {
+    const root = makeTmp();
+    const runDir = join(root, 'run');
+    const workDir = join(root, 'work');
+    mkdirSync(join(workDir, 'outputs'), { recursive: true });
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(workDir, 'outputs', '修复验证-修复方案对抗验证.md'),
+      '修复验证 **pass**。L1 OK×2。issue_golden_flag_met=true，engine_aligned=true，bug_fixed=true。');
+    writeFileSync(join(workDir, 'outputs', 'ohos-fix-hilog.txt'), [
+      'expected MaterialApp locale from native list: null',
+      'L1 OK: dispatcher.locales length (5) matches native preferred language list length (0)',
+      'L2 OK: MaterialApp resolved en_US',
+    ].join('\n'));
+
+    const output = await executeDiagnosisScript({
+      operation: 'finish', workingDirectory: workDir, runDirectory: runDir, globalContext: '',
+    });
+    const result = parseConclusion(output);
+    expect(result.verdict).toBe('pass');
+    expect(result.verification_status).toBe('evidence_incomplete');
+    expect(result.verification_flags.issue_golden_flag_met).toBe('unknown');
+    const context = JSON.parse(readFileSync(join(runDir, 'outputs', 'diagnosis-context.json'), 'utf8'));
+    expect(context.verification_flag_basis).toBe('unsupported');
+    expect(context.locale_judgments.valid_ok).toEqual({ L1: 0, L2: 0 });
+    expect(context.consistency_warnings.map((warning: any) => warning.code)).toContain('false_ok_in_log');
+  });
+
+  it('无效 OK 后面还有一条有效 OK 时，标志保持 true，并记录 2 与 5 的 deviation', async () => {
+    const root = makeTmp();
+    const runDir = join(root, 'run');
+    const workDir = join(root, 'work');
+    mkdirSync(join(workDir, 'outputs'), { recursive: true });
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(workDir, 'outputs', 'diagnosis-inherited.json'), JSON.stringify({
+      parent_run_id: 'run-parent-example',
+      issue_golden_flag: 'L1 BUG REPRODUCED: native has 2 preferred languages but PlatformDispatcher.locales length == 1（修复后判据：与 native 列表同长）',
+      root_cause_summary: '证据链已闭环。真机实测 confirmed。',
+    }));
+    writeFileSync(join(workDir, 'outputs', '修复验证-修复方案对抗验证.md'),
+      '修复验证 **pass**。L1 OK×2。issue_golden_flag_met=true，engine_aligned=true，bug_fixed=true。');
+    writeFileSync(join(workDir, 'outputs', 'ohos-fix2-hilog.txt'), [
+      'expected MaterialApp locale from native list: null',
+      'L1 OK: dispatcher.locales length (5) matches native preferred language list length (0)',
+      'L2 OK: MaterialApp resolved en_US',
+      'expected MaterialApp locale from native list: en_US',
+      'L1 OK: dispatcher.locales length (5) matches native preferred language list length (5)',
+      'L2 OK: MaterialApp resolved en_US',
+    ].join('\n'));
+    writeFileSync(join(workDir, 'outputs', 'diagnosis-preflight.json'), JSON.stringify({
+      runtime_validation: 'blocked_environment', ohos_device_count: 0, android_device_count: 0,
+    }));
+
+    const output = await executeDiagnosisScript({
+      operation: 'finish', workingDirectory: workDir, runDirectory: runDir, globalContext: '',
+    });
+    const result = parseConclusion(output);
+    expect(result.verification_status).toBe('verified');
+    expect(result.verification_flags.issue_golden_flag_met).toBe('true');
+    const context = JSON.parse(readFileSync(join(runDir, 'outputs', 'diagnosis-context.json'), 'utf8'));
+    expect(context.verification_flag_basis).toBe('measured');
+    expect(context.golden_flag_deviation).toMatchObject({ frozen_count: 2, executed_count: 5, compatible_with_pass_rule: true });
+    expect(context.root_cause_provenance.inherited).toBe(true);
+    expect(context.root_cause_summary.startsWith('[继承自 run run-parent-example')).toBe(true);
+    expect(context.consistency_warnings.map((warning: any) => warning.code)).toEqual(
+      expect.arrayContaining(['false_ok_in_log', 'env_transition_unexplained']),
+    );
+  });
 });

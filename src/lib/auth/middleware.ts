@@ -4,6 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { validateStreamTicket, type StreamTicketScope } from '@/lib/auth/stream-ticket';
 import { validateToken, getUserById, toPublicUser, type PublicUser } from '@/lib/core/user-store';
 
 export interface AuthenticatedUser {
@@ -15,23 +16,30 @@ export interface AuthenticatedUser {
   avatar?: string;
 }
 
+export interface RequireAuthOptions {
+  streamScope?: StreamTicketScope;
+}
+
 function extractToken(req: NextRequest): string | null {
-  return req.headers.get('Authorization')?.replace('Bearer ', '') || null;
+  const header = req.headers.get('Authorization')?.replace('Bearer ', '') || null;
+  return header;
 }
 
 /**
  * Require any authenticated user. Returns user info or a 401 response.
  */
-export async function requireAuth(req: NextRequest): Promise<AuthenticatedUser | NextResponse> {
+export async function requireAuth(req: NextRequest, options?: RequireAuthOptions): Promise<AuthenticatedUser | NextResponse> {
   const token = extractToken(req);
-  if (!token) {
+  let userId: string | undefined;
+  if (token) userId = validateToken(token)?.userId;
+  if (!userId && options?.streamScope) {
+    const ticket = req.nextUrl.searchParams.get('stream_ticket');
+    if (ticket) userId = validateStreamTicket(ticket, options.streamScope);
+  }
+  if (!userId) {
     return NextResponse.json({ error: '未登录或登录已过期' }, { status: 401 });
   }
-  const info = validateToken(token);
-  if (!info) {
-    return NextResponse.json({ error: '未登录或登录已过期' }, { status: 401 });
-  }
-  const user = await getUserById(info.userId);
+  const user = await getUserById(userId);
   if (!user) {
     return NextResponse.json({ error: '用户不存在' }, { status: 401 });
   }

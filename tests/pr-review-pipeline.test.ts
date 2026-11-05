@@ -8,11 +8,13 @@ import {
   describeIgnoredPr,
   isOwnPrAuthor,
   parseGitcodeWebhookPayload,
+  parseNameList,
   shouldStartPrReview,
 } from '@/lib/workflow/pr-review-input';
 import { formatGlobalContextPrompt } from '@/lib/workflow/global-context-prompt';
 import { extractGitcodeWebhookSecret, secretsMatch } from '@/lib/workflow/gitcode-webhook';
 import { summarizeGlobalContext } from '@/lib/workflow/run-diagnostics';
+import { resolveGitcodeToken } from '../skills/gitcode-pr-review/scripts/gitcode-token.mjs';
 
 describe('classifyPrReviewInput', () => {
   test('parses GitCode pull URL', () => {
@@ -157,8 +159,18 @@ describe('parseGitcodeWebhookPayload', () => {
 });
 
 describe('own-author filter', () => {
+  test('parses comma/semicolon/space separated author and repo allowlists', () => {
+    expect(parseNameList('z2036709353,alice;Bob carol')).toEqual([
+      'z2036709353',
+      'alice',
+      'bob',
+      'carol',
+    ]);
+  });
+
   test('requires configured author and ignores other people', () => {
     expect(isOwnPrAuthor('me', ['me'])).toBe(true);
+    expect(isOwnPrAuthor('alice', ['z2036709353', 'alice'])).toBe(true);
     expect(isOwnPrAuthor('other', ['me'])).toBe(false);
     expect(describeIgnoredPr({
       author: 'other',
@@ -260,5 +272,23 @@ describe('gitcode-pr-review workflow config', () => {
     const push = config.workflow.states.find((state: { name: string }) => state.name === '推送并触发');
     expect(push.transitions.some((item: { to: string }) => item.to === '等待门禁')).toBe(true);
     expect(push.transitions.some((item: { to: string }) => item.to === '完成')).toBe(false);
+  });
+});
+
+describe('resolveGitcodeToken', () => {
+  test('picks each author token and does not fall back to another person', () => {
+    const env = {
+      GITCODE_TOKEN: 'generic-alice',
+      GITCODE_TOKEN_z2036709353: 'token-z',
+      GITCODE_TOKEN_huhaodong: 'token-h',
+    };
+    expect(resolveGitcodeToken(env, 'z2036709353')).toBe('token-z');
+    expect(resolveGitcodeToken(env, 'huhaodong')).toBe('token-h');
+    expect(resolveGitcodeToken(env, 'other')).toBe('');
+    expect(resolveGitcodeToken(env, '')).toBe('generic-alice');
+  });
+
+  test('falls back to GITCODE_TOKEN when no per-user keys exist', () => {
+    expect(resolveGitcodeToken({ GITCODE_TOKEN: 'only' }, 'anyone')).toBe('only');
   });
 });

@@ -7,6 +7,11 @@ const SYSTEM_SETTINGS_PATH = getWorkspaceDataFile('system-settings.yaml');
 
 export interface SystemSettings {
   gitcodeToken?: string;
+  gitcodeWebhookSecret?: string;
+  gitcodePrAuthor?: string;
+  gitcodeWatchRepos?: string;
+  /** webhook 自动启动 PR 监控（true=自动；false/缺省=人工模式：webhook 只记录不启动，由用户在页面手动开启） */
+  gitcodeAutoMonitor?: boolean;
   host?: string;
   port?: number;
   lanAccess?: boolean;

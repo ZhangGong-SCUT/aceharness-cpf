@@ -1,5 +1,7 @@
 /** OpenHarmony DCP 门禁分类：标签 + openharmony_ci 评论，不用 commit status。 */
 
+import { describeGateLogVerdict } from './gate-log-analysis.mjs';
+
 export const GATE_PHASES = [
   'running',
   'need_start_build',
@@ -572,6 +574,13 @@ export function classifyOhosPrGates(input = {}) {
   const flakyTestFail = testFail && isFlakyTestFailure(comments);
   // R3：先判定失败类别。只有明确 timeout/基础设施证据才允许按环境抖动重试。
   const failureCause = extractGateFailureCause(comments);
+  // 日志核对（可选输入，由 fetch-gate-logs.mjs 产出）：把"疑似抖动"升级为有证据的结论，
+  // 或明确降级为"未验证"，避免仅凭评论字符串就断言平台抖动。
+  const logAnalysis = input.log_analysis && typeof input.log_analysis === 'object' ? input.log_analysis : null;
+  const logVerdict = logAnalysis ? String(logAnalysis.verdict || 'unknown') : '';
+  const logVerified = Boolean(logAnalysis?.root_cause_verified);
+  // 日志已给出确定性证据（编译错误 / 真实断言失败）→ 不烧抖动重试预算，直接进修复。
+  const logDeterministic = logVerdict === 'compile_error' || logVerdict === 'test_assertion';
   const aiPendingComments = Boolean(input.ai_actionable_count > 0);
   const issueOk = input.issue_associated !== false && hasAssociatedIssue(input.pull || {}, comments);
 
@@ -584,12 +593,30 @@ export function classifyOhosPrGates(input = {}) {
 
   const gateRetryLeft = !attempts.rate_limited
     && !knownRealDefects
+    && !logDeterministic
     && attempts.gate_fail_after_last_start
     && attempts.start_build_count > 0
     && (
       (attempts.start_build_count < startBuildMax)
       || (flakyTestFail && jitterRetryLeft)   // 普通预算尽但本轮失败是抖动 → 用抖动预算续命
     );
+
+  // 重试预算是否已“用完”（只数次数，与是否值得重试无关）：用完且不像代码问题 → 需人工 + 请门禁维护介入。
+  const startBudgetUsedUp = attempts.start_build_count >= startBuildMax;
+  const jitterBudgetUsedUp = jitterFailCount >= jitterRetryMax;
+  const retryBudgetExhausted = attempts.gate_fail_after_last_start
+    && attempts.start_build_count > 0
+    && startBudgetUsedUp
+    && (!flakyTestFail || jitterBudgetUsedUp);
+  const logPlatformSide = logVerified && (logVerdict === 'infra_failure' || logVerdict === 'harness_env_failure');
+  const needsMaintainer = retryBudgetExhausted && !logDeterministic;
+  const budgetText = `已触发 start build ${attempts.start_build_count} 次 · 普通上限 ${startBuildMax} · 抖动失败 ${jitterFailCount}/${jitterRetryMax}`;
+  // 只有"日志已核实属门禁/平台侧"时才敢说"不是 PR 代码问题"；其余（含未验证）一律只说"根因未核实，需协助排查"。
+  const maintainerHint = needsMaintainer
+    ? (logPlatformSide
+      ? `重试预算已用尽（${budgetText}），日志核对确认根因在门禁/平台侧、非 PR 代码（${logVerdict}）——请携带门禁报告链接联系门禁维护人员排查`
+      : `重试预算已用尽（${budgetText}），门禁根因未核实（日志未能定位根因，不能据此排除 PR 代码）——请携带门禁报告链接联系门禁维护人员协助排查`)
+    : '';
 
   let phase = 'unknown';
   let summary = '';
@@ -635,12 +662,26 @@ export function classifyOhosPrGates(input = {}) {
         : '编译失败，对着 DCP 编译日志改';
   } else if (flakyTestFail && gateRetryLeft) {
     phase = 'need_start_build';
-    summary = `测试失败第 ${attempts.start_build_count} 次（普通上限 ${startBuildMax}，抖动失败 ${jitterFailCount}/${jitterRetryMax}），失败详情全部为 ecotest timeout——DCP 平台抖动而非代码问题（#1927/#1978 同款），重发 start build 再试，不改代码`;
+    summary = logVerdict === 'harness_env_failure'
+      ? `测试失败第 ${attempts.start_build_count} 次（普通上限 ${startBuildMax}，抖动失败 ${jitterFailCount}/${jitterRetryMax}）：跑测报告已确认是测试环境准备失败（用例未执行到断言），属平台/环境侧、不是 PR 代码问题，重发 start build 再试，不改代码`
+      : logAnalysis
+        ? (logPlatformSide
+          ? `测试失败第 ${attempts.start_build_count} 次（普通上限 ${startBuildMax}，抖动失败 ${jitterFailCount}/${jitterRetryMax}）：日志核对确认失败在平台/基础设施侧（${logVerdict}），不是 PR 代码问题，重发 start build 再试，不改代码`
+          : `测试失败第 ${attempts.start_build_count} 次（普通上限 ${startBuildMax}，抖动失败 ${jitterFailCount}/${jitterRetryMax}）：日志核对未确认根因（${logVerdict}），按抖动预算重试但不得断言为平台抖动，重发 start build 再试，不改代码`)
+        : `测试失败第 ${attempts.start_build_count} 次（普通上限 ${startBuildMax}，抖动失败 ${jitterFailCount}/${jitterRetryMax}），失败详情全部为 ecotest timeout——DCP 平台抖动而非代码问题（#1927/#1978 同款），重发 start build 再试，不改代码`;
   } else if (testFail) {
     phase = 'test_failed';
-    summary = flakyTestFail
-      ? `测试失败为平台抖动（ecotest timeout）且抖动重试预算也用完（普通 ${startBuildMax} + 抖动 ${jitterRetryMax}，当前抖动 ${jitterFailCount} 次），持续抖动疑似环境故障，停下人工确认并考虑反馈 DCP`
-      : '冒烟/测试失败，默认人工确认，不要自动改代码';
+    summary = logVerdict === 'harness_env_failure'
+      ? `测试失败：跑测报告已确认为测试环境准备失败（用例未执行到断言，如切换/同步 Flutter 代码时失败），属平台/环境侧，不是 PR 代码问题；抖动重试预算 ${jitterFailCount}/${jitterRetryMax}，用完则停下人工确认并反馈 DCP`
+      : logDeterministic
+        ? `测试失败：日志核对确认为确定性失败（${logVerdict}），不按环境抖动重试，人工确认后再改`
+        : logAnalysis
+          ? (logPlatformSide
+            ? `测试失败：日志核对确认失败在平台/基础设施侧（${logVerdict}），不是 PR 代码问题；抖动重试预算 ${jitterFailCount}/${jitterRetryMax}，用完则停下人工确认并反馈 DCP`
+            : `测试失败：日志核对未确认根因（${logVerdict}），不按"已确认抖动"重试；抖动重试预算 ${jitterFailCount}/${jitterRetryMax}，用完则停下人工确认`)
+          : flakyTestFail
+            ? `测试失败为平台抖动（ecotest timeout）且抖动重试预算也用完（普通 ${startBuildMax} + 抖动 ${jitterRetryMax}，当前抖动 ${jitterFailCount} 次），持续抖动疑似环境故障，停下人工确认并考虑反馈 DCP`
+            : '冒烟/测试失败，默认人工确认，不要自动改代码';
   } else if (dcoOk && staticOk && compileOk && !testFail) {
     if (!testOk && ciMentionsTests(comments)) {
       phase = 'running';
@@ -681,6 +722,15 @@ export function classifyOhosPrGates(input = {}) {
     summary = '标签和评论还不够判断，禁止假装通过';
   }
 
+  // 日志核对结论追加到 summary：让"抖动"不再是无依据的断言。
+  if (logAnalysis && summary) {
+    summary = `${summary}；日志核对：${describeGateLogVerdict(logAnalysis)}`;
+  }
+  // 重试用尽且非代码问题：明确"是什么原因 + 请门禁维护人员介入"。
+  if (needsMaintainer && maintainerHint) {
+    summary = `${summary}；${maintainerHint}`;
+  }
+
   const waiting = phase === 'running';
   const verdict = closed || !ownPr
     ? 'fail'
@@ -713,6 +763,17 @@ export function classifyOhosPrGates(input = {}) {
     // R3：失败类别（infra / deterministic / unknown / none），用于解释是否按环境抖动重试。
     failure_cause: failureCause.kind,
     failure_cause_detail: failureCause.causes,
+    // R7：门禁日志核对（fetch-gate-logs.mjs）。root_cause_verified=false 时禁止断言"平台抖动"。
+    log_verdict: logVerdict || null,
+    root_cause_verified: logVerified,
+    log_evidence: Array.isArray(logAnalysis?.evidence) ? logAnalysis.evidence.slice(0, 3) : [],
+    log_reasons: Array.isArray(logAnalysis?.reasons) ? logAnalysis.reasons.slice(0, 3) : [],
+    // R8：重试预算用尽且非代码问题 → 前端展示原因并提示联系门禁维护人员。
+    retry_budget_exhausted: retryBudgetExhausted,
+    needs_maintainer: needsMaintainer,
+    // 仅当日志已核实属门禁/平台侧时才为 true；前端据此决定是否敢说"不是 PR 代码问题"。
+    log_platform_verified: needsMaintainer && logPlatformSide,
+    maintainer_hint: maintainerHint,
     dco_ok: dcoOk,
     dco_fail: dcoFail,
     static_ok: staticOk,

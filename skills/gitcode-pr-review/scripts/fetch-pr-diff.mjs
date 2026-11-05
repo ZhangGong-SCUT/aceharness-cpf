@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { resolveGitcodeToken } from './gitcode-token.mjs';
 
 const API_ROOT = process.env.GITCODE_API_ROOT || 'https://gitcode.com/api/v5';
 
@@ -42,7 +43,7 @@ async function main() {
   const repo = arg('--repo', parsed?.repo || '');
   const number = arg('--number', parsed?.number || '');
   const outDir = resolve(arg('--out', 'outputs'));
-  const token = arg('--token', process.env.GITCODE_TOKEN || process.env.ACE_GITCODE_TOKEN || '');
+  const token = arg('--token', resolveGitcodeToken(process.env, arg('--author')));
 
   if (!owner || !repo || !number) {
     throw new Error('缺少 owner/repo/number，或传入 --pr-url');

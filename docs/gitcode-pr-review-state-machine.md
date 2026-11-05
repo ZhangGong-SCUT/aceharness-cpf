@@ -57,6 +57,8 @@ PR 自修工作流是「**状态机（编排）+ Agent（智能决策）+ 脚本
 | `route-pr-phase.mjs` | 分类处置、分流静态/编译/测试/触发 | 按 phase 决定下一状态 |
 | `fetch-ai-review.mjs` | 分流检视、检视修复 | 拉检视意见（带 push 边界过滤，区分 stale/noise/actionable） |
 | `fetch-dcp-report.mjs` | 静态修复 | 拉静态检查失败明细（文件/行/规则） |
+| `fetch-gate-logs.mjs` | （被 check-pr-gates 调用） | 拉构建日志(tar) 与跑测报告（`download.ci`→`cidownload` 镜像改写）做根因核对，产出 `gate-log-analysis.json`（含 `harness_env_failure`/`test_assertion` 等） |
+| `gate-log-analysis.mjs` | （被 fetch-gate-logs/ohos-pr-gates 调用） | 纯解析/归因：tar 读构建日志、zip 读 ecoTest 报告（`report_data.json` 等）→ 结论与证据行 |
 | `scan-same-rule-defects.mjs` | 静态修复 | 扫同类缺陷，避免只修报到的这一处 |
 | `post-pr-comment.mjs` | 推送并触发 | 发 start build（含 push ack 等待，防构建被中止） |
 | `fetch-pr-diff.mjs` | **无引用（遗留死代码，可删）** | .diff 端点已 400，diff 由 check-pr-gates 覆盖 |
@@ -77,6 +79,11 @@ PR 自修工作流是「**状态机（编排）+ Agent（智能决策）+ 脚本
 
 1. **编译失败摘要脚本**：目前编译失败靠 agent 读 build.log 全文定位首错，
    可新增 `parse-build-error.mjs` 提取首个 error 及上下文，减少 token 消耗与定位轮次。
+   （2026-10-16 落地：`gate-log-analysis.mjs` 已能从 build.log 的 tar 成员里
+   提取 `compile_errors`/`infra_failures`/`script_failures` 证据行；并已打通跑测报告——
+   评论里的 `download.ci.openharmony.cn` 是内网别名，改写为可达镜像 `cidownload.openharmony.cn` 后可下载
+   `report.zip`，读 `report_data.json` 得结构化结论：`harness_env_failure`（用例未跑到断言、测试环境准备失败 → 平台侧）
+   或 `test_assertion`（`run/pass/failure` 计数，真断言失败 → 代码侧）。实测样本 PR2084/PR2109。）
 2. `fetch-pr-diff.mjs` 死代码清理。
 
 ## 四、状态机层

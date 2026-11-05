@@ -20,6 +20,13 @@ function getAuthHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+const GUEST_PATH_PREFIXES = ['/login', '/register', '/setup'];
+
+function isGuestPage(): boolean {
+  if (typeof window === 'undefined') return false;
+  return GUEST_PATH_PREFIXES.some((prefix) => window.location.pathname === prefix || window.location.pathname.startsWith(`${prefix}/`));
+}
+
 function authFetch(url: string, init?: RequestInit): Promise<Response> {
   const headers = { ...getAuthHeaders(), ...(init?.headers || {}) };
   return fetch(url, { ...init, headers }).then(res => {
@@ -28,12 +35,129 @@ function authFetch(url: string, init?: RequestInit): Promise<Response> {
       localStorage.removeItem('auth-user');
       // Dispatch a custom event so AuthGuard / page can react
       window.dispatchEvent(new CustomEvent('auth:expired'));
-      if (window.location.pathname !== '/login') {
+      // 访客页（登录/注册/设置）上的 401 属预期，不要硬跳转把用户踢离页面
+      if (!isGuestPage() && window.location.pathname !== '/login') {
         window.location.replace('/login');
       }
     }
     return res;
   });
+}
+
+function streamTicketScope(url: string): string | null {
+  const pathname = new URL(url, window.location.origin).pathname;
+  if (pathname === `${API_BASE}/workflow/status`) return 'workflow/status';
+  if (pathname === `${API_BASE}/workflow/events`) return 'workflow/events';
+  if (pathname === `${API_BASE}/chat/stream`) return 'chat/stream';
+  if (pathname === `${API_BASE}/workspace/git-browser`) return 'workspace/git-browser';
+  if (/^\/api\/runs\/[^/]+\/stream$/.test(pathname)) return 'runs/stream';
+  if (/^\/api\/agents\/[^/]+\/chat\/stream$/.test(pathname)) return 'agents/chat/stream';
+  return null;
+}
+
+/** Uses a five-minute, SSE-only ticket and renews it whenever EventSource reconnects. */
+class TicketedEventSource extends EventTarget {
+  onopen: ((this: EventSource, ev: Event) => any) | null = null;
+  onmessage: ((this: EventSource, ev: MessageEvent) => any) | null = null;
+  onerror: ((this: EventSource, ev: Event) => any) | null = null;
+  private native: EventSource | null = null;
+  private closed = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private tracked = new Map<string, Set<EventListenerOrEventListenerObject>>();
+
+  constructor(private readonly targetUrl: string) {
+    super();
+    void this.connect();
+  }
+
+  get url(): string { return this.targetUrl; }
+  get withCredentials(): boolean { return false; }
+  get readyState(): number { return this.closed ? EventSource.CLOSED : (this.native?.readyState ?? EventSource.CONNECTING); }
+
+  override addEventListener(type: string, callback: EventListenerOrEventListenerObject | null, options?: boolean | AddEventListenerOptions): void {
+    if (!callback) return;
+    super.addEventListener(type, callback, options);
+    const set = this.tracked.get(type) ?? new Set<EventListenerOrEventListenerObject>();
+    set.add(callback);
+    this.tracked.set(type, set);
+    this.native?.addEventListener(type, callback, options);
+  }
+
+  override removeEventListener(type: string, callback: EventListenerOrEventListenerObject | null, options?: boolean | EventListenerOptions): void {
+    if (!callback) return;
+    super.removeEventListener(type, callback, options);
+    this.tracked.get(type)?.delete(callback);
+    this.native?.removeEventListener(type, callback, options);
+  }
+
+  close(): void {
+    this.closed = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.native?.close();
+    this.native = null;
+  }
+
+  private async connect(): Promise<void> {
+    if (this.closed) return;
+    try {
+      const scope = streamTicketScope(this.targetUrl);
+      if (!scope) throw new Error('Unsupported SSE stream scope');
+      const response = await authFetch(`${API_BASE}/auth/stream-ticket`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope }),
+      });
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          const error = new Event('error');
+          this.onerror?.call(this as unknown as EventSource, error);
+          this.dispatchEvent(error);
+          this.close();
+          return;
+        }
+        throw new Error(`SSE ticket request failed (${response.status})`);
+      }
+      const payload = await response.json();
+      if (this.closed) return;
+      const url = new URL(this.targetUrl, window.location.origin);
+      url.searchParams.set('stream_ticket', payload.ticket);
+      const native = createSafeEventSource(url);
+      this.native = native;
+      for (const [type, listeners] of this.tracked) {
+        for (const listener of listeners) native.addEventListener(type, listener);
+      }
+      native.addEventListener('open', (event) => {
+        this.onopen?.call(this as unknown as EventSource, event);
+      });
+      native.addEventListener('message', (event) => {
+        this.onmessage?.call(this as unknown as EventSource, event as MessageEvent);
+      });
+      native.addEventListener('error', (event) => {
+        if (this.native !== native || this.closed) return;
+        native.close();
+        this.native = null;
+        this.onerror?.call(this as unknown as EventSource, event);
+        this.reconnectTimer = setTimeout(() => void this.connect(), 1000);
+      });
+    } catch {
+      if (this.closed) return;
+      const error = new Event('error');
+      this.onerror?.call(this as unknown as EventSource, error);
+      this.dispatchEvent(error);
+      this.reconnectTimer = setTimeout(() => void this.connect(), 3000);
+    }
+  }
+}
+
+export function createTicketedEventSource(url: string): EventSource {
+  return new TicketedEventSource(url) as unknown as EventSource;
+}
+
+export async function stopChatStreamById(chatId: string, preserveSession = false): Promise<void> {
+  const query = new URLSearchParams({ id: chatId });
+  if (preserveSession) query.set('preserveSession', '1');
+  const response = await authFetch(`${API_BASE}/chat/stream?${query.toString()}`, { method: 'DELETE' });
+  if (!response.ok) throw new Error('停止聊天流失败');
 }
 
 async function readApiError(response: Response, fallback: string): Promise<string> {
@@ -1620,7 +1744,7 @@ export const agentApi = {
     if (!response.ok || !data?.streamId) {
       throw new Error(data?.error || 'Agent 流式对话失败');
     }
-    const events = createSafeEventSource(`${API_BASE}/agents/${encodeURIComponent(name)}/chat/stream?id=${encodeURIComponent(data.streamId)}`);
+    const events = createTicketedEventSource(`${API_BASE}/agents/${encodeURIComponent(name)}/chat/stream?id=${encodeURIComponent(data.streamId)}`);
     return {
       streamId: data.streamId,
       events,
@@ -2159,7 +2283,7 @@ export const workflowApi = {
     search.set('live', '1');
     if (input.configFile) search.set('configFile', input.configFile);
     if (input.runId) search.set('runId', input.runId);
-    const eventSource = createSafeEventSource(`${API_BASE}/workflow/status?${search.toString()}`);
+    const eventSource = createTicketedEventSource(`${API_BASE}/workflow/status?${search.toString()}`);
 
     eventSource.onmessage = (event) => {
       try {
@@ -2343,7 +2467,7 @@ export const workflowApi = {
   },
 
   connectEventStream(onMessage: (data: any) => void): EventSource {
-    const eventSource = createSafeEventSource(`${API_BASE}/workflow/events`);
+    const eventSource = createTicketedEventSource(`${API_BASE}/workflow/events`);
 
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);
@@ -2408,7 +2532,7 @@ export const streamApi = {
     onDone?: (status: string) => void,
   ): EventSource {
     const url = `${API_BASE}/runs/${encodeURIComponent(runId)}/stream?step=${encodeURIComponent(stepName)}&live=1`;
-    const es = createSafeEventSource(url);
+    const es = createTicketedEventSource(url);
     es.addEventListener('delta', (e: MessageEvent) => {
       try {
         const data = JSON.parse(e.data);
@@ -3370,7 +3494,7 @@ export const workspaceApi = {
     params.set('live', '1');
     if (options?.commitOffset != null) params.set('commitOffset', String(options.commitOffset));
     if (options?.commitLimit != null) params.set('commitLimit', String(options.commitLimit));
-    const eventSource = createSafeEventSource(`${API_BASE}/workspace/git-browser?${params.toString()}`);
+    const eventSource = createTicketedEventSource(`${API_BASE}/workspace/git-browser?${params.toString()}`);
 
     eventSource.onmessage = (event) => {
       try {

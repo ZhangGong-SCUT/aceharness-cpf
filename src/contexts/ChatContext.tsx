@@ -9,7 +9,7 @@ import { resolveEffectiveEngine } from '@/lib/engines/engine-selection';
 import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assembly';
 import type { ManagedMcpServer } from '@/lib/mcp/types';
 import { useWorkflowLiveState } from '@/lib/workflow/live-store';
-import { createSafeEventSource } from '@/lib/core/safe-event-source';
+import { createTicketedEventSource, stopChatStreamById } from '@/lib/core/api';
 import { isRunningWorkflowConversation } from '@/lib/workflow/run-status';
 import { resolveConversationMode, type HomeConversationMode } from '@/lib/chat/conversation-mode';
 
@@ -389,7 +389,7 @@ async function apiLoadSession(id: string): Promise<ChatSession | null> {
 
 async function apiCheckStreamState(id: string): Promise<StreamCheckResponse | null> {
   try {
-    const res = await fetch(`/api/chat/stream?checkActive=${encodeURIComponent(id)}`);
+    const res = await fetch(`/api/chat/stream?checkActive=${encodeURIComponent(id)}`, { headers: getAuthHeaders() });
     if (!res.ok) return null;
     const data = await res.json();
     return data as StreamCheckResponse;
@@ -974,7 +974,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           activeChatIdRef.current = streamState.chatId;
           attachedStreamingSessionIdRef.current = activeSessionId;
 
-          const es = createSafeEventSource(`/api/chat/stream?id=${streamState.chatId}`);
+          const es = createTicketedEventSource(`/api/chat/stream?id=${streamState.chatId}`);
           activeEventSourceRef.current = es;
           let accumulated = initialStreamContent;
           let accumulatedRawStream = initialStreamContent;
@@ -1936,7 +1936,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           const MAX_RECONNECTS = 3;
 
         const connectSSE = () => {
-          const es = createSafeEventSource(`/api/chat/stream?id=${chatId}`);
+          const es = createTicketedEventSource(`/api/chat/stream?id=${chatId}`);
           activeEventSourceRef.current = es;
           let hasConnected = false;
 
@@ -2019,7 +2019,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 // Try recovery via backendSessionId
                 const backendSid = getTargetSessionSnapshot()?.backendSessionId;
                 if (backendSid) {
-                  fetch(`/api/chat/stream/recover?sessionId=${encodeURIComponent(backendSid)}`)
+                  fetch(`/api/chat/stream/recover?sessionId=${encodeURIComponent(backendSid)}`, { headers: getAuthHeaders() })
                     .then(r => r.json())
                     .then(recData => {
                       if (recData.content) {
@@ -2063,7 +2063,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const targetSessionId = attachedStreamingSessionIdRef.current || activeSessionRef.current?.id || activeSessionId;
     detachCurrentStream();
     if (activeChatId) {
-      fetch(`/api/chat/stream?id=${encodeURIComponent(activeChatId)}&preserveSession=1`, { method: 'DELETE' }).catch(() => {});
+      void stopChatStreamById(activeChatId, true).catch(() => {});
     }
     unmarkSessionStreaming(targetSessionId);
   }, [activeSessionId, detachCurrentStream, unmarkSessionStreaming]);
@@ -2436,7 +2436,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         };
 
         const connectSSE = () => {
-          const es = createSafeEventSource(`/api/chat/stream?id=${chatId}`);
+          const es = createTicketedEventSource(`/api/chat/stream?id=${chatId}`);
           activeEventSourceRef.current = es;
           resetInactivityTimer();
           let accumulatedRawContent = '';
@@ -2610,7 +2610,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               // All reconnects failed — try to recover full content from backend
               const backendSid = getTargetSessionSnapshot()?.backendSessionId;
               if (backendSid) {
-                fetch(`/api/chat/stream/recover?sessionId=${encodeURIComponent(backendSid)}`)
+                fetch(`/api/chat/stream/recover?sessionId=${encodeURIComponent(backendSid)}`, { headers: getAuthHeaders() })
                   .then(r => r.json())
                   .then(recData => {
                     if (recData.content) {
@@ -2802,7 +2802,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     try {
       // Try to recover content from the backend
-      const recRes = await fetch(`/api/chat/stream/recover?sessionId=${encodeURIComponent(backendSid)}`);
+      const recRes = await fetch(`/api/chat/stream/recover?sessionId=${encodeURIComponent(backendSid)}`, { headers: getAuthHeaders() });
       const recData = await recRes.json();
 
       if (recData.content) {
@@ -2835,7 +2835,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       } else {
         // No content recovered - could be that the process was killed
         // Try to check if there's an active stream
-        const activeRes = await fetch(`/api/chat/stream/active?frontendSessionId=${encodeURIComponent(session.id)}`);
+        const activeRes = await fetch(`/api/chat/stream/active?frontendSessionId=${encodeURIComponent(session.id)}`, { headers: getAuthHeaders() });
         const activeData = await activeRes.json();
 
         if (activeData.active && activeData.chatId) {

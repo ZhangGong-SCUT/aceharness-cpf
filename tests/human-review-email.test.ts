@@ -87,6 +87,31 @@ describe('human review email notification', () => {
     );
   });
 
+  it('挂起进审批（previousState=挂起，pr1958 场景）不发邮件', async () => {
+    const { sendHumanReviewEmailNotification } = await import('@/lib/notify/human-review-email');
+    const result = await sendHumanReviewEmailNotification({
+      id: 'hq-parked-approval-' + Date.now(),
+      currentState: '__human_approval__',   // 审批中 currentState 恒为此值
+      previousState: '挂起',               // 来源状态才是判定依据
+      title: '等待人工审查',
+      message: '建议放行',
+    } as any);
+    expect(result).toMatchObject({ ok: false, reason: 'parked-auto-resume' });
+  });
+
+  it('真人工确认（previousState=人工确认）照发邮件', async () => {
+    const { sendHumanReviewEmailNotification } = await import('@/lib/notify/human-review-email');
+    const result = await sendHumanReviewEmailNotification({
+      id: 'hq-real-approval-' + Date.now(),
+      currentState: '__human_approval__',
+      previousState: '人工确认',            // 非「挂起」来源 → 真需人处理
+      title: '等待人工审查',
+      message: '测试失败需人工决策',
+    } as any);
+    // 无收件人配置时应因 no-recipients 返回（而不是 parked 被跳过）
+    expect(result.reason).not.toBe('parked-auto-resume');
+  });
+
   it('挂起（自动等待 CI）不发人工审查邮件', async () => {
     const { sendHumanReviewEmailNotification } = await import('@/lib/notify/human-review-email');
     const result = await sendHumanReviewEmailNotification({
