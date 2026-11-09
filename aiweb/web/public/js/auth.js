@@ -97,16 +97,25 @@ async function validateAuth() {
 
 /* ── header 用户区渲染（index.html 专用） ── */
 
+async function ensureLocalSession() {
+  try {
+    const res = await fetch('/api/pr-review/local-session');
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 200 && data?.token && data?.user) {
+      const auth = { token: data.token, user: data.user, local: true };
+      saveAuth(auth);
+      return auth;
+    }
+  } catch { /* 本地会话不可用时保持未登录 */ }
+  return null;
+}
+
 function renderAuthHeader() {
   const box = document.getElementById('auth-header-box');
   if (!box) return;
   const auth = getAuth();
   if (!auth?.user) {
-    box.innerHTML = `
-      <a href="login.html${location.hash ? '?redirect=' + encodeURIComponent(location.hash.slice(1)) : ''}"
-         style="display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border-radius:8px;
-                font-size:var(--font-size-sm);font-weight:600;background:rgba(77,140,247,.12);color:var(--accent);
-                border:1px solid rgba(77,140,247,.3);text-decoration:none;cursor:pointer;white-space:nowrap">🔓 登录 / 注册</a>`;
+    box.innerHTML = '';
     return;
   }
   const u = auth.user;
@@ -116,9 +125,10 @@ function renderAuthHeader() {
                    display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:#fff;font-weight:700">${escHtml((u.username || '?').slice(0, 1).toUpperCase())}</span>
       <b>${escHtml(u.username || '未知用户')}</b>
       ${u.role === 'admin' ? '<span style="font-size:var(--font-size-xs);color:#e5c07b;background:rgba(229,192,123,.12);border:1px solid rgba(229,192,123,.3);padding:0 6px;border-radius:8px">admin</span>' : ''}
+      ${auth.local ? '<span style="font-size:var(--font-size-xs);color:var(--text-aux)">本机</span>' : ''}
     </span>
-    <a href="#" onclick="event.preventDefault();doLogout()" title="退出登录"
-       style="font-size:var(--font-size-xs);color:var(--dim);padding:4px 8px;border-radius:6px;text-decoration:none;cursor:pointer">退出</a>`;
+    ${auth.local ? '' : `<a href="#" onclick="event.preventDefault();doLogout()" title="退出登录"
+       style="font-size:var(--font-size-xs);color:var(--dim);padding:4px 8px;border-radius:6px;text-decoration:none;cursor:pointer">退出</a>`}`;
 }
 
 /* ── 退出登录 ── */
@@ -138,8 +148,8 @@ function onAuthExpired(msg) {
 /* ── 初始化（页面 load 时调用） ── */
 
 async function initAuth() {
+  let auth = await validateAuth();
+  if (!auth?.user) auth = await ensureLocalSession();
   renderAuthHeader();
-  const auth = await validateAuth();
-  if (auth) renderAuthHeader();
   return auth;
 }

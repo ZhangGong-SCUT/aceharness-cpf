@@ -6,6 +6,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { jsonrepair } from 'jsonrepair';
 import { inspectBuildProfile, sha256File } from './ohos-har-install.mjs';
+import { programInvocation } from './program-invocation.mjs';
 
 export function resolvedFlutterHar(project) {
   const lock = resolve(project, 'ohos/oh_modules/.ohpm/lock.json5');
@@ -31,7 +32,8 @@ export function buildHap(args) {
   if (existsSync(hap)) renameSync(hap, hap + suffix);
   if (existsSync(manifest)) renameSync(manifest, manifest + suffix);
   const started = new Date().toISOString();
-  execFileSync(realpathSync(args.flutter), ['build', 'hap', `--${mode}`], { cwd: project, stdio: 'inherit', timeout: 1800000 });
+  const flutter = programInvocation(realpathSync(args.flutter), ['build', 'hap', `--${mode}`]);
+  execFileSync(flutter.file, flutter.args, { cwd: project, stdio: 'inherit', timeout: 1800000 });
   const dependency = resolvedFlutterHar(project);
   if (dependency.path !== har || sha256File(har) !== hash) throw new Error('构建实际依赖与受检 HAR 不一致或构建期间 HAR 改变');
   if (!existsSync(hap)) throw new Error('构建未生成指定 HAP');

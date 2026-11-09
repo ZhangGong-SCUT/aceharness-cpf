@@ -1,7 +1,7 @@
 /** Per-run SDK snapshot. No file or directory may link back to the shared SDK. */
-import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
-  readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { constants, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
+  readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 export interface SdkOverlayResult {
   overlayDir: string;
@@ -11,7 +11,14 @@ export interface SdkOverlayResult {
   entries: number;
 }
 const WRITABLE_SUBDIRS = ['.'];
-const inside = (root: string, path: string) => path === root || path.startsWith(root + sep);
+function canonical(path: string): string {
+  try { return realpathSync(path); } catch { return resolve(path); }
+}
+const inside = (root: string, path: string) => {
+  const rootPath = canonical(root);
+  const candidate = canonical(path);
+  return candidate === rootPath || candidate.startsWith(rootPath + sep);
+};
 /** 挂在 SDK 树上、给 Agent 看的 skill，不是 Flutter 自己的文件。链接经常指到 SDK 外面。 */
 const AGENT_SKILL_DIRS = new Set(['.agent-skills', '.agents']);
 
@@ -26,6 +33,21 @@ function isHostXcodeSdk(target: string): boolean {
   return target.split(sep).includes('Xcode.app');
 }
 
+/** 符号链接建不成时，把目标复制成实体文件，避免 Windows 无链接权限时整棵 SDK 副本失败。 */
+export function preserveSnapshotLink(
+  destination: string,
+  linkText: string,
+  fallbackSource?: string,
+  link: typeof symlinkSync = symlinkSync,
+): void {
+  try {
+    link(linkText, destination);
+  } catch (error) {
+    if (!fallbackSource || !existsSync(fallbackSource)) throw error;
+    cpSync(fallbackSource, destination, { recursive: true, dereference: true });
+  }
+}
+
 function copyTree(root: string, source: string, destination: string, finalRoot: string): number {
   if (isAgentSkillAttachment(root, source)) return 0;
   const stat = lstatSync(source);
@@ -34,9 +56,15 @@ function copyTree(root: string, source: string, destination: string, finalRoot: 
     let target: string;
     try {
       target = realpathSync(source);
-    } catch (error) {
+    } catch {
       if (basename(source) === 'AGENTS.md') return 0;
-      throw error;
+      // 目标缺失时 realpath 会失败。相对路径仍落在 SDK 内的断链是 SDK 自己的文件，按原链接保留。
+      const link = readlinkSync(source);
+      if (!isAbsolute(link) && inside(root, resolve(dirname(source), link))) {
+        preserveSnapshotLink(destination, link);
+        return 1;
+      }
+      throw new Error(`SDK 链接越出根目录: ${rel}`);
     }
     if (!inside(root, target)) {
       // AGENTS.md 是挂在 SDK 树上的 Harness 说明。Xcode 预编译 SDK 只服务 iOS/macOS 引擎。
@@ -45,7 +73,7 @@ function copyTree(root: string, source: string, destination: string, finalRoot: 
     }
     // Resolve links to a corresponding path in the new snapshot, including absolute links.
     const finalDestination = join(finalRoot, relative(root, source));
-    symlinkSync(relative(dirname(finalDestination), join(finalRoot, relative(root, target))), destination);
+    preserveSnapshotLink(destination, relative(dirname(finalDestination), join(finalRoot, relative(root, target))), target);
     return 1;
   }
   if (stat.isDirectory()) {

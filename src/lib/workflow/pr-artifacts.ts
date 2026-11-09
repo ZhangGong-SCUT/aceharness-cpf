@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { link, lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
+import { portableSnapshotTag } from '@/lib/core/portable-filename';
 
 export interface PrArtifactEntry {
   name: string;
@@ -19,7 +20,9 @@ const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex
 const isMissing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === 'ENOENT';
 function validName(name: string) {
   if (!name || isAbsolute(name) || name.includes('\\') || name.includes('\0')
-    || name.split('/').some(part => !part || part === '.' || part === '..')) {
+    || name.split('/').some(part => !part || part === '.' || part === '..'
+      || /[<>:"|?*]/.test(part) || /[. ]$/.test(part)
+      || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(part))) {
     throw new Error('非法产物路径');
   }
 }
@@ -100,10 +103,15 @@ export async function snapshotPrArtifact(input: Locations & {
   name: string; tag: string; source?: 'work' | 'archive';
 }): Promise<PrArtifactEntry> {
   const source = join(input.source === 'archive' ? input.runDirectory : input.workingDirectory, 'outputs', input.name);
-  const name = `history/${input.tag}/${input.name}`;
+  let safeTag = '';
   try {
     validName(input.name);
-    if (!/^[0-9A-Za-z_][0-9A-Za-z_.:-]*$/.test(input.tag)) throw new Error('非法快照尝试标识');
+    safeTag = portableSnapshotTag(input.tag);
+  } catch (error) {
+    return failedEntry(`history/${input.tag}/${input.name}`, source, error, 'versioned');
+  }
+  const name = `history/${safeTag}/${input.name}`;
+  try {
     const bytes = await readRegular(source);
     const dst = join(input.runDirectory, 'outputs', name);
     const status = await persist(dst, bytes, true);

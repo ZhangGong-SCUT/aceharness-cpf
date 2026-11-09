@@ -15,6 +15,7 @@
  * 能力取值：'ok' | 'denied' | 'unknown'
  */
 
+import { aceDataDir, aceRunsDir, aceRuntimeRoot } from '../library/aceRuntime.js';
 import { createHash } from 'crypto';
 import { createLogger } from '../library/logger.js';
 import { readFileSync, mkdirSync, writeFileSync, renameSync } from 'fs';
@@ -24,7 +25,7 @@ import { join } from 'path';
 const logger = createLogger('PrReviewCapabilities');
 
 const GITCODE_API_BASE = 'https://gitcode.com/api/v5';
-const CAPABILITIES_FILE = join(homedir(), '.aceharness', 'data', 'aiweb-gitcode-capabilities.json');
+const CAPABILITIES_FILE = join(aceDataDir(), 'aiweb-gitcode-capabilities.json');
 
 export const CAPABILITY_UNKNOWN = 'unknown';
 export const CAPABILITY_OK = 'ok';
@@ -116,7 +117,7 @@ function _readStore() {
 
 function _writeStore(store) {
     try {
-        mkdirSync(join(homedir(), '.aceharness', 'data'), { recursive: true });
+        mkdirSync(aceDataDir(), { recursive: true });
         const tmp = `${CAPABILITIES_FILE}.${process.pid}.tmp`;
         writeFileSync(tmp, JSON.stringify(store, null, 2));
         renameSync(tmp, CAPABILITIES_FILE);

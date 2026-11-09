@@ -9,6 +9,7 @@
  * 读取时强制校验路径不逃逸对应 outputs 目录（防目录穿越）。
  */
 
+import { aceDataDir, aceRunsDir, aceRuntimeRoot } from '../library/aceRuntime.js';
 import { readdirSync, statSync, lstatSync, readFileSync, existsSync, realpathSync, openSync, closeSync, fstatSync, readlinkSync, constants } from 'node:fs';
 import { join, resolve, relative, isAbsolute, extname, basename, sep } from 'node:path';
 import { homedir } from 'node:os';
@@ -31,18 +32,10 @@ const TEXT_EXTS = new Set([
 /** 单文件读取上限（超过则拒绝，防止误读超大文件拖垮服务） */
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 
-/**
- * D02：/proc/self/fd 目标校验不可用时是否允许显式降级为路径复查。
- * 默认 false —— 不能证明归属就拒绝读取，避免"祖先目录竞态"在静默降级后重新出现。
- * 仅当部署方确认产物目录不可被并发改写（权限与执行隔离）时，才可显式开启。
- */
-const ALLOW_UNVERIFIED_ARTIFACT_READ = process.env.ISSUEANALYSIS_ALLOW_UNVERIFIED_ARTIFACT_READ === '1';
-let _degradedWarned = false;
-
 /** 工作目录 outputs。优先用 run 自己记下的 workingDirectory，而不是家目录下同名空目录。 */
 function readRecordedWorkingDirectory(runId) {
     try {
-        const yaml = readFileSync(join(homedir(), '.aceharness', 'runs', runId, 'state.yaml'), 'utf8');
+        const yaml = readFileSync(join(aceRunsDir(), runId, 'state.yaml'), 'utf8');
         const match = /^workingDirectory:\s*(\S+)\s*$/m.exec(yaml);
         return match ? match[1] : '';
     } catch {
@@ -54,7 +47,7 @@ function workOutputsDir(runId) {
     const recorded = readRecordedWorkingDirectory(runId);
     const candidates = [
         recorded ? join(recorded, 'outputs') : '',
-        join(homedir(), '.aceharness', 'run-workspaces', runId, 'outputs'),
+        join(aceRuntimeRoot(), 'run-workspaces', runId, 'outputs'),
         join(homedir(), runId, 'outputs'),
     ].filter(Boolean);
     return candidates.find((dir) => existsSync(dir)) || candidates[0];
@@ -62,18 +55,27 @@ function workOutputsDir(runId) {
 
 /** 归档目录 outputs */
 function archOutputsDir(runId) {
-    return join(homedir(), '.aceharness', 'runs', runId, 'outputs');
+    return join(aceRunsDir(), runId, 'outputs');
 }
 
 /**
- * 可信根：由服务端自身确定（服务账号家目录，或显式配置的 ISSUEANALYSIS_TRUST_ROOT），
- * 绝不采用"请求时解析出来的 base"作为信任来源——否则 outputs 本身被替换成
- * 指向外部的链接时，外部目录会被当成本次读取的可信根。
+ * 可信根由服务端自己决定，不用本次解析出来的产物目录当信任来源。
+ * 否则 outputs 被换成外部链接时，链接目标会变成新的可信根。
+ * 家目录覆盖默认的 ~/.aceharness；ACE_HOME、%APPDATA%\\ACEHarness、$XDG_DATA_HOME/aceharness
+ * 可能在别的盘或家目录外面，运行时根必须单独计入。
  */
-function trustRootRaw() {
-    return process.env.ISSUEANALYSIS_TRUST_ROOT
-        ? resolve(process.env.ISSUEANALYSIS_TRUST_ROOT)
-        : homedir();
+function trustRoots() {
+    const roots = [];
+    const configured = process.env.ISSUEANALYSIS_TRUST_ROOT?.trim();
+    roots.push(configured ? resolve(configured) : homedir());
+    const runtime = aceRuntimeRoot();
+    if (runtime && !roots.includes(runtime)) roots.push(runtime);
+    return roots;
+}
+
+/** macOS 的 realpath("/dev/fd/N") 会原样返回 /dev/fd/N，不能当成文件真实路径。 */
+function isFdDevicePath(filePath) {
+    return typeof filePath === 'string' && /^\/(?:dev\/fd|proc\/self\/fd)\/\d+$/.test(filePath);
 }
 
 function openedFdPath(fd) {
@@ -81,8 +83,14 @@ function openedFdPath(fd) {
         ? [`/dev/fd/${fd}`]
         : [`/proc/self/fd/${fd}`, `/dev/fd/${fd}`];
     for (const candidate of candidates) {
-        try { return readlinkSync(candidate); } catch { /* macOS 的 /dev/fd 往往不是符号链接 */ }
-        try { return realpathSync(candidate); } catch { /* 这个平台没有这条 fd 路径 */ }
+        try {
+            const linked = readlinkSync(candidate);
+            if (linked && !isFdDevicePath(linked)) return linked;
+        } catch { /* macOS 的 /dev/fd 往往不是符号链接 */ }
+        try {
+            const resolved = realpathSync(candidate);
+            if (resolved && !isFdDevicePath(resolved)) return resolved;
+        } catch { /* 这个平台没有这条 fd 路径 */ }
     }
     return null;
 }
@@ -94,7 +102,7 @@ function openedFdPath(fd) {
  * 而不是把外部目标当作新的可信根。返回 null 表示不可信，由调用方拒绝读取。
  */
 function trustedRealBase(baseDir, extraRoots = []) {
-    const roots = [trustRootRaw(), ...extraRoots].filter(Boolean);
+    const roots = [...trustRoots(), ...extraRoots].filter(Boolean);
     for (const rawRoot of roots) {
         const found = trustedRealBaseUnder(rawRoot, baseDir);
         if (found) return found;
@@ -237,8 +245,9 @@ function readWithinTrustedBase(baseDir, rel, extraRoots = []) {
         err.code = 'ENOENT';
         throw err;
     }
-    // E01：可信根由服务端确定（家目录或显式配置），且 base 链路上的每一级都必须是真实目录。
-    // run 自己写入 state.yaml 的 workingDirectory 可以作为附加可信根，产物不在家目录下也能读。
+    // E01：可信根由服务端确定（家目录或 ISSUEANALYSIS_TRUST_ROOT，以及运行时根），
+    // 且 base 链路上的每一级都必须是真实目录。
+    // run 自己写入 state.yaml 的 workingDirectory 可以作为附加可信根。
     const realBase = trustedRealBase(baseDir, extraRoots);
     if (!realBase) {
         throw new Error('路径不合法：产物目录不在可信根内');
@@ -271,16 +280,11 @@ function readWithinTrustedBase(baseDir, rel, extraRoots = []) {
         }
         let actualPath = openedFdPath(fd);
         if (actualPath === null) {
-            // D02：fd 目标归属校验不可用（平台无 /proc 或查询失败）——默认拒绝，不静默降级。
-            if (!ALLOW_UNVERIFIED_ARTIFACT_READ) {
-                throw new Error('无法校验产物归属：当前环境不支持 /proc/self/fd 目标校验；'
-                    + '如需在受控平台降级，请显式设置 ISSUEANALYSIS_ALLOW_UNVERIFIED_ARTIFACT_READ=1 '
-                    + '并确保产物目录不可被并发改写');
-            }
-            if (!_degradedWarned) {
-                _degradedWarned = true;
-                console.warn('[artifacts] 已按显式配置降级为路径复查（ISSUEANALYSIS_ALLOW_UNVERIFIED_ARTIFACT_READ=1）：'
-                    + '祖先目录并发改写无法完全防护，请以目录权限/执行隔离为前提');
+            // macOS 读不到 fd 的真实路径（/dev/fd/N 不会解析到文件）。
+            // 此时用已打开 fd 的 dev/ino 对照 realFull：realFull 在打开前已经限制在可信产物目录内。
+            const current = statSync(realFull);
+            if (!current.isFile() || current.dev !== st.dev || current.ino !== st.ino) {
+                throw new Error('路径校验与读取不一致');
             }
         } else {
             // 已删除文件带 " (deleted)" 后缀：去掉后仍按原路径校验归属

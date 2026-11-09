@@ -55,6 +55,9 @@ function loadProjectEnvFiles() {
     }
 }
 loadProjectEnvFiles();
+// Next/Turbopack 会把 node:fs 这类外部模块写成文件名含冒号的 chunk。
+// Windows 提取或打包时把冒号换成 U+F03A，加载器仍请求冒号路径。启动前改成各系统都能用的文件名。
+require('./scripts/sanitize-next-chunk-names').sanitizeNextOutput(path.join(__dirname, '.next'));
 function normalizeBasePath(value) {
     const raw = String(value || '').trim();
     if (!raw || raw === '/')

@@ -11,8 +11,8 @@
  *   已被 DCP 报告过的行会排除（defects 里已有），只列「下一轮大概率会冒出来」的行。
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { isDirectRun } from './script-path.mjs';
 import { resolveGitcodeToken } from './gitcode-token.mjs';
 
 const API_ROOT = process.env.GITCODE_API_ROOT || 'https://gitcode.com/api/v5';
@@ -176,17 +176,7 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-const isDirectRun = (() => {
-  try {
-    // R6：realpath 双向解析符号链接，skills 经 .aceharness 链接调用时 argv 与 import.meta.url 路径不一致，
-    // 否则 main 不执行却 exit 0，上层只看退出码会误判"扫描成功"。
-    return realpathSync(resolve(process.argv[1] || '')) === realpathSync(resolve(new URL(import.meta.url).pathname));
-  } catch {
-    return false;
-  }
-})();
-
-if (isDirectRun) {
+if (isDirectRun(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`${error.message || error}\n`);
     process.exit(1);

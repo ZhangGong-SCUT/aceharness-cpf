@@ -1,15 +1,16 @@
 import { afterEach, describe, expect, test } from 'vitest';
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { archivePrRunArtifacts, snapshotPrArtifact, sha256File } from '@/lib/workflow/pr-artifacts';
+import { portableSnapshotTag, portableSummaryFileName } from '@/lib/core/portable-filename';
 
 const dirs: string[] = [];
 afterEach(async () => { await Promise.all(dirs.splice(0).map((p) => rm(p, { recursive: true, force: true }))); });
 
 async function fixture() {
-  const dir = await mkdtemp(join(tmpdir(), 'pr-archive-'));
+  const dir = await mkdtemp(join(realpathSync(tmpdir()), 'pr-archive-'));
   dirs.push(dir);
   const workingDirectory = join(dir, 'work');
   const runDirectory = join(dir, 'run');
@@ -17,6 +18,22 @@ async function fixture() {
   await mkdir(join(runDirectory, 'outputs'), { recursive: true });
   return { workingDirectory, runDirectory };
 }
+
+describe('跨平台文件名', () => {
+  test('门禁检查时间可以做目录名', () => {
+    expect(portableSnapshotTag('2026-11-09T03:56:10.632Z')).toBe('2026-11-09T03-56-10.632Z');
+    expect(portableSnapshotTag('aaaaaaaaaaaa-2026-11-09T03:56:10.632Z-6f1e')).toBe('aaaaaaaaaaaa-2026-11-09T03-56-10.632Z-6f1e');
+    expect(portableSnapshotTag('attempt-a')).toBe('attempt-a');
+    expect(() => portableSnapshotTag('..')).toThrow('非法快照尝试标识');
+    expect(() => portableSnapshotTag('CON')).toThrow('非法快照尝试标识');
+  });
+
+  test('步骤总结文件名不含 Windows 非法字符', () => {
+    const name = portableSummaryFileName(new Date('2026-11-09T03:56:10.632Z'), '等待门禁', '检查:门禁');
+    expect(name).toBe('2026-11-09T03-56-10-等待门禁-检查-门禁.md');
+    expect(name.includes(':')).toBe(false);
+  });
+});
 
 describe('PR 产物归档（R4）', () => {
   test('缺失和空目录均不能默认为完整；只有显式允许的零产物操作例外', async () => {
@@ -129,10 +146,24 @@ describe('PR 产物归档（R4）', () => {
     // 第二次 push 覆盖 run outputs 的当前文件，但第一版历史仍在
     await writeFile(join(runDirectory, 'outputs/push-result.json'), JSON.stringify({ commit_sha: 'bbb', pushed_at: '2026-10-14T02:00:00Z' }));
     await snapshotPrArtifact({ name: 'push-result.json', source: 'archive', tag: '2026-10-14T02:00:00Z-bbb', runDirectory, workingDirectory });
-    const v1 = JSON.parse(await readFile(join(runDirectory, 'outputs/history/2026-10-14T01:00:00Z-aaa/push-result.json'), 'utf8'));
-    const v2 = JSON.parse(await readFile(join(runDirectory, 'outputs/history/2026-10-14T02:00:00Z-bbb/push-result.json'), 'utf8'));
+    const v1 = JSON.parse(await readFile(join(runDirectory, 'outputs/history/2026-10-14T01-00-00Z-aaa/push-result.json'), 'utf8'));
+    const v2 = JSON.parse(await readFile(join(runDirectory, 'outputs/history/2026-10-14T02-00-00Z-bbb/push-result.json'), 'utf8'));
     expect(v1.commit_sha).toBe('aaa');
     expect(v2.commit_sha).toBe('bbb');
+  });
+
+  test('检查时间里的冒号不会成为历史目录名', async () => {
+    const { workingDirectory, runDirectory } = await fixture();
+    await writeFile(join(workingDirectory, 'outputs/gate-check.json'), '{"phase":"running"}');
+    const entry = await snapshotPrArtifact({
+      name: 'gate-check.json',
+      tag: '2026-11-09T03:56:10.632Z',
+      runDirectory,
+      workingDirectory,
+    });
+    expect(entry.status).toBe('archived');
+    expect(entry.name).toBe('history/2026-11-09T03-56-10.632Z/gate-check.json');
+    expect(await readFile(join(runDirectory, 'outputs', entry.name), 'utf8')).toContain('running');
   });
 
   test('归档目标包含符号链接时拒收该条目并标 failed', async () => {

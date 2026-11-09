@@ -226,7 +226,12 @@ async function ensureServer(userId?: string, workingDirectory?: string): Promise
     configuredEnvOptions(userId),
   );
   const command = getOpencodeCommand(userId);
-  if (isAbsolute(command)) serverEnv.PATH = `${dirname(command)}${delimiter}${serverEnv.PATH || ''}`;
+  if (isAbsolute(command)) {
+    const nextPath = `${dirname(command)}${delimiter}${serverEnv.PATH || ''}`;
+    serverEnv.PATH = nextPath;
+    if (process.platform === 'win32') serverEnv.Path = nextPath;
+  }
+  serverEnv.ACE_NODE = process.execPath;
   const nextFingerprint = JSON.stringify({
     userId: key,
     env: fingerprintEnv(serverEnv),

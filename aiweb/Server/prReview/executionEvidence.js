@@ -1,3 +1,4 @@
+import { aceDataDir, aceRunsDir, aceRuntimeRoot } from '../library/aceRuntime.js';
 import { readFileSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { join, basename } from 'path';
@@ -5,7 +6,7 @@ import { join, basename } from 'path';
 /** Read only this execution's files. Prefer the freshest copy in its isolated workspace. */
 export function readExecutionEvidence(runId, workingDirectory = '') {
     if (!/^run-[A-Za-z0-9_-]+$/.test(String(runId || ''))) return {};
-    const dir = join(homedir(), '.aceharness', 'runs', runId);
+    const dir = join(aceRunsDir(), runId);
     if (!workingDirectory) {
         try { workingDirectory = /^workingDirectory:\s*["']?([^\n"']+)/m.exec(readFileSync(join(dir, 'state.yaml'), 'utf8'))?.[1]?.trim() || ''; } catch {}
     }

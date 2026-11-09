@@ -5,16 +5,46 @@
 #   ./install.sh ./xxx.tgz /data/flutter-sdks      # 指定 tgz 与 SDK 目录
 set -euo pipefail
 
-TGZ_NAME="cpf-ohos-aceharness-1.0.0-beta.90.tgz"
-TGZ="${1:-}"
-if [ -z "$TGZ" ]; then
-  TGZ="$(dirname "$0")/dist/$TGZ_NAME"
+pick_tgz() {
+  local explicit="$1"
+  local dist_dir="$2"
+  if [ -n "$explicit" ]; then
+    printf '%s\n' "$explicit"
+    return
+  fi
+  local newest="" candidate
+  for candidate in "$dist_dir"/cpf-ohos-aceharness-*.tgz; do
+    [ -f "$candidate" ] || continue
+    if [ -z "$newest" ] || [ "$candidate" -nt "$newest" ]; then
+      newest="$candidate"
+    fi
+  done
+  if [ -n "$newest" ]; then
+    printf '%s\n' "$newest"
+    return
+  fi
+  if [ -f "$dist_dir/cpf-ohos-aceharness.tgz" ]; then
+    printf '%s\n' "$dist_dir/cpf-ohos-aceharness.tgz"
+    return
+  fi
+  printf '%s\n' ""
+}
+
+if [ "${ACE_INSTALL_LIBRARY:-}" = "1" ]; then
+  return 0
 fi
-if [ ! -f "$TGZ" ] && [ -n "${ACE_DIST_URL:-}" ]; then
-  # 远程分发模式：tgz 不在本地时从 ACE_DIST_URL 拉取（给同事装机的一句话场景）
-  TGZ="$(pwd)/$TGZ_NAME"
-  echo "    从 $ACE_DIST_URL 下载 $TGZ_NAME ..."
-  curl -fsSL "$ACE_DIST_URL/$TGZ_NAME" -o "$TGZ" || { echo "✗ 下载失败：检查 ACE_DIST_URL 或先手动放置 tgz"; exit 1; }
+
+DIST_DIR="$(cd "$(dirname "$0")" && pwd)/dist"
+TGZ="$(pick_tgz "${1:-}" "$DIST_DIR")"
+if [ -z "$TGZ" ] && [ -n "${ACE_DIST_URL:-}" ]; then
+  NAME="${ACE_DIST_NAME:-}"
+  if [ -z "$NAME" ]; then
+    echo "✗ 远程安装需要 ACE_DIST_NAME=cpf-ohos-aceharness-<版本>.tgz"
+    exit 1
+  fi
+  TGZ="$(pwd)/$NAME"
+  echo "    从 $ACE_DIST_URL 下载 $NAME ..."
+  curl -fsSL "$ACE_DIST_URL/$NAME" -o "$TGZ" || { echo "✗ 下载失败：检查 ACE_DIST_URL 或先手动放置 tgz"; exit 1; }
 fi
 SDK_ROOT="${2:-$HOME/flutter-sdks}"
 
@@ -44,24 +74,23 @@ ACE_ROOT="$(npm root -g)/@cpf-ohos/aceharness"
 command -v ace >/dev/null || { echo "✗ ace 未进入 PATH，请检查 npm global bin 是否在你的 PATH 中"; exit 1; }
 echo "    安装根: $ACE_ROOT"
 
-echo "==> 3/5 同步运行时目录 ~/.aceharness/{configs,skills,scripts} ..."
-mkdir -p "$HOME/.aceharness"
-for d in configs skills scripts; do
-  if [ ! -e "$HOME/.aceharness/$d" ]; then
-    cp -r "$ACE_ROOT/$d" "$HOME/.aceharness/$d"
-    echo "    已同步 $d/"
-  else
-    echo "    ~/.aceharness/$d 已存在，跳过（如需更新： rm -rf 后重跑本脚本，或手动 diff）"
-  fi
-done
+echo "==> 3/5 同步运行时目录 ..."
+RT="$(node "$ACE_ROOT/scripts/runtime-root.mjs")"
+mkdir -p "$RT"
+HOME_LINK="$HOME/.aceharness"
+if [ "$RT" != "$HOME_LINK" ] && [ ! -e "$HOME_LINK" ]; then
+  ln -s "$RT" "$HOME_LINK"
+  echo "    已把 ~/.aceharness 链接到 $RT"
+fi
+node "$ACE_ROOT/scripts/sync-missing-runtime-files.mjs" "$ACE_ROOT" "$RT" \
+  || { echo "✗ 运行时文件补齐失败"; exit 1; }
 
 echo "==> 4/5 改写 SDK 清单路径 -> $SDK_ROOT ..."
-SDK_CONF="$HOME/.aceharness/configs/ohos-flutter-sdks.yaml"
+SDK_CONF="$RT/configs/ohos-flutter-sdks.yaml"
 if [ -f "$SDK_CONF" ]; then
-  sed -i.ace-deploy-bak "s|/home/flutter/flutter-sdks|$SDK_ROOT|g" "$SDK_CONF"
-  grep -q "sdkRoot: $SDK_ROOT" "$SDK_CONF" \
-    && echo "    校验 ✓（原文件备份为 .ace-deploy-bak）" \
-    || { echo "✗ SDK 路径改写失败"; exit 1; }
+  cp "$SDK_CONF" "$SDK_CONF.ace-deploy-bak"
+  node "$ACE_ROOT/scripts/rewrite-sdk-root.mjs" "$SDK_CONF" "/home/flutter/flutter-sdks" "$SDK_ROOT"
+  echo "    校验 ✓（原文件备份为 .ace-deploy-bak）"
 else
   echo "    未找到 $SDK_CONF，跳过（首次启动向导后请手动检查 SDK 路径）"
 fi

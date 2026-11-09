@@ -1,9 +1,12 @@
+import { tmpdir } from 'os';
+import { resolve, sep } from 'path';
 import { describe, expect, test } from 'vitest';
 import {
   ACE_PACKAGE_NAME,
   buildNpmPackageSpec,
   normalizeUpdateTarget,
   parseNpmVersionOutput,
+  resolveWindowsGlobalInstallCwd,
 } from '@/lib/core/self-update';
 
 describe('self update helpers', () => {
@@ -25,6 +28,18 @@ describe('self update helpers', () => {
     expect(() => buildNpmPackageSpec(ACE_PACKAGE_NAME, '@other/pkg@latest')).toThrow(/version or dist-tag/);
     expect(() => buildNpmPackageSpec(ACE_PACKAGE_NAME, `${ACE_PACKAGE_NAME}@`)).toThrow(/version or dist-tag/);
     expect(() => buildNpmPackageSpec(ACE_PACKAGE_NAME, 'bad target')).toThrow(/version or dist-tag/);
+  });
+
+  test('windows global install cwd stays outside the occupied package directory', () => {
+    const occupied = resolve(tmpdir(), 'ace-update-occupied', 'node_modules', '@cpf-ohos', 'aceharness');
+    const cwd = resolveWindowsGlobalInstallCwd(occupied);
+    const resolved = resolve(cwd);
+    expect(resolved === occupied || resolved.startsWith(occupied + sep)).toBe(false);
+  });
+
+  test('windows global install cwd leaves the temp directory when that directory is occupied', () => {
+    const cwd = resolve(resolveWindowsGlobalInstallCwd(resolve(tmpdir())));
+    expect(cwd).not.toBe(resolve(tmpdir()));
   });
 
   test('parses npm version output from json and plain text', () => {

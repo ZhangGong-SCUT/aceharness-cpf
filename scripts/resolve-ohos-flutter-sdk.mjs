@@ -8,6 +8,7 @@
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { runtimeRoot } from './runtime-root.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -93,8 +94,7 @@ function readBranch(repoPath) {
 const args = parseArgs(process.argv.slice(2));
 const configPath = args.config
   || process.env.ACE_OHOS_FLUTTER_SDKS
-  || join(process.env.APPDATA || '', 'ACEHarness', 'configs', 'ohos-flutter-sdks.yaml')
-  || join(repoRoot, 'configs', 'ohos-flutter-sdks.yaml');
+  || join(runtimeRoot(), 'configs', 'ohos-flutter-sdks.yaml');
 const fallbackConfig = existsSync(configPath) ? configPath : join(repoRoot, 'configs', 'ohos-flutter-sdks.yaml');
 if (!existsSync(fallbackConfig)) {
   console.error(JSON.stringify({ matched: false, reason: `找不到清单: ${fallbackConfig}` }, null, 2));

@@ -2,13 +2,14 @@
 /**
  * 把 PR head 挂到本次 run 的 repo/。
  * 本机已有对应仓库时只 fetch 该分支；没有仓库时才允许浅克隆。
+ * 浅克隆至少保留父提交。--depth 1 时 HEAD~1 在 macOS、Linux、Windows 上都不存在。
  * 禁止不带 --depth 和 --branch 的 git clone。
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runtimeRoot } from '../../../scripts/runtime-root.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const installRoot = resolve(here, '../../..');
@@ -19,9 +20,11 @@ function arg(name) {
   return process.argv[index + 1];
 }
 
+export const SHALLOW_DEPTH = '2';
+
 export function shallowCloneArgs(url, branch, dest) {
   if (!url || !branch || !dest) throw new Error('浅克隆缺少 url、分支或目标目录');
-  return ['clone', '--depth', '1', '--branch', branch, '--single-branch', url, dest];
+  return ['clone', '--depth', SHALLOW_DEPTH, '--branch', branch, '--single-branch', url, dest];
 }
 
 function gitBin() {
@@ -44,10 +47,9 @@ function configCandidates(explicit) {
     explicit || '',
     arg('--config'),
     process.env.ACE_OHOS_FLUTTER_SDKS || '',
-    join(homedir(), '.aceharness', 'configs', 'ohos-flutter-sdks.yaml'),
+    join(runtimeRoot(), 'configs', 'ohos-flutter-sdks.yaml'),
+    join(installRoot, 'configs', 'ohos-flutter-sdks.yaml'),
   ];
-  if (process.env.APPDATA) list.push(join(process.env.APPDATA, 'ACEHarness', 'configs', 'ohos-flutter-sdks.yaml'));
-  list.push(join(installRoot, 'configs', 'ohos-flutter-sdks.yaml'));
   return list.filter(Boolean);
 }
 
@@ -105,14 +107,33 @@ function localSha(source, headRef) {
   return tryGit(source, ['rev-parse', '--verify', `${headRef}^{commit}`]);
 }
 
+function hasCommit(source, ref) {
+  return Boolean(ref && tryGit(source, ['rev-parse', '--verify', `${ref}^{commit}`]));
+}
+
 function fetchHead(source, headRef) {
   const current = tryGit(source, ['rev-parse', '--abbrev-ref', 'HEAD']);
   if (current === headRef) {
-    git(source, ['fetch', '--depth', '1', 'myfork', headRef]);
+    git(source, ['fetch', '--depth', SHALLOW_DEPTH, 'myfork', headRef]);
     return 'fetched-current';
   }
-  git(source, ['fetch', '--depth', '1', 'myfork', `${headRef}:${headRef}`]);
+  git(source, ['fetch', '--depth', SHALLOW_DEPTH, 'myfork', `${headRef}:${headRef}`]);
   return 'fetched-branch';
+}
+
+function fetchBase(source, baseRef) {
+  if (!baseRef || hasCommit(source, baseRef)) return false;
+  for (const remote of ['origin', 'myfork']) {
+    const remotes = tryGit(source, ['remote']).split(/\s+/).filter(Boolean);
+    if (!remotes.includes(remote)) continue;
+    try {
+      git(source, ['fetch', '--depth', SHALLOW_DEPTH, remote, `${baseRef}:refs/heads/${baseRef}`]);
+    } catch {
+      continue;
+    }
+    if (hasCommit(source, baseRef)) return true;
+  }
+  return false;
 }
 
 function ensureWorktree(source, dest, headRef, headSha) {
@@ -160,6 +181,7 @@ export function checkoutPrHead(options) {
     fetchHead(sdk.path, headRef);
     fetched = true;
   }
+  fetchBase(sdk.path, options.baseRef);
   const mode = ensureWorktree(sdk.path, dest, headRef, options.headSha || localSha(sdk.path, headRef));
   const upstream = tryGit(dest, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']);
   return {

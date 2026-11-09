@@ -2887,9 +2887,7 @@ try {
       prompt += `## 项目路径\n${workflowConfig.context.projectRoot}\n\n`;
       if (this.currentRunId) {
         const outputDir = join(getWorkspaceRunsDir(), this.currentRunId, 'outputs');
-        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const phaseName = this.currentPhase || '当前阶段';
-        const summaryFileName = `${ts}-${phaseName}-${step.name}.md`;
+        const summaryFileName = this.buildTimestampedDetailFileName(this.currentPhase, step.name);
         prompt += `## 文档输出要求\n`;
         prompt += `请将你产出的步骤成果详细总结写入以下目录：\n`;
         prompt += `\`${outputDir}/\`\n\n`;

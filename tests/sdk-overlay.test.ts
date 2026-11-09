@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative } from 'node:path';
-import { createSdkOverlay, overlayFlutterBinForRun } from '../src/lib/workflow/sdk-overlay';
+import { createSdkOverlay, overlayFlutterBinForRun, preserveSnapshotLink } from '../src/lib/workflow/sdk-overlay';
 
 function makeSdkTree() {
   const root = mkdtempSync(join(tmpdir(), 'sdk-src-'));
@@ -121,6 +121,49 @@ describe('createSdkOverlay（R08：run 级 SDK overlay）', () => {
     rmSync(dirname(guidance), { recursive: true, force: true });
     rmSync(join(outside, `xcode-${basename(src)}`), { recursive: true, force: true });
     rmSync(stray, { recursive: true, force: true });
+  });
+
+  it('保留 SDK 内部的相对断链，越出根目录的断链仍然拒绝', () => {
+    const src = makeSdkTree();
+    const dir = join(src, 'engine', 'src', 'flutter', 'third_party', 'libcxx_ohos', 'test', 'std');
+    mkdirSync(dir, { recursive: true });
+    symlinkSync('../../../pstl/test/std', join(dir, 'pstl'));
+    const overlayDir = mkdtempSync(join(tmpdir(), 'sdk-overlay-dangling-'));
+    const result = createSdkOverlay(src, overlayDir);
+    const copied = join(result.sdkLink, 'engine', 'src', 'flutter', 'third_party', 'libcxx_ohos', 'test', 'std', 'pstl');
+    expect(lstatSync(copied).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(copied)).toBe('../../../pstl/test/std');
+
+    symlinkSync('../../../../../../missing-outside', join(src, 'bin', 'escape'));
+    const badOverlay = mkdtempSync(join(tmpdir(), 'sdk-overlay-dangling-bad-'));
+    expect(() => createSdkOverlay(src, badOverlay)).toThrow('越出');
+
+    rmSync(src, { recursive: true, force: true });
+    rmSync(overlayDir, { recursive: true, force: true });
+    rmSync(badOverlay, { recursive: true, force: true });
+  });
+});
+
+describe('preserveSnapshotLink', () => {
+  it('符号链接被拒绝时复制成实体文件', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sdk-link-fallback-'));
+    const source = join(dir, 'origin.txt');
+    const destination = join(dir, 'copy.txt');
+    writeFileSync(source, 'payload');
+    preserveSnapshotLink(destination, 'origin.txt', source, () => {
+      throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    });
+    expect(lstatSync(destination).isSymbolicLink()).toBe(false);
+    expect(readFileSync(destination, 'utf8')).toBe('payload');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('没有可复制目标时继续抛出原错误', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sdk-link-fail-'));
+    expect(() => preserveSnapshotLink(join(dir, 'missing'), 'gone', undefined, () => {
+      throw new Error('拒绝链接');
+    })).toThrow('拒绝链接');
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 

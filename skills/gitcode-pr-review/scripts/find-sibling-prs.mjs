@@ -11,8 +11,8 @@
  * 用法：node find-sibling-prs.mjs --pr-url <URL> --author <login> [--out outputs]
  */
 import { mkdir, writeFile } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { isDirectRun } from './script-path.mjs';
 import { resolveGitcodeToken } from './gitcode-token.mjs';
 
 const API_ROOT = process.env.GITCODE_API_ROOT || 'https://gitcode.com/api/v5';
@@ -134,16 +134,7 @@ async function output(result, outDir) {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-function isDirectRun() {
-  // R6：realpath 双向解析符号链接，避免经 .aceharness 链接调用时 main 不执行却 exit 0
-  try {
-    return realpathSync(resolve(process.argv[1] || '')) === realpathSync(resolve(new URL(import.meta.url).pathname));
-  } catch {
-    return false;
-  }
-}
-
-if (isDirectRun()) {
+if (isDirectRun(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`${error.message || error}\n`);
     process.exit(1);

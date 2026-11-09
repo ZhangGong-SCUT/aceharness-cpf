@@ -11,6 +11,7 @@
  * Base URL 默认 http://127.0.0.1:3031
  */
 
+import { aceDataDir, aceRunsDir, aceRuntimeRoot, isActiveAdmin } from '../library/aceRuntime.js';
 import https from 'node:https';
 import http  from 'node:http';
 import { readFileSync } from 'node:fs';
@@ -96,9 +97,9 @@ async function getToken() {
 
 function _readAdminTokenFromDisk() {
     try {
-        const dataDir = join(homedir(), '.aceharness', 'data');
+        const dataDir = aceDataDir();
         const users = JSON.parse(readFileSync(join(dataDir, 'users.json'), 'utf8'));
-        const adminIds = new Set(users.filter(u => u.role === 'admin' && u.status === 'active').map(u => u.id));
+        const adminIds = new Set(users.filter(isActiveAdmin).map(u => u.id));
         const tokens = JSON.parse(readFileSync(join(dataDir, 'tokens.json'), 'utf8'));
         const now = Date.now();
         let best = null, bestExp = 0;
@@ -277,6 +278,22 @@ export async function startWorkflow(opts) {
         frontendSessionId: result.data.frontendSessionId,
         sessionWorkbenchState: result.data.sessionWorkbenchState,
     };
+}
+
+/**
+ * 让已有运行从中断的步骤继续。AceHarness 会保留已完成步骤，只重跑当前步骤。
+ * @param {string} runId
+ */
+export async function resumeWorkflow(runId) {
+    const token = await getToken();
+    const result = await httpRequest('POST', '/api/workflow/resume', { runId }, { token, timeoutMs: 20000 });
+    if (result.status !== 200 || !result.data?.success) {
+        const msg = result.data?.error || result.data?.message || `HTTP ${result.status}`;
+        const error = new Error(`继续运行失败：${msg}`);
+        error.status = result.status === 409 ? 409 : 502;
+        throw error;
+    }
+    return result.data;
 }
 
 // ── 磁盘回退：AceHarness 重启后 API 返回 idle，从磁盘读取 state.yaml ──────────

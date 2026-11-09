@@ -5,6 +5,9 @@
 .next/types
 .next/**/*.map
 data
+data/users.json
+data/admin.json
+data/tokens.json
 runs
 logs
 cache

@@ -13,6 +13,7 @@
  * 「幂等键 + 可重试 + 远端结果对账」。
  */
 
+import { aceDataDir, aceRunsDir, aceRuntimeRoot } from '../library/aceRuntime.js';
 import { createHash, randomUUID } from 'crypto';
 import { readFileSync, mkdirSync, chmodSync } from 'fs';
 import Database from 'better-sqlite3';
@@ -23,11 +24,11 @@ import { createLogger } from '../library/logger.js';
 
 const logger = createLogger('PrReviewOperations');
 
-const OPERATIONS_FILE = join(homedir(), '.aceharness', 'data', 'aiweb-pr-operations.json');
+const OPERATIONS_FILE = join(aceDataDir(), 'aiweb-pr-operations.json');
 let database;
 function db() {
     if (database) return database;
-    const dir = join(homedir(), '.aceharness', 'data');
+    const dir = aceDataDir();
     mkdirSync(dir, { recursive: true });
     const file = join(dir, 'aiweb-pr-operations.sqlite');
     const connection = new Database(file);

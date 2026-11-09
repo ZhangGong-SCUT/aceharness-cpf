@@ -16,9 +16,11 @@
  * `run.ownerId === auth.id`，天然实现"只看自己的 PR"。
  */
 
+import { aceDataDir, aceRunsDir, aceRuntimeRoot, isActiveAdmin } from '../library/aceRuntime.js';
 import { httpRequest, ACEHARNESS_API_BASE_URL } from '../issueAnalysis/aceHarnessClient.js';
 import config from '../library/config.js';
 import { createLogger } from '../library/logger.js';
+import { readHumanApproval } from './approvalState.js';
 import { readExecutionEvidence } from './executionEvidence.js';
 import { reviewArtifactMatchesPr } from './review-match.js';
 import { readPushedPatch } from './pushedPatch.js';
@@ -57,16 +59,31 @@ export async function loginUser(email, password) {
 }
 
 /**
+ * 本地个人部署直接进入本机管理员会话，不再走登录页。
+ * 只复用 AceHarness 已签发、仍在有效期内的管理员 token。
+ */
+export async function openLocalSession() {
+    if (process.env.AIWEB_DEPLOYMENT !== 'personal') {
+        throw new Error('当前部署需要登录');
+    }
+    const token = _readAdminTokenFromDisk();
+    if (!token) throw new Error('本机还没有可用的管理员会话');
+    const user = await getUserByToken(token);
+    if (!user) throw new Error('本机管理员会话已失效');
+    return { token, user };
+}
+
+/**
  * 从 AceHarness 数据目录读取一个有效的 admin 服务 token（同机部署）。
  * 用于注册直通（免审核创建普通用户），避免在 .env 明文存管理员密码。
  * token 7 天有效，admin 正常登录会自动产生新 token；读不到时返回 null（降级注册）。
  */
 function _readAdminTokenFromDisk() {
     try {
-        const dataDir = join(homedir(), '.aceharness', 'data');
+        const dataDir = aceDataDir();
         const users = JSON.parse(readFileSync(join(dataDir, 'users.json'), 'utf8'));
         const adminIds = new Set(
-            users.filter(u => u.role === 'admin' && u.status === 'active').map(u => u.id)
+            users.filter(isActiveAdmin).map(u => u.id)
         );
         const tokens = JSON.parse(readFileSync(join(dataDir, 'tokens.json'), 'utf8'));
         const now = Date.now();
@@ -237,6 +254,16 @@ export async function getUserByToken(token) {
  * @param {string} runId
  * @returns {string|null}
  */
+function humanApprovalFields(runId) {
+    const approval = readHumanApproval(runId);
+    if (!approval) return {};
+    return {
+        approvalAsk: approval.ask,
+        approvalNext: approval.suggestedNextState,
+        approvalKind: approval.kind,
+    };
+}
+
 export function extractPrNumber(runId) {
     const m = /pr(\d+)/i.exec(runId || '');
     return m ? m[1] : null;
@@ -285,6 +312,7 @@ export async function listPrReviewRuns(token, page = 1, pageSize = 50) {
         costSource: r.costSource || (r.cost > 0 ? 'reported' : 'unavailable'),
         // R1：门禁终态归因——页面不得仅凭 status==='completed' 就宣称"门禁全绿"。
         ...(extractPrNumber(r.id) ? runGateOutcomeOf(r.id) : {}),
+        ...(r.currentPhase === '__human_approval__' ? humanApprovalFields(r.id) : {}),
     }));
 
     // 一个 PR 只显示一个任务：按「仓库+编号」去重（跨仓编号重叠，仅编号会误伤），保留最新的
@@ -395,7 +423,7 @@ async function _readOutputSafe(token, runId, outputRef) {
  *  YAML 块样式可能是 >-（折叠）或 |-（字面），两种都匹配） */
 function _readRunGlobalContext(runId) {
     try {
-        const yaml = readFileSync(join(homedir(), '.aceharness', 'runs', runId, 'state.yaml'), 'utf8');
+        const yaml = readFileSync(join(aceRunsDir(), runId, 'state.yaml'), 'utf8');
         const m = /^globalContext:\s*[|>][+-]?\n([\s\S]*?)(?=\n[^\s]|(?![\s\S]))/m.exec(yaml);
         return m ? m[1] : '';
     } catch {
@@ -408,7 +436,7 @@ function _readRunGlobalContext(runId) {
  *  fix.patch / ai-review-comments.json 等工件在工作目录 outputs/ 下，需同机直读兜底。 */
 function _readRunWorkingDirectory(runId) {
     try {
-        const yaml = readFileSync(join(homedir(), '.aceharness', 'runs', runId, 'state.yaml'), 'utf8');
+        const yaml = readFileSync(join(aceRunsDir(), runId, 'state.yaml'), 'utf8');
         const m = /^workingDirectory:\s*(\S+)\s*$/m.exec(yaml);
         return m ? m[1] : '';
     } catch {
@@ -419,7 +447,7 @@ function _readRunWorkingDirectory(runId) {
 /** 同机部署时先读 run 归档和隔离工作目录，避免为小型 JSON/patch 反复走 HTTP。 */
 function _readRunArtifactLocal(runId, name, workDir = '') {
     const candidates = [
-        join(homedir(), '.aceharness', 'runs', runId, 'outputs', name),
+        join(aceRunsDir(), runId, 'outputs', name),
         // 共享模板工作区可能已有其他 PR 的产物，仅隔离目录可以回退读取。
         workDir && workDir.replace(/\\/g, '/').endsWith('/' + runId) ? join(workDir, 'outputs', name) : '',
     ].filter(Boolean);
@@ -433,7 +461,7 @@ async function _readRunArtifact(token, runId, name, workDir) {
     const local = _readRunArtifactLocal(runId, name, workDir);
     if (local !== null) return local;
     // 同机归档可读时，缺失是正常业务状态，不再为每个缺失工件排队请求 HTTP。
-    if (existsSync(join(homedir(), '.aceharness', 'runs', runId, 'state.yaml'))) return null;
+    if (existsSync(join(aceRunsDir(), runId, 'state.yaml'))) return null;
     return _readOutputSafe(token, runId, `outputs/${name}`);
 }
 
@@ -465,7 +493,7 @@ export function deriveGateOutcome(gate) {
  * 页面此前仅按 status==='completed' 插入"门禁全绿"，会把"关闭终止、未完成验证"误显示成全绿。
  * 不做模块级缓存：gate-check 会随运行变化，列表每次都读小文件（PR run 数量很少）。
  */
-export function runGateOutcomeOf(runId, runsRoot = join(homedir(), '.aceharness', 'runs')) {
+export function runGateOutcomeOf(runId, runsRoot = join(aceRunsDir())) {
     let outcome = { prState: '', gateOutcome: '', gateSummary: '', gateHeadSha: '' };
     try {
         const gate = JSON.parse(readFileSync(join(runsRoot, runId, 'outputs', 'gate-check.json'), 'utf8'));
@@ -487,7 +515,7 @@ export function runGateOutcomeOf(runId, runsRoot = join(homedir(), '.aceharness'
  * 门禁根因/维护提醒的结构化诊断（供"普通详情"直接展示，不必打开"检视修复"面板）。
  * 归档优先、隔离工作目录兜底，与其它工件读取口径一致；读不到就返回 null，不臆造。
  */
-export function runGateDiagnosisOf(runId, runsRoot = join(homedir(), '.aceharness', 'runs')) {
+export function runGateDiagnosisOf(runId, runsRoot = join(aceRunsDir())) {
     const workDir = _readRunWorkingDirectory(runId);
     const candidates = [
         join(runsRoot, runId, 'outputs', 'gate-check.json'),
@@ -555,7 +583,7 @@ export function runIssueInfoOf(runId) {
     if (_runIssueInfoCache.has(id)) return _runIssueInfoCache.get(id);
     let info = { number: null, repo: '', url: '', iterate: false };
     try {
-        const yaml = readFileSync(join(homedir(), '.aceharness', 'runs', id, 'state.yaml'), 'utf8');
+        const yaml = readFileSync(join(aceRunsDir(), id, 'state.yaml'), 'utf8');
         const clean = (v) => String(v || '').replace(/["',]+$/, '');
         const url = clean((/\bissue-url:\s*(\S+)/.exec(yaml) || [])[1] || '');
         let number = (/\bissue-number:\s*(\d+)/.exec(yaml) || [])[1] || null;
@@ -701,7 +729,7 @@ export function groupSiblingPrs(prs) {
  * 其次才在 ~/.aceharness/runs/<runId>/outputs。
  */
 export function findSiblingReviewSource(sibling, targetMeta = {}, { preparePatch = false } = {}) {
-    const runsDir = join(homedir(), '.aceharness', 'runs');
+    const runsDir = join(aceRunsDir());
     const expectedOwner = String(targetMeta.owner || '').toLowerCase();
     const expectedRepo = String(targetMeta.repo || '').toLowerCase();
     const expectedNumber = String(sibling?.number || '');
@@ -782,7 +810,7 @@ export function findAuthorGitcodeToken(gitcodeLogin) {
     const login = String(gitcodeLogin || '').trim();
     if (!login) return '';
     const keySuffix = login.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    const envDir = join(homedir(), '.aceharness', 'data', 'env-vars.users');
+    const envDir = join(aceDataDir(), 'env-vars.users');
     try {
         for (const file of readdirSync(envDir)) {
             if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
@@ -920,12 +948,12 @@ function _parseSiblingReviewContext(runId) {
  * origHeadSha 一并持久化：那是修复 run 启动时的基线，回退区间的正确起点。 */
 function _prFixStoreFile(owner, repo, number) {
     const safe = (s) => String(s || '').replace(/[^A-Za-z0-9._-]+/g, '_');
-    return join(homedir(), '.aceharness', 'data', 'aiweb-review-fixes', `${safe(owner)}__${safe(repo)}__${safe(number)}.json`);
+    return join(aceDataDir(), 'aiweb-review-fixes', `${safe(owner)}__${safe(repo)}__${safe(number)}.json`);
 }
 
 function _readRunPushStatus(runId) {
-    const logDir = join(homedir(), '.aceharness', 'runs', runId, 'outputs', 'step-logs');
-    const outputsDir = join(homedir(), '.aceharness', 'runs', runId, 'outputs');
+    const logDir = join(aceRunsDir(), runId, 'outputs', 'step-logs');
+    const outputsDir = join(aceRunsDir(), runId, 'outputs');
     try {
         const receipt = JSON.parse(readFileSync(join(outputsDir, 'push-result.json'), 'utf8'));
         if (_pushStatusSucceeded(receipt.push_status)) {
@@ -977,7 +1005,7 @@ function _loadPrFixEntry(owner, repo, number) {
 
 function _savePrFixEntry(entry) {
     try {
-        mkdirSync(join(homedir(), '.aceharness', 'data', 'aiweb-review-fixes'), { recursive: true });
+        mkdirSync(join(aceDataDir(), 'aiweb-review-fixes'), { recursive: true });
         writeFileSync(_prFixStoreFile(entry.owner, entry.repo, entry.number), JSON.stringify(entry, null, 2));
     } catch (e) {
         logger.warn('检视修复 patch 持久化失败', { error: e.message });
@@ -1031,7 +1059,7 @@ async function _recoverPushedFixFromGitcode(meta, staleComments) {
 
     // diff 正文：本机 repo-cache git 对象（只读；缺对象/超时则该提交无正文，仅列清单）
     let patch = '';
-    const cacheDir = join(homedir(), '.aceharness', 'repo-cache', 'gitcode.com', owner, `${repo}.git`);
+    const cacheDir = join(aceRuntimeRoot(), 'repo-cache', 'gitcode.com', owner, `${repo}.git`);
     if (existsSync(cacheDir)) {
         const parts = await Promise.all([...pushed].sort((a, b) => a.date - b.date).map(async (c) => {
             try {
@@ -1151,7 +1179,7 @@ export async function getReviewFixData(token, runId) {
             const sourceWork = _readRunWorkingDirectory(sourceId);
             const sourcePatch = _readRunArtifactLocal(sourceId, 'fix.patch', sourceWork);
             const owner = id => {
-                try { return JSON.parse(readFileSync(join(homedir(), '.aceharness/runs', id, 'summary.json'), 'utf8')).ownerId || ''; }
+                try { return JSON.parse(readFileSync(join(aceRunsDir(), id, 'summary.json'), 'utf8')).ownerId || ''; }
                 catch { return ''; }
             };
             const ownerId = owner(runId);
@@ -1302,7 +1330,7 @@ export async function getReviewFixData(token, runId) {
 /** Freeze source review artifacts before dispatch, so later workspace cleanup cannot lose attribution. */
 export function archiveApprovedReview(runId, patch) {
     if (!/^run-[A-Za-z0-9_-]+$/.test(runId)) throw new Error('无效的执行编号');
-    const out = join(homedir(), '.aceharness', 'runs', runId, 'outputs');
+    const out = join(aceRunsDir(), runId, 'outputs');
     const work = _readRunWorkingDirectory(runId);
     const artifacts = ['ai-review-comments.json', 'dcp-codecheck-defects.json', 'review-suggestion.json']
         .map(name => [name, _readRunArtifactLocal(runId, name, work)]);
@@ -1341,24 +1369,77 @@ function _splitPatchByFile(patch) {
 }
 
 /**
- * 逐条配对：每条 AI 意见 + 对应文件的 diff 片段
- * 匹配规则：comment.path 与 diff 文件路径精确/后缀匹配
- * 无 path 的意见（PR 整体性建议）配整个 patch（当只有一个文件时）
- * diff 中有多余文件修改（无对应意见）作为"附加修改"列出
+ * 逐条配对：每条 AI 意见 + 对应文件的 diff 片段。
+ * comment.path 与正文里出现的补丁文件名都可以挂上，一条意见可挂多个被点名的文件。
+ * 正文没写出的伴随修改：与已挂文件同一处类型改动的源文件挂回该意见；
+ * 点名了仓库里旧测试、补丁里另有一个新测试文件时，挂到提出回归单测的那条意见。
+ * 只有「没配上的意见恰好 1 条、剩下的文件也恰好 1 个」时才做最后兜底。
+ * 没有对应代码的意见保持空白，不进附加修改。
  */
-/* 从意见正文提取文件名（AI 意见几乎都会点名文件，如 "SendableStandardMessageCodec.ets ..."），与 diff 文件比对 */
-function _matchFileFromCommentBody(body, fileDiffs) {
-    if (!body || !fileDiffs.size) return null;
+function _fileBase(file) {
+    return String(file || '').split(/[/\\]/).pop().toLowerCase();
+}
+
+function _isTestFile(file) {
+    return /(?:^|[._-])(?:test|spec)[._-]|[._-](?:test|spec)\.[a-z0-9]+$/i.test(_fileBase(file));
+}
+
+function _addedLines(diff) {
+    return String(diff || '').split('\n').filter((line) => line.startsWith('+') && !line.startsWith('+++')).join('\n');
+}
+
+/** 正文里的类型名、限定名。用来判断另一份修改是不是同一处改动，不拿文件名本身当证据。 */
+function _codeIdentifiers(text) {
+    const found = new Set();
+    const source = String(text || '');
+    for (const match of source.matchAll(/\b[A-Za-z_][\w]*\.[A-Za-z_][\w.]*/g)) {
+        if (match[0].length >= 12) found.add(match[0]);
+    }
+    for (const match of source.matchAll(/\b[A-Z][A-Za-z0-9_]{7,}\b/g)) found.add(match[0]);
+    return found;
+}
+
+function _asksForTest(body) {
+    return /单测|单元测试|回归测试|回归单测|测试用例|补测试|增加测试|新增测试|补充测试|写测试|加测试|unit test|regression test/i.test(String(body || ''));
+}
+
+function _mentionsAbsentExampleTest(body, fileDiffs) {
+    const tokens = String(body || '').match(/[\w./-]+\.[A-Za-z0-9]{1,10}/g) || [];
+    return tokens.some((token) => {
+        const base = token.split('/').pop().toLowerCase();
+        if (!/(?:^|[._-])(?:test|spec)[._-]|[._-](?:test|spec)\.[a-z0-9]+$/i.test(base)) return false;
+        return ![...fileDiffs.keys()].some((file) => _fileBase(file) === base || file.toLowerCase().endsWith('/' + token.toLowerCase()));
+    });
+}
+
+/* 从意见正文提取补丁里真实存在的文件。一条意见可以点名多个文件，按出现顺序全部返回。 */
+function _filesNamedInCommentBody(body, fileDiffs) {
+    if (!body || !fileDiffs.size) return [];
     const tokens = String(body).match(/[\w./-]+\.[A-Za-z0-9]{1,10}/g) || [];
-    for (const t of tokens) {
-        const base = t.split('/').pop().toLowerCase();
+    const found = [];
+    const seen = new Set();
+    for (const token of tokens) {
+        const base = token.split('/').pop().toLowerCase();
         if (!base || base.length < 3) continue;
         for (const [file] of fileDiffs) {
-            const fb = file.split('/').pop().toLowerCase();
-            if (base === fb || file.toLowerCase().endsWith('/' + t.toLowerCase())) return file;
+            const sameBase = _fileBase(file) === base || file.toLowerCase().endsWith('/' + token.toLowerCase());
+            if (sameBase && !seen.has(file)) {
+                seen.add(file);
+                found.push(file);
+            }
         }
     }
-    return null;
+    return found;
+}
+
+function _attachPairFile(pair, file, fileDiffs, usedFiles) {
+    if (!file || usedFiles.has(file) || pair.diffFiles.includes(file)) return false;
+    pair.diffFiles.push(file);
+    pair.diff = pair.diffFiles.map((name) => fileDiffs.get(name)).filter(Boolean).join('\n');
+    pair.diffFile = pair.diffFiles[0] || null;
+    pair.hasDiff = pair.diffFiles.length > 0;
+    usedFiles.add(file);
+    return true;
 }
 
 function _gateIssueMatchesFile(issue, file) {
@@ -1376,55 +1457,92 @@ export function _buildCommentChangePairs(aiComments, patch, gateIssues = []) {
 
     /* 第一遍：路径匹配（所有意见）+ 正文文件名匹配（仅待处理意见——
      * stale 意见的修复是更早的推送，当前 patch 不代表它们的修复，不参与正文匹配） */
+    const canTakeFiles = (comment) => !comment.stale || comment.approvedPatch;
     const pairs = aiComments.map((c, i) => {
-        let diff = '';
-        let matchedFile = null;
-        if (c.path && (!c.stale || c.approvedPatch)) {
-            for (const [file, d] of fileDiffs) {
-                if (file === c.path || file.endsWith('/' + c.path) || c.path.endsWith('/' + file)) {
-                    diff = d;
-                    matchedFile = file;
-                    break;
-                }
-            }
-        }
-        let gateRelated = Boolean(matchedFile && isGateFile(matchedFile) && !c.approvedPatch);
-        if (gateRelated) {
-            diff = '';
-            matchedFile = null;
-        }
-        if (!diff && !gateRelated && (!c.stale || c.approvedPatch)) {
-            const bodyFile = _matchFileFromCommentBody(c.body, fileDiffs);
-            if (bodyFile) {
-                if (isGateFile(bodyFile) && !c.approvedPatch) {
-                    gateRelated = true;
-                } else {
-                    diff = fileDiffs.get(bodyFile);
-                    matchedFile = bodyFile;
-                }
-            }
-        }
-        if (matchedFile) usedFiles.add(matchedFile);
-        return {
+        const pair = {
             pairId: `pair-${i}`,
             index: i + 1,
             comment: c,
-            diff,
-            diffFile: matchedFile,
-            hasDiff: !!diff,
-            gateRelated,
+            diff: '',
+            diffFile: null,
+            diffFiles: [],
+            hasDiff: false,
+            gateRelated: false,
         };
+        const pathNamed = [];
+        if (c.path && canTakeFiles(c)) {
+            for (const [file] of fileDiffs) {
+                if (file === c.path || file.endsWith('/' + c.path) || c.path.endsWith('/' + file)) pathNamed.push(file);
+            }
+        }
+        const bodyNamed = canTakeFiles(c) ? _filesNamedInCommentBody(c.body, fileDiffs) : [];
+        const named = [...pathNamed, ...bodyNamed];
+        let sawGateFile = false;
+        for (const file of named) {
+            if (isGateFile(file) && !c.approvedPatch) {
+                sawGateFile = true;
+                continue;
+            }
+            _attachPairFile(pair, file, fileDiffs, usedFiles);
+        }
+        if (!pair.hasDiff && sawGateFile) pair.gateRelated = true;
+        return pair;
     });
 
-    /* 第二遍：单文件兜底——仅当「未匹配的待处理意见」恰有 1 条且 patch 只改 1 个文件时归属给它。
-     * （旧逻辑：无 path 的意见全部兜底拿到同一个 diff，含 stale 意见 →
-     *   PR1533 的 8 条意见全显示同一个修复，无从分辨。） */
+    const actionable = (pair) => !pair.comment.stale && !pair.gateRelated;
+    const leftover = () => [...fileDiffs].filter(([file]) => !isGateFile(file) && !usedFiles.has(file));
+
+    /* 回归单测：意见点名的 *.test 不在补丁里，补丁另有一个新测试文件时挂过去。 */
+    const unmatchedTests = leftover().filter(([file]) => _isTestFile(file));
+    const testComments = pairs.filter((pair) => actionable(pair)
+        && (_asksForTest(pair.comment.body) || _mentionsAbsentExampleTest(pair.comment.body, fileDiffs))
+        && !pair.diffFiles.some(_isTestFile));
+    if (unmatchedTests.length === 1 && testComments.length === 1) {
+        _attachPairFile(testComments[0], unmatchedTests[0][0], fileDiffs, usedFiles);
+    } else {
+        for (const [file, ] of unmatchedTests) {
+            const stem = _fileBase(file).replace(/\.(?:test|spec)\.[a-z0-9]+$/i, '');
+            const hits = testComments.filter((pair) => stem.length >= 4
+                && String(pair.comment.body || '').toLowerCase().includes(stem.toLowerCase())
+                && !pair.diffFiles.some(_isTestFile));
+            if (hits.length === 1) _attachPairFile(hits[0], file, fileDiffs, usedFiles);
+        }
+    }
+
+    /* 同一条意见已经挂上一个文件时，把同一处类型修改带出的其他源文件挂回去。测试文件不走这里。 */
+    for (const [file] of leftover()) {
+        if (_isTestFile(file)) continue;
+        const added = _addedLines(fileDiffs.get(file));
+        const stem = _fileBase(file).replace(/\.[a-z0-9]+$/i, '');
+        const scored = [];
+        for (const pair of pairs) {
+            if (!actionable(pair) || !pair.hasDiff) continue;
+            const body = String(pair.comment.body || '');
+            let score = 0;
+            if (stem.length >= 8 && body.toLowerCase().includes(stem.toLowerCase())) score += 5;
+            for (const identifier of _codeIdentifiers(body)) {
+                if (added.includes(identifier)) score += 2;
+            }
+            for (const owned of pair.diffFiles) {
+                if (String(fileDiffs.get(owned) || '').includes(stem) && stem.length >= 8) score += 3;
+            }
+            if (score > 0) scored.push({ pair, score });
+        }
+        scored.sort((a, b) => b.score - a.score);
+        if (scored.length === 1 || (scored.length > 1 && scored[0].score > scored[1].score)) {
+            _attachPairFile(scored[0].pair, file, fileDiffs, usedFiles);
+        }
+    }
+
+    /* 最后兜底：没配上的待处理意见恰好 1 条，且只剩 1 个文件。
+     * 多条意见不能共用同一个 diff（PR1533 的 8 条意见曾全部显示同一份修复）。 */
     const unmatchedActionable = pairs.filter(p => !p.hasDiff && !p.comment.stale && !p.gateRelated);
-    const unmatchedFiles = [...fileDiffs].filter(([file]) => !isGateFile(file) && !usedFiles.has(file));
+    const unmatchedFiles = leftover();
     if (unmatchedActionable.length === 1 && unmatchedFiles.length === 1) {
         const [file, d] = unmatchedFiles[0];
         unmatchedActionable[0].diff = d;
         unmatchedActionable[0].diffFile = file;
+        unmatchedActionable[0].diffFiles = [file];
         unmatchedActionable[0].hasDiff = true;
         usedFiles.add(file);
     }
@@ -1556,6 +1674,25 @@ export async function getGitcodePrDetail(owner, repo, number, timeoutMs = 5000) 
     }
 }
 
+/** 读取仓库里某个 ref 的文本文件。失败返回空字符串，不抛凭据。 */
+export async function fetchRepoFile(owner, repo, filePath, ref) {
+    const safePath = String(filePath || '').replace(/^\/+/, '');
+    if (!owner || !repo || !safePath || safePath.includes('..')) return '';
+    const encoded = safePath.split('/').map(encodeURIComponent).join('/');
+    const url = `${GITCODE_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encoded}?ref=${encodeURIComponent(ref || 'HEAD')}`;
+    try {
+        const response = await fetch(url, { headers: gitcodeApiHeaders(), signal: AbortSignal.timeout(15000) });
+        if (response.status !== 200) return '';
+        const payload = await response.json();
+        if (payload?.encoding === 'base64' && payload.content) {
+            return Buffer.from(String(payload.content).replace(/\n/g, ''), 'base64').toString('utf8');
+        }
+        return typeof payload?.content === 'string' ? payload.content : '';
+    } catch {
+        return '';
+    }
+}
+
 /** 测试人已通过判定：testers 非空且全部 accept=true（GitCode 网页"测试人 ✓ 已通过"） */
 export function isTesterApproved(testers) {
     const list = Array.isArray(testers) ? testers : [];
@@ -1660,33 +1797,38 @@ export function parseGitcodeUserMap() {
  * 收集平台所有注册用户绑定的 GitCode 身份（admin 全局视图用）。
  * 来源：① 各用户已保存的 GitCode 令牌（env-vars.users/<userId>.yaml 的 GITCODE_TOKEN_<login> 键）
  *       ② 邮箱映射（GITCODE_USER_MAP）。
- * 返回 [{ username, email, gitcodeUsername, source }]（去重，按 gitcodeUsername）。
+ * 返回 [{ username, email, gitcodeUsername, source }]。
+ * 同一个 GitCode 登录名可以同时属于多个平台账号，按「平台用户 + GitCode 登录名」保留，
+ * 避免先注册的账号占掉后来账号的本人 PR 查询。
  */
 export function listAllGitcodeIdentities() {
-    const seen = new Map();   // gitcodeUsername(lower) -> entry
-    const dataDir = join(homedir(), '.aceharness', 'data');
+    const seen = new Map();
+    const dataDir = aceDataDir();
+    const put = (entry) => {
+        const login = String(entry.gitcodeUsername || '').trim();
+        if (!login) return;
+        const key = [
+            String(entry.username || '').toLowerCase(),
+            String(entry.email || '').toLowerCase(),
+            login.toLowerCase(),
+        ].join('\n');
+        if (!seen.has(key)) seen.set(key, { ...entry, gitcodeUsername: login });
+    };
     try {
         const users = JSON.parse(readFileSync(join(dataDir, 'users.json'), 'utf8'));
-        // ① 用户令牌身份
         const envDir = join(dataDir, 'env-vars.users');
-        let envFiles = [];
-        try { envFiles = readdirSync(envDir); } catch { /* 目录不存在 */ }
         for (const u of users) {
             try {
                 const raw = readFileSync(join(envDir, `${u.id}.yaml`), 'utf8');
-                const m = raw.match(/GITCODE_TOKEN_([A-Za-z0-9_]+)/);
-                if (m) {
-                    const login = m[1];
-                    if (!seen.has(login.toLowerCase())) seen.set(login.toLowerCase(), { username: u.username, email: u.email, gitcodeUsername: login, source: 'token' });
+                const logins = new Set([...raw.matchAll(/GITCODE_TOKEN_([A-Za-z0-9_]+)/g)].map((m) => m[1]));
+                for (const login of logins) {
+                    put({ username: u.username, email: u.email, gitcodeUsername: login, source: 'token' });
                 }
             } catch { /* 单个文件读失败忽略 */ }
         }
-        // ② 邮箱映射
         for (const [email, login] of parseGitcodeUserMap()) {
-            if (!seen.has(login.toLowerCase())) {
-                const u = users.find(x => String(x.email || '').toLowerCase() === email);
-                seen.set(login.toLowerCase(), { username: u?.username || '（未注册）', email, gitcodeUsername: login, source: 'email' });
-            }
+            const u = users.find((x) => String(x.email || '').toLowerCase() === email);
+            put({ username: u?.username || '（未注册）', email, gitcodeUsername: login, source: 'email' });
         }
     } catch { /* users.json 读失败返回空 */ }
     return [...seen.values()];
@@ -1976,7 +2118,7 @@ export function runRepoOf(runId) {
     if (_runRepoCache.has(id)) return _runRepoCache.get(id);
     let repo = '';
     try {
-        const yaml = readFileSync(join(homedir(), '.aceharness', 'runs', id, 'state.yaml'), 'utf8');
+        const yaml = readFileSync(join(aceRunsDir(), id, 'state.yaml'), 'utf8');
         const gc = /^globalContext:\s*[|>][+-]?\n([\s\S]*?)(?=\n[^\s]|(?![\s\S]))/m.exec(yaml)?.[1] || '';
         const m = /^\s*repo:\s*(\S+)/m.exec(gc);
         repo = m ? m[1] : '';

@@ -55,7 +55,7 @@ function _iaShowLoginHint() {
   const list = $('ia-tasks-list');
   const count = $('ia-task-count');
   if (list) {
-    list.innerHTML = '<div id="ia-tasks-empty" class="empty-hint">🔒 <a href="login.html" style="color:var(--accent)">登录</a> 后可查看你提交的 Issue 分析任务</div>';
+    list.innerHTML = '<div id="ia-tasks-empty" class="empty-hint">本机会话未就绪，刷新页面后可查看 Issue 分析任务</div>';
   }
   if (count) count.textContent = '0 个任务';
 }
@@ -193,7 +193,7 @@ window.addEventListener('panelswitch', (e) => {
 /* ── 提交 Issue 分析（需登录，任务归属提交人） ── */
 async function doIssueAnalysis() {
   if (!(typeof getAuth === 'function' && getAuth()?.user)) {
-    _showIaErr('请先 <a href="login.html" style="color:var(--accent)">登录</a> 后再提交 Issue 分析', true);
+    _showIaErr('本机会话未就绪，请刷新页面后再提交 Issue 分析', true);
     return;
   }
 
@@ -311,6 +311,10 @@ function _createIaCard(idx, t, isHistory) {
          onclick="event.stopPropagation()">🔗 Issue分析详情</a>
       <span class="badge-time" id="ia-${idx}-time" style="font-size:var(--font-size-xs);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,.06);color:var(--dim);font-family:var(--mono);font-weight:500;flex-shrink:0">${escHtml(timeLabel)}</span>
       <span class="badge-priority" id="ia-${idx}-priority-badge" style="display:none"></span>
+      <a id="ia-${idx}-continue" href="#" style="display:none;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;
+         font-size:var(--font-size-xs);font-weight:700;background:rgba(245,185,66,.12);color:#f5b942;
+         border:1px solid rgba(245,185,66,.4);text-decoration:none;cursor:pointer;white-space:nowrap;flex-shrink:0"
+         onclick="event.preventDefault();event.stopPropagation();continueIssueAnalysis(${idx})">▶ 继续</a>
       <span class="badge-stage ${stageClass}" id="ia-${idx}-badge">${escHtml(stageLabel)}</span>
       <span class="tc-elapsed" id="ia-${idx}-elapsed" style="display:none">0s</span>
     </div>
@@ -1177,6 +1181,47 @@ function _startIaPolling(idx) {
   poll();
 }
 
+function _iaInterruptInfo(text) {
+  const msg = String(text || '');
+  if (!msg.includes('服务重启时检测到运行中断')) return null;
+  return {
+    phase: (msg.match(/当前阶段:\s*([^，。]+)/) || [])[1]?.trim() || '',
+    step: (msg.match(/当前步骤:\s*([^，。]+)/) || [])[1]?.trim() || '',
+    completed: (msg.match(/已完成\s*(\d+)\s*步/) || [])[1] || '',
+  };
+}
+
+async function continueIssueAnalysis(idx) {
+  const task = _iaTasks[idx];
+  if (!task?.taskId || !getAuth()) return;
+  const info = _iaInterruptInfo(task.error);
+  const where = info?.step || info?.phase || '中断的步骤';
+  const kept = info?.completed ? `已完成的 ${info.completed} 步会保留。` : '已完成的步骤会保留。';
+  if (!confirm(`从「${where}」接着跑。${kept}不会重新开始整个分析。`)) return;
+  const btn = document.getElementById(`ia-${idx}-continue`);
+  if (btn) { btn.style.pointerEvents = 'none'; btn.textContent = '正在继续…'; }
+  try {
+    const r = await authApi('POST', `/api/issue-analysis/${encodeURIComponent(task.taskId)}/continue`, { action: 'continue' }, 30000);
+    if (r.status !== 200 || !r.data?.success) {
+      alert('继续失败：' + (r.data?.message || 'HTTP ' + r.status));
+      if (btn) { btn.style.pointerEvents = ''; btn.textContent = `▶ 从「${where}」继续`; }
+      return;
+    }
+    task.error = '';
+    task.finishedAt = null;
+    _updateIaStage(idx, 'issueanalysis_analyzing', {
+      ...task,
+      error: '',
+      currentPhase: r.data.phase,
+      currentStep: r.data.step,
+    });
+    _startIaPolling(idx);
+  } catch (e) {
+    alert('继续失败：' + e.message);
+    if (btn) { btn.style.pointerEvents = ''; btn.textContent = `▶ 从「${where}」继续`; }
+  }
+}
+
 function _stopIaPolling(idx) {
   const task = _iaTasks[idx];
   if (!task) return;
@@ -1200,6 +1245,7 @@ function _updateIaStage(idx, stage, data) {
     if (data?.summary) task.summary = data.summary;
     if (data?.startedAt) task.startedAt = data.startedAt;
     if (data?.finishedAt) task.finishedAt = data.finishedAt;
+    if (data && Object.prototype.hasOwnProperty.call(data, 'error')) task.error = data.error || '';
   }
 
   // 同步 Run ID 展示（头部徽章 + 展开面板，新建任务首次轮询到 runId 时更新）
@@ -1300,11 +1346,32 @@ function _updateIaStage(idx, stage, data) {
     }
   }
 
-  // 失败时显示错误
+  // 失败时显示错误；服务重启打断的任务给出从原步骤继续的按钮
   const errorEl = document.getElementById(`ia-${idx}-error`);
+  const continueEl = document.getElementById(`ia-${idx}-continue`);
+  const interrupt = stage === 'failed' ? _iaInterruptInfo(data?.error || data?.aceharnessStatus?.statusReason || task?.error) : null;
+  if (continueEl) {
+    if (interrupt) {
+      const where = interrupt.step || interrupt.phase || '中断的步骤';
+      const kept = interrupt.completed ? `已完成 ${interrupt.completed} 步会保留` : '已完成的步骤会保留';
+      continueEl.textContent = `▶ 从「${where}」继续`;
+      continueEl.title = `${kept}，从这一步接着跑，不重新开始`;
+      continueEl.style.display = 'inline-flex';
+    } else {
+      continueEl.style.display = 'none';
+    }
+  }
   if (errorEl && stage === 'failed') {
-    errorEl.textContent = data?.error || '分析失败';
+    if (interrupt) {
+      const where = interrupt.step || interrupt.phase || '中断的步骤';
+      const kept = interrupt.completed ? `已完成的 ${interrupt.completed} 步会保留。` : '已完成的步骤会保留。';
+      errorEl.textContent = `服务重启把分析打断了。${kept}可以从「${where}」接着跑，不会重新开始。`;
+    } else {
+      errorEl.textContent = data?.error || task?.error || '分析失败';
+    }
     errorEl.style.display = 'block';
+  } else if (errorEl) {
+    errorEl.style.display = 'none';
   }
 
   // 卡片状态

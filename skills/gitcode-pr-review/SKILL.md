@@ -43,7 +43,9 @@ source: aceharness
 
 ## 1. 识别
 
+引擎用环境变量 `ACE_NODE`（当前 Node 的绝对路径）执行 `skills/gitcode-pr-review/scripts/validate-pr-identity.mjs --out outputs`，并读取 `outputs/pr-identity.json`。
 记下 `owner` / `repo` / `number`、`head_ref`、**`head_repo`（fork 全名）**、`base_ref`。
+作者白名单 `ACE_GITCODE_PR_AUTHOR` 和令牌 `GITCODE_TOKEN_<作者>` 由脚本读取。不要用 `where node`、注册表或手写 curl 重新识别。空的 `GITCODE_TOKEN` 不是失败。
 
 ## 2. 等待门禁
 

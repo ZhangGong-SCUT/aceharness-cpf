@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
+import { isDirectRun } from './script-path.mjs';
 import { commentBelongsToPull, commentTimeLE, selectActionableReviews } from './ohos-pr-gates.mjs';
 import { gitcodeRead, gitcodeReadPages } from './gitcode-read.mjs';
 import { resolveGitcodeToken } from './gitcode-token.mjs';
@@ -208,16 +208,7 @@ async function main() {
   }, null, 2)}\n`);
 }
 
-function isDirectRun() {
-  // R6：realpath 双向解析符号链接，避免经 .aceharness 链接调用时 main 不执行却 exit 0
-  try {
-    return realpathSync(resolve(process.argv[1] || '')) === realpathSync(resolve(new URL(import.meta.url).pathname));
-  } catch {
-    return false;
-  }
-}
-
-if (isDirectRun()) {
+if (isDirectRun(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`${error.message || error}\n`);
     process.exit(1);

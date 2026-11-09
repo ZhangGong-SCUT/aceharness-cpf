@@ -3,7 +3,8 @@
  * 共享裸仓镜像缓存（repo mirror cache）
  *
  * 解决：isolated-copy 模式下每个 run 工作区全新、repo/ 不存在 → 每次 run 都全量
- * clone 上游（分钟级 + 重复带宽）。本脚本维护一份共享裸仓镜像：
+ * clone 上游（分钟级 + 重复带宽）。优先用本机 ohos-flutter-sdks.yaml 里同一仓库的 SDK
+ * 做本地克隆，再只增量拉取目标分支。没有对上的 SDK 时，才用共享裸仓镜像：
  *   上游 --(一次性全量/增量 fetch)--> ~/.aceharness/repo-cache/<host>/<owner>/<repo>.git
  *   run  --(本地 hardlink clone, 秒级)--> <dest>，再把 origin 指回真实上游并补增量
  *
@@ -21,13 +22,15 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { withFileLock } from '../../../scripts/file-lock.mjs';
+import { runtimeRoot } from '../../../scripts/runtime-root.mjs';
 
 function cacheDir() {
   return process.env.ACEHARNESS_REPO_CACHE_DIR
-    || join(homedir(), '.aceharness', 'repo-cache');
+    || join(runtimeRoot(), 'repo-cache');
 }
 
 /** 规范化仓库 URL：去 userinfo、去 .git 尾巴、host 小写 */
@@ -75,24 +78,135 @@ function runGitOk(args, options = {}) {
   }
 }
 
-function withFlock(lockPath, gitArgs) {
-  mkdirSync(join(lockPath, '..'), { recursive: true });
-  // flock -w 900：最多等 15 分钟（大仓首次 clone --mirror 可能很久）
+export function runLockedGit(lockPath, gitArgs, deps = {}) {
+  const exec = deps.execFileSync || execFileSync;
+  const run = deps.runGit || runGit;
+  const platform = deps.platform || process.platform;
+  mkdirSync(dirname(lockPath), { recursive: true });
+  if (platform !== 'win32') {
+    try {
+      const output = exec('flock', ['-w', '900', lockPath, 'git', ...gitArgs], {
+        encoding: 'utf8',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 0,
+      });
+      return { ok: true, output };
+    } catch (error) {
+      if (error.code !== 'ENOENT') return { ok: false, error: String(error.stderr || error.message || '').trim() };
+    }
+  }
   try {
-    const output = execFileSync('flock', ['-w', '900', lockPath, 'git', ...gitArgs], {
-      encoding: 'utf8',
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 0,
-    });
+    const output = withFileLock(lockPath, () => run(gitArgs), deps.lock);
     return { ok: true, output };
   } catch (error) {
-    return { ok: false, error: String(error.stderr || error.message || '').trim() };
+    return { ok: false, error: String(error.stderr || error.message || error).trim() };
   }
+}
+
+function withFlock(lockPath, gitArgs) {
+  return runLockedGit(lockPath, gitArgs);
 }
 
 function isValidGitRepo(dir) {
   return existsSync(join(dir, '.git')) || (existsSync(dir) && existsSync(join(dir, 'HEAD')) && existsSync(join(dir, 'objects')) && existsSync(join(dir, 'refs')));
+}
+
+function repoBasename(rawUrl) {
+  try {
+    const normalized = normalizeRepoUrl(rawUrl);
+    const match = normalized.match(/\/([^/?#]+)$/);
+    return match ? match[1].toLowerCase() : '';
+  } catch {
+    return '';
+  }
+}
+
+/** 运行时清单：<运行时根>/configs/ohos-flutter-sdks.yaml */
+function sdkInventoryPath() {
+  return join(runtimeRoot(), 'configs', 'ohos-flutter-sdks.yaml');
+}
+
+function readSdkInventory(configPath = sdkInventoryPath()) {
+  if (!existsSync(configPath)) return [];
+  const sdks = [];
+  let current = null;
+  let inAliases = false;
+  for (const raw of readFileSync(configPath, 'utf8').split(/\r?\n/)) {
+    const line = raw.replace(/\s+#.*$/, '');
+    if (!line.trim()) continue;
+    const id = line.match(/^ {2}- id:\s*(\S+)\s*$/);
+    if (id) {
+      current = { id: id[1], aliases: [], path: '' };
+      sdks.push(current);
+      inAliases = false;
+      continue;
+    }
+    if (!current) continue;
+    const sdkPath = line.match(/^ {4}path:\s*(\S+)\s*$/);
+    if (sdkPath) {
+      current.path = sdkPath[1];
+      inAliases = false;
+      continue;
+    }
+    if (/^ {4}aliases:\s*$/.test(line)) {
+      inAliases = true;
+      continue;
+    }
+    const alias = line.match(/^ {6}- (\S+)\s*$/);
+    if (inAliases && alias) current.aliases.push(alias[1]);
+    else if (!line.startsWith('      ')) inAliases = false;
+  }
+  return sdks.filter((sdk) => sdk.path);
+}
+
+/** 分支能对上清单、且 origin 仓库名与 --repo 相同的本地 SDK。 */
+function findLocalSdkSource(options) {
+  const wantedRepo = repoBasename(options.repo);
+  if (!wantedRepo) return null;
+  const names = [options.branch, options.fallbackBranch].filter(Boolean);
+  for (const name of names) {
+    const entry = readSdkInventory().find((sdk) => sdk.id === name || sdk.aliases.includes(name));
+    if (!entry || !isValidGitRepo(entry.path)) continue;
+    const origin = runGitOk(['-C', entry.path, 'remote', 'get-url', 'origin']);
+    if (!origin.ok || repoBasename(origin.output) !== wantedRepo) continue;
+    return { id: entry.id, path: entry.path, matchedBranch: name };
+  }
+  return null;
+}
+
+function fetchRemoteBranch(dest, name) {
+  if (!name) return { ok: false, error: 'empty branch' };
+  return runGitOk(['-C', dest, 'fetch', 'origin', `+refs/heads/${name}:refs/remotes/origin/${name}`]);
+}
+
+/** 从本地 SDK 克隆对象，origin 改回请求的上游，只拉目标分支再检出。失败则返回 null 以外的错误，由调用方决定是否退回旧路径。 */
+function cloneFromLocalSdk(options, dest, upstreamUrl) {
+  const local = findLocalSdkSource(options);
+  if (!local) return null;
+  if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
+  const cloned = runGitOk(['clone', '--no-checkout', local.path, dest]);
+  if (!cloned.ok) {
+    if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
+    return { ok: false, local, error: cloned.error };
+  }
+  const remote = runGitOk(['-C', dest, 'remote', 'set-url', 'origin', upstreamUrl]);
+  if (!remote.ok) return { ok: false, local, error: remote.error };
+  let fetched = null;
+  let fetchError = null;
+  for (const name of [options.branch, options.fallbackBranch].filter(Boolean)) {
+    const result = fetchRemoteBranch(dest, name);
+    if (result.ok) {
+      fetched = name;
+      if (name === options.branch) break;
+    } else {
+      fetchError = result.error;
+    }
+  }
+  const branchResult = options.branch || options.fallbackBranch
+    ? checkoutBranch(dest, options.branch, options.fallbackBranch)
+    : { branch: currentBranch(dest), branchSource: 'default_branch', error: null };
+  return { ok: Boolean(branchResult.branch), local, fetched, fetchError, branchResult, error: branchResult.error };
 }
 
 /** 确保镜像存在且最新。返回 { updated, created, error } */
@@ -252,18 +366,64 @@ function commandClone(options) {
     emit({ ...payload, ...extra });
   };
 
-  // 场景 A：dest 已存在且有效 → fetch 复用（run 内重入）
+  // 场景 0：清单里有同一仓库的本地 SDK → 本地克隆，只增量拉取目标分支
+  if (!isValidGitRepo(dest)) {
+    const localClone = cloneFromLocalSdk(options, dest, mirror.url);
+    if (localClone) {
+      if (!localClone.ok) {
+        if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
+        finish({
+          result: 'failed',
+          local_sdk: localClone.local.path,
+          local_sdk_id: localClone.local.id,
+          error: localClone.error || '本地 SDK 拷贝后未能检出分支',
+        });
+        process.exitCode = 1;
+        return;
+      }
+      const wanted = options.branch;
+      const fresh = !wanted || localClone.fetched === wanted;
+      finish({
+        result: fresh ? 'success' : 'degraded',
+        from_cache: true,
+        local_sdk: localClone.local.path,
+        local_sdk_id: localClone.local.id,
+        degraded_reason: fresh ? null : `目标分支增量拉取失败，检出本地已有提交：${localClone.fetchError || ''}`.trim(),
+        branch: localClone.branchResult.branch,
+        branch_source: localClone.branchResult.branchSource,
+        commit: currentCommit(dest),
+      });
+      return;
+    }
+  }
+
+  // 场景 A：dest 已存在且有效 → 只拉目标分支（未指定分支时才 fetch --all）
   if (isValidGitRepo(dest)) {
-    const fetchResult = runGitOk(['-C', dest, 'fetch', '--all', '--prune']);
+    const names = [options.branch, options.fallbackBranch].filter(Boolean);
+    let fetchResult = { ok: true, error: null };
+    if (names.length) {
+      for (const name of names) {
+        const result = fetchRemoteBranch(dest, name);
+        if (!result.ok) fetchResult = result;
+        else if (!options.branch || name === options.branch) {
+          fetchResult = result;
+          break;
+        }
+      }
+    } else {
+      fetchResult = runGitOk(['-C', dest, 'fetch', '--all', '--prune']);
+    }
     const branchResult = options.branch || options.fallbackBranch
       ? checkoutBranch(dest, options.branch, options.fallbackBranch)
       : { branch: currentBranch(dest), branchSource: 'existing' };
+    const checkedOut = branchResult.branch || currentBranch(dest);
     finish({
-      result: 'success',
+      result: checkedOut ? (fetchResult.ok ? 'success' : 'degraded') : 'failed',
       from_cache: true,
       reused_existing: true,
       fetch_error: fetchResult.ok ? null : fetchResult.error,
-      branch: branchResult.branch || currentBranch(dest),
+      degraded_reason: fetchResult.ok ? null : `增量拉取失败：${fetchResult.error}`,
+      branch: checkedOut,
       branch_source: branchResult.branchSource,
       commit: currentCommit(dest),
     });
@@ -372,4 +532,4 @@ function main() {
   process.exitCode = 1;
 }
 
-main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

@@ -80,11 +80,3 @@ __pycache__/
 # Runtime uploaded assets
 /public/uploads/
 package-lock.json
-
-# Local copies removed from the upstream repository (PR #3 conflict resolution)
-/configs/flutter-ohos-diagnosis.yaml
-/skills/cpf-ohos-issue-analysis/references/common-experience.md
-/skills/cpf-ohos-issue-analysis/references/fix-strategy.md
-/skills/cpf-ohos-issue-analysis/references/issue-content-collection.md
-/skills/cpf-ohos-issue-analysis/scripts/look-at-image.mjs
-/skills/flutter-issue-demo-reproduction/SKILL.md

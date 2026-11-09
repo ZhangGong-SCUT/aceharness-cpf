@@ -22,11 +22,11 @@
  *   - release 只有持有者 runId 能释放
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { runtimeRoot } from '../../../scripts/runtime-root.mjs';
 
-const LOCK_DIR = join(homedir(), '.aceharness', 'data', 'device-locks');
-const RUNS_DIR = join(homedir(), '.aceharness', 'runs');
+const LOCK_DIR = join(runtimeRoot(), 'data', 'device-locks');
+const RUNS_DIR = join(runtimeRoot(), 'runs');
 const POLL_MS = 5000;
 
 function parseArgs(argv) {

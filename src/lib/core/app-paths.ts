@@ -1,6 +1,5 @@
 import { homedir } from 'os';
-import { dirname, join, resolve } from 'path';
-import { isWindows } from '@/lib/core/runtime-platform';
+import { dirname, join, posix, resolve, win32 } from 'path';
 
 export type AppDirectoryKind = 'config' | 'data' | 'cache' | 'logs' | 'workspace';
 
@@ -13,23 +12,25 @@ function resolveInstallRoot(): string {
 
 const INSTALL_ROOT = resolveInstallRoot();
 
-function resolveRuntimeRoot(): string {
-  const aceHome = process.env.ACE_HOME?.trim();
-  if (aceHome) return resolve(aceHome);
-
-  if (isWindows()) {
-    const appData = process.env.APPDATA?.trim();
-    if (appData) return resolve(appData, 'ACEHarness');
+/** 与 scripts/runtime-root.mjs 保持同一顺序。改一边时必须同时改另一边。 */
+export function resolveAceRuntimeRoot(input: {
+  env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+  home: string;
+}): string {
+  const pathApi = input.platform === 'win32' ? win32 : posix;
+  const aceHome = input.env.ACE_HOME?.trim();
+  if (aceHome) return pathApi.resolve(aceHome);
+  if (input.platform === 'win32' && input.env.APPDATA?.trim()) {
+    return pathApi.resolve(input.env.APPDATA.trim(), 'ACEHarness');
   }
-
-  const xdgDataHome = process.env.XDG_DATA_HOME?.trim();
-  if (xdgDataHome) return resolve(xdgDataHome, 'aceharness');
-
-  return resolve(homedir(), '.aceharness');
+  const xdgDataHome = input.env.XDG_DATA_HOME?.trim();
+  if (xdgDataHome) return pathApi.resolve(xdgDataHome, 'aceharness');
+  return pathApi.join(input.home, '.aceharness');
 }
 
 export function getWorkspaceRoot(): string {
-  return resolveRuntimeRoot();
+  return resolveAceRuntimeRoot({ env: process.env, platform: process.platform, home: homedir() });
 }
 
 export function getRepoRoot(): string {

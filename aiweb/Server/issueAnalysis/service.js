@@ -10,6 +10,7 @@
  * 本系统不存储任何分析产物，所有数据实时从 AceHarness 获取。
  */
 
+import { aceDataDir, aceRunsDir, aceRuntimeRoot } from '../library/aceRuntime.js';
 import crypto from 'node:crypto';
 import { singleFlight } from './singleFlight.js';
 import { existsSync, readFileSync } from 'node:fs';
@@ -24,6 +25,7 @@ import {
     parseIssueUrl,
     isValidIssueUrl,
     startWorkflow,
+    resumeWorkflow,
     getWorkflowStatusCompact,
     getWorkflowStatusFull,
     getStepOutput,
@@ -291,7 +293,7 @@ export async function startIssueAnalysis(opts) {
 function _describeRunLoss(runId) {
     const fallback = `AceHarness run ${runId} 已丢失（服务可能已重启）`;
     try {
-        const runDir = join(homedir(), '.aceharness', 'runs', runId);
+        const runDir = join(aceRunsDir(), runId);
         if (existsSync(runDir) && !existsSync(join(runDir, 'state.yaml'))) {
             return `AceHarness run ${runId} 启动失败（引擎运行前校验未通过或启动异常，详见 AceHarness 服务日志 "[Workflow] start failed"）`;
         }
@@ -338,7 +340,7 @@ export async function submitFeedback(parentTaskId, feedback) {
     const parentRunId = parent.analysisSessionId;
     let parentRunDir = join(homedir(), parentRunId);
     try {
-        const state = readFileSync(join(homedir(), '.aceharness', 'runs', parentRunId, 'state.yaml'), 'utf8');
+        const state = readFileSync(join(aceRunsDir(), parentRunId, 'state.yaml'), 'utf8');
         const recorded = /^workingDirectory:\s*["']?([^\n"']+)/m.exec(state)?.[1]?.trim();
         if (recorded && basename(recorded) === parentRunId) parentRunDir = recorded;
     } catch { /* old runs retain the original home/runId layout */ }
@@ -505,10 +507,67 @@ async function _probeOpencodeServe() {
     return { ok, target: `opencode serve :${port}（辅助参考：诊断链实际使用随机端口服务，此项不代表会话可用性）` };
 }
 
+const RESTART_INTERRUPT = /服务重启时检测到运行中断/;
+
+function _interruptDetail(reason) {
+    const text = String(reason || '');
+    if (!RESTART_INTERRUPT.test(text)) return null;
+    const phase = (text.match(/当前阶段:\s*([^，。]+)/) || [])[1]?.trim() || '';
+    const step = (text.match(/当前步骤:\s*([^，。]+)/) || [])[1]?.trim() || '';
+    const completed = (text.match(/已完成\s*(\d+)\s*步/) || [])[1] || '';
+    return { phase, step, completed };
+}
+
 /**
- * 诊断链健康检查：队列口径按任务记录统计（不混 PortingOrchestrator 信号量），
- * 依赖探活按诊断链真实依赖分别报告（F09）。
+ * 服务重启把分析进程打断后，从原来的 run 接着跑。
+ * 已完成步骤由工作流恢复逻辑跳过，中断的那一步会重新执行。
  */
+export async function continueIssueAnalysis(taskId) {
+    const store = getStore();
+    const task = store.get(taskId);
+    if (!task) {
+        const error = new Error('任务不存在');
+        error.status = 404;
+        throw error;
+    }
+    const metadata = _metadata(task);
+    const runId = metadata.runId || task.analysisSessionId;
+    const configFile = metadata.configFile || (task.parentTaskId ? ITERATE_CONFIG_FILE : config.aceharness.configFile);
+    if (!runId) {
+        const error = new Error('这个任务没有可继续的运行记录');
+        error.status = 400;
+        throw error;
+    }
+    let status = await getWorkflowStatusCompact(runId, configFile);
+    if (!status?.status || (status.status === 'idle' && status.runId !== runId)) {
+        const persisted = await getPersistedIssueRun(runId, configFile);
+        if (persisted) status = persisted;
+    }
+    const reason = status?.statusReason || status?.error || task.error || '';
+    const detail = _interruptDetail(reason);
+    if (status?.status !== 'crashed' || !detail) {
+        const error = new Error('这条任务不是服务重启造成的中断，不能从原进度继续');
+        error.status = 409;
+        throw error;
+    }
+    await resumeWorkflow(runId);
+    const where = detail.step || detail.phase || '中断的步骤';
+    const kept = detail.completed ? `已完成的 ${detail.completed} 步会保留。` : '已完成的步骤会保留。';
+    store.patch(taskId, {
+        stage: STAGE.ISSUEANALYSIS_ANALYZING,
+        error: null,
+        finishedAt: null,
+        updatedAt: new Date().toISOString(),
+    });
+    return {
+        taskId,
+        runId,
+        phase: detail.phase || status.currentPhase || status.currentState || null,
+        step: detail.step || null,
+        message: `已从「${where}」继续。${kept}`,
+    };
+}
+
 export async function getIssueChainHealth() {
     const store = getStore();
     const metrics = computeChainMetrics(store.list());

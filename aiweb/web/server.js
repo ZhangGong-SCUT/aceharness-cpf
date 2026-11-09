@@ -98,11 +98,8 @@ app.get('/api/cpp/env-check', (_req, res) => {
     });
 });
 
-// ── 入口路由：/ → 登录页 ────────────────────────────────────────────────────
-// 打开网址即登录界面；已登录用户由 login.html 自动跳转工作台
-app.get('/', (_req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'login.html'));
-});
+// 本地个人部署打开即工作台。公网部署仍从登录页进入。
+const localDeployment = process.env.AIWEB_DEPLOYMENT === 'personal';
 
 // ── 静态文件：public/ 目录 ──────────────────────────────────────────────────
 // CSS/图片缓存 1 天；JS 使用协商缓存，避免继续运行旧的状态与决策逻辑。
@@ -116,7 +113,8 @@ app.use('/img', express.static(path.join(__dirname, 'public', 'img'), { maxAge: 
 // HTML 每次请求动态把 js/xxx.js?v=… 替换为 js/xxx.js?v=<该文件当前 mtime>，文件一变 URL 自动变。
 app.use((req, res, next) => {
   if (!/\.html$/.test(req.path) && req.path !== '/') return next();
-  let file = req.path === '/' ? 'login.html' : req.path.slice(1);
+  let file = req.path === '/' ? (localDeployment ? 'index.html' : 'login.html') : req.path.slice(1);
+  if (localDeployment && file === 'login.html') file = 'index.html';
   const full = path.join(__dirname, 'public', file);
   fs.readFile(full, 'utf8', (err, html) => {
     if (err) return next();
@@ -150,7 +148,9 @@ app.use(createProxyMiddleware({
             // express.json() 在代理中间件之前执行，已将请求流读入 req.body，
             // 导致 http-proxy 转发时原始流为空，后端无限等待 → POST 请求超时。
             // 解决方案：如果 req.body 存在，将其序列化后重新写入代理请求。
-            if (req.body && Object.keys(req.body).length > 0) {
+            // 空对象 {} 也要写回去。只判断「有字段」时，继续分析这类空请求体会被吃掉，
+            // 后端按 Content-Length 一直等正文，直到浏览器 30 秒断开。
+            if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
                 const bodyData = JSON.stringify(req.body);
                 proxyReq.setHeader('Content-Type', 'application/json');
                 proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));

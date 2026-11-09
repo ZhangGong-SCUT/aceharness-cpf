@@ -17,6 +17,12 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import net from 'node:net';
 import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { inspectAndroidSdk } from './android-sdk-check.mjs';
+import { inspectJavaHome, inspectOhosCommandLineSdk } from './ohos-build-tools-check.mjs';
+import { inspectOhosSigning } from './ohos-signing-check.mjs';
+import { runtimeRoot } from './runtime-root.mjs';
+import { syncRuntimeTrees } from './sync-missing-runtime-files.mjs';
 
 // ── argv ─────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2).filter(a => a !== 'doctor');
@@ -26,9 +32,9 @@ const QUIET = argv.includes('-q') || argv.includes('--quiet');
 
 // ── 常量 ─────────────────────────────────────────────────────────────
 const INSTALL_ROOT = process.env.ACE_INSTALL_ROOT
-  || path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const HOME_DIR = os.homedir();
-const RT = path.join(HOME_DIR, '.aceharness');           // 运行时目录
+const RT = runtimeRoot();
 const IS_WIN = process.platform === 'win32';
 const RT_DIRS = ['configs', 'skills', 'scripts'];
 const KEY_FILES = [
@@ -37,6 +43,11 @@ const KEY_FILES = [
   'scripts/ohos-hap-build.mjs',
   'scripts/ohos-har-install.mjs',
   'skills/cpf-ohos-issue-analysis/SKILL.md',
+  'skills/cpf-ohos-issue-analysis/references/common-experience.md',
+  'skills/cpf-ohos-issue-analysis/references/fix-strategy.md',
+  'skills/cpf-ohos-issue-analysis/references/issue-content-collection.md',
+  'skills/cpf-ohos-issue-analysis/scripts/look-at-image.mjs',
+  'skills/flutter-issue-demo-reproduction/SKILL.md',
 ];
 const SDK_CONF = path.join(RT, 'configs', 'ohos-flutter-sdks.yaml');
 const DEFAULT_PORT = Number(process.env.PORT || process.env.ACE_PORT || 3000);
@@ -108,19 +119,20 @@ function checkPlatform() {
 }
 
 function checkRuntime() {
-  const autoSynced = [];
+  let filled = 0;
+  if (FIX_MODE) {
+    try { filled = syncRuntimeTrees(INSTALL_ROOT, RT); }
+    catch { /* 下面按缺失文件继续报告 */ }
+  }
   const stillMissing = [];
   for (const d of RT_DIRS) {
     const dst = path.join(RT, d);
     if (isDir(dst)) continue;
-    if (FIX_MODE && isDir(path.join(INSTALL_ROOT, d))) {
-      try { fs.cpSync(path.join(INSTALL_ROOT, d), dst, { recursive: true }); autoSynced.push(d); }
-      catch { stillMissing.push(d); }
-    } else stillMissing.push(d);
+    stillMissing.push(d);
   }
   add('运行时目录', '~/.aceharness 基础目录', stillMissing.length === 0,
     stillMissing.length ? `缺失: ${stillMissing.join(', ')}`
-      : autoSynced.length ? `已自动补齐: ${autoSynced.join(', ')}` : 'configs/、skills/、scripts/ 齐备',
+      : filled ? `已补齐 ${filled} 个缺失文件` : 'configs/、skills/、scripts/ 齐备',
     stillMissing.length ? `mkdir -p ~/.aceharness && cp -r "${INSTALL_ROOT}"/{configs,skills,scripts} ~/.aceharness/` : '');
 
   const missingKeys = KEY_FILES.filter(f => !exists(path.join(RT, f)));
@@ -193,6 +205,57 @@ async function checkHdc() {
     empty ? '诊断/验证 run 执行前连接 OHOS 真机并开启 USB 调试' : '', empty);
 }
 
+function listDir(dir) {
+  try { return fs.readdirSync(dir); } catch { return []; }
+}
+
+function readText(file) {
+  try { return fs.readFileSync(file, 'utf8'); } catch { return ''; }
+}
+
+function checkJavaHome() {
+  const result = inspectJavaHome({
+    platform: process.platform,
+    env: process.env,
+    home: HOME_DIR,
+    exists,
+    readText,
+  });
+  add('OHOS 环境', 'JDK', result.ok, result.detail, result.fix, result.warning);
+}
+
+function checkOhosCommandLineSdk() {
+  const result = inspectOhosCommandLineSdk({
+    platform: process.platform,
+    env: process.env,
+    home: HOME_DIR,
+    exists,
+    findOnPath,
+  });
+  add('OHOS 环境', '鸿蒙命令行 SDK', result.ok, result.detail, result.fix, result.warning);
+}
+
+function checkOhosSigning() {
+  const result = inspectOhosSigning({
+    platform: process.platform,
+    env: process.env,
+    home: HOME_DIR,
+    exists,
+    listDir,
+  });
+  add('OHOS 环境', '调试签名', result.ok, result.detail, result.fix, result.warning);
+}
+
+function checkAndroidSdk() {
+  const result = inspectAndroidSdk({
+    platform: process.platform,
+    env: process.env,
+    home: HOME_DIR,
+    exists,
+  });
+  add('Android 对照', 'Android SDK', result.ok, result.detail, result.fix, result.warning);
+}
+
 function checkEngineSrc() {
   const home = path.join(HOME_DIR, 'engine-src');
   const ok = isDir(home) && (exists(path.join(home, 'DEPS')) || isDir(path.join(home, 'engine', 'src')));
@@ -209,9 +272,14 @@ async function checkTilde() {
   const shell = process.env.SHELL || '/bin/sh';
   const { out, code } = await execFileText(shell, ['-c', 'echo ~/.aceharness'], 5000);
   const expanded = out.trim();
-  add('OHOS 环境', 'shell ~ 展开', code === 0 && expanded === RT,
+  const homeLink = path.join(HOME_DIR, '.aceharness');
+  const same = (left, right) => {
+    try { return fs.realpathSync(left) === fs.realpathSync(right); } catch { return left === right; }
+  };
+  const ok = code === 0 && (expanded === RT || same(expanded, RT) || (expanded === homeLink && same(homeLink, RT)));
+  add('OHOS 环境', 'shell ~ 展开', ok,
     `期望 ${RT}，实际 ${expanded || '（无输出）'}（${shell}）`,
-    code === 0 && expanded === RT ? '' : '工作流配置依赖 ~ 展开：请使用 bash/zsh 作为 agent 执行 shell');
+    ok ? '' : `工作流里的 ~/.aceharness 要指到运行时目录：ln -s "${RT}" "${homeLink}"`);
 }
 
 function checkService() {
@@ -231,6 +299,18 @@ function checkService() {
   });
 }
 
+const IDENTITY_FILES = ['data/users.json', 'data/admin.json', 'data/tokens.json'];
+
+function checkShippedIdentity() {
+  const found = IDENTITY_FILES.filter(f => exists(path.join(INSTALL_ROOT, f)));
+  add('服务与凭据', '管理员账号归属', found.length === 0,
+    found.length
+      ? `安装包带有账号文件: ${found.join(', ')}。这些文件不会复制到本机`
+      : '安装包未携带 users.json / admin.json / tokens.json',
+    found.length ? '每台电脑运行 ace，在启动向导里自己创建管理员。不要把打包机的 data/users.json 放进安装包' : '',
+    found.length > 0);
+}
+
 function checkCredentials() {
   const dir = path.join(RT, 'data', 'runtime-grants');
   let n = 0;
@@ -245,9 +325,14 @@ async function main() {
   checkRuntime();
   checkOhos();
   await checkHdc();
+  checkJavaHome();
+  checkOhosCommandLineSdk();
+  checkOhosSigning();
+  checkAndroidSdk();
   checkEngineSrc();
   await checkTilde();
   await checkService();
+  checkShippedIdentity();
   checkCredentials();
 
   const failed = checks.filter(c => !c.ok && !c.warning);

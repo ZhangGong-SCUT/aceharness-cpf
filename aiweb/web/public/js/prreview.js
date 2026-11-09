@@ -129,7 +129,9 @@ function _syncPrAuthViews(loggedIn) {
   if (loggedIn) {
     const u = getAuth()?.user || {};
     $('pr-user-name').textContent = u.username || '未知用户';
-    $('pr-user-role').textContent = u.role === 'admin' ? '管理员' : '普通用户';
+    $('pr-user-role').textContent = getAuth()?.local ? '本机' : (u.role === 'admin' ? '管理员' : '普通用户');
+    const switchAccount = $('pr-switch-account');
+    if (switchAccount) switchAccount.style.display = getAuth()?.local ? 'none' : '';
     const avatar = $('pr-user-avatar');
     if (avatar) avatar.textContent = (u.username || '?').slice(0, 1).toUpperCase();
     $('pr-error').style.display = 'none';
@@ -774,6 +776,49 @@ async function retryStartBuild(runId) {
   }
 }
 
+async function confirmPrApproval(runId) {
+  if (!getAuth()) return;
+  const run = _prRunCache[runId];
+  const ask = run?.approvalAsk || '确认当前建议的下一步？';
+  if (!confirm(ask)) return;
+  try {
+    const r = await _prApi('POST', `/api/pr-review/runs/${encodeURIComponent(runId)}/confirm-approval`, {}, 30000);
+    if (r.status === 200 && r.data?.success) {
+      await _loadPrRuns(false);
+    } else {
+      alert('确认失败：' + (r.data?.message || 'HTTP ' + r.status));
+    }
+  } catch (e) {
+    alert('确认失败：' + e.message);
+  }
+}
+
+async function syncToSiblingBranches(runId) {
+  if (!getAuth()) return;
+  if (!confirm('先用 AI 判断这份修改能不能套到同主题的其他 PR。\n能套上的会推送代码，并重新开启那些 PR 的监控。\n不能套上的只显示原因，不会推送。')) return;
+  const slot = document.getElementById(`pr-sync-${runId}`);
+  if (slot) {
+    slot.style.display = '';
+    slot.innerHTML = '<div class="pr-sync-line">正在分析兄弟分支…</div>';
+  }
+  try {
+    const r = await _prApi('POST', `/api/pr-review/runs/${encodeURIComponent(runId)}/sync-to-siblings`, {}, 180000);
+    const data = r.data || {};
+    if (r.status !== 200 || !data.success) {
+      if (slot) slot.innerHTML = `<div class="pr-sync-line bad">${escHtml(data.message || '同步失败')}</div>`;
+      return;
+    }
+    const rows = (data.results || []).map(item => {
+      const head = item.headRef ? `（${item.headRef}）` : '';
+      return `<div class="pr-sync-line ${item.canSync ? 'ok' : 'bad'}">#${escHtml(String(item.number))}${escHtml(head)}：${escHtml(item.reason || '')}</div>`;
+    }).join('');
+    if (slot) slot.innerHTML = `<div class="pr-sync-line">${escHtml(data.message || '')}</div>${rows || '<div class="pr-sync-line">没有兄弟分支。</div>'}`;
+    if ((data.results || []).some(item => item.canSync)) await _loadPrRuns(false);
+  } catch (e) {
+    if (slot) slot.innerHTML = `<div class="pr-sync-line bad">${escHtml(e.message || '同步失败')}</div>`;
+  }
+}
+
 async function stopPrMonitorById(runId, prNumber) {  if (!getAuth()) return;
   if (!confirm(`确认关闭 PR #${prNumber} 的监控任务？`)) return;
   // 乐观 UI：停止涉及子进程清理，可能耗时数秒，先给"停止中"反馈
@@ -976,6 +1021,20 @@ function _updateRunCardInPlace(card, run, meta) {
   const badge = card.querySelector(`.pr-card-head .pr-badge:not(.b-approval):not(.b-waiting)`);
   const wantBadge = `${meta.icon} ${meta.label}`;
   if (badge && badge.textContent !== wantBadge) badge.textContent = wantBadge;
+  const taskBar = card.querySelector('.pr-task-bar');
+  if (taskBar) {
+    const keepSync = taskBar.querySelector('.pr-sync-result');
+    const syncOpen = keepSync && keepSync.style.display !== 'none' ? keepSync.innerHTML : '';
+    const nextHtml = _prTaskBarHtml(run);
+    if (taskBar._barHtml !== nextHtml) {
+      taskBar._barHtml = nextHtml;
+      taskBar.innerHTML = nextHtml;
+      if (syncOpen) {
+        const slot = taskBar.querySelector('.pr-sync-result');
+        if (slot) { slot.style.display = ''; slot.innerHTML = syncOpen; }
+      }
+    }
+  }
 
   // 进度条（宽度动画自动过渡）
   const fill = card.querySelector('.pr-progress-fill');
@@ -1029,7 +1088,8 @@ function _renderApprovalBanner(runs) {
   const banner = document.getElementById('pr-approval-banner');
   if (!banner) return;
   const items = runs.filter(r =>
-    r.currentPhase === PR_HUMAN_PHASE && !PR_TERMINAL.has(r.status) && _prApprovalKind[r.runId] !== 'suspended'
+    r.currentPhase === PR_HUMAN_PHASE && !PR_TERMINAL.has(r.status)
+    && r.approvalKind !== 'suspended' && _prApprovalKind[r.runId] !== 'suspended'
   );
   if (!items.length) {
     banner.style.display = 'none';
@@ -1039,8 +1099,10 @@ function _renderApprovalBanner(runs) {
   const chipHtml = items.map(r => {
     const repoTag = r.repo === 'flutter_engine' ? '[engine]' : r.repo === 'flutter_flutter' ? '' : '';
     const label = `${repoTag}#${r.prNumber || r.runId.slice(-8)}`;
+    const ask = String(r.approvalAsk || '').replace(/\s+/g, ' ').trim();
+    const text = ask ? `${label}：${ask}` : `${label} 需要你确认`;
     return `<a class="pab-item" href="#pr-card-${escHtml(r.runId)}"
-              onclick="event.preventDefault();document.getElementById('pr-card-${escHtml(r.runId)}')?.scrollIntoView({behavior:'smooth',block:'center'});togglePrRunDetail('${escHtml(r.runId)}')">⚠️ ${escHtml(label)}</a>`;
+              onclick="event.preventDefault();document.getElementById('pr-card-${escHtml(r.runId)}')?.scrollIntoView({behavior:'smooth',block:'center'})">⚠️ ${escHtml(text)}</a>`;
   }).join('');
   banner.innerHTML = `
     <span class="pab-icon">🔔</span>
@@ -1189,6 +1251,32 @@ function _prDotCls(status, isApproval) {
 
 /* ── run 卡片构建 ── */
 
+function _prTaskBarHtml(run) {
+  const isTerminal = PR_TERMINAL.has(run.status);
+  const num = /^\d+$/.test(String(run.prNumber || '')) ? String(run.prNumber) : '';
+  const repo = String(run.repo || '');
+  const ask = String(run.approvalAsk || '').trim();
+  const next = String(run.approvalNext || '').trim();
+  const human = run.approvalKind === 'human' && ask;
+  const bits = [];
+  if (ask) bits.push(`<div class="pr-approval-ask">${escHtml(ask)}</div>`);
+  const buttons = [];
+  if (human && next) {
+    buttons.push(`<a class="pr-act pr-act-confirm" href="#" onclick="event.preventDefault();confirmPrApproval('${escHtml(run.runId)}')">确认进入「${escHtml(next)}」</a>`);
+  }
+  if (!isTerminal) {
+    buttons.push(`<a class="pr-act" href="#" onclick="event.preventDefault();stopPrMonitorById('${escHtml(run.runId)}', '${escHtml(num)}')">⏹ 停止监控</a>`);
+  } else if (num) {
+    buttons.push(`<a class="pr-act" href="#" onclick="event.preventDefault();startPrMonitorByNumber(${num}, '${escHtml(repo)}')">▶ 重新开启监控</a>`);
+  }
+  if (num) {
+    buttons.push(`<a class="pr-act" href="#" onclick="event.preventDefault();syncToSiblingBranches('${escHtml(run.runId)}')">⇄ 同步到兄弟分支</a>`);
+  }
+  bits.push(`<div class="pr-task-actions">${buttons.join('')}</div>`);
+  bits.push(`<div class="pr-sync-result" id="pr-sync-${escHtml(run.runId)}" style="display:none"></div>`);
+  return bits.join('');
+}
+
 function _buildPrRunCard(run, idx = 0) {
   const meta = _prStatusMeta(run.status);
   const isTerminal = PR_TERMINAL.has(run.status);
@@ -1221,13 +1309,14 @@ function _buildPrRunCard(run, idx = 0) {
         <span class="pr-num">${escHtml(title)}</span>
         ${prTitleHtml}
       </span>
-      ${isApproval ? '<span class="pr-badge b-approval">⚠️ 需人工确认</span>' : ''}
+      ${isApproval ? `<span class="pr-badge ${run.approvalKind === 'suspended' ? 'b-waiting' : 'b-approval'}">${run.approvalKind === 'suspended' ? '⏳ 等待 CI 门禁' : '⚠️ 需人工确认'}</span>` : ''}
       <span class="tc-spacer"></span>
       ${run.workbenchUrl ? `
         <a class="pr-wb-link" href="${escHtml(run.workbenchUrl)}" target="_blank" rel="noopener noreferrer"
            onclick="event.stopPropagation()">🔗 工作台</a>` : ''}
       <span class="pr-badge ${meta.badge}">${meta.icon} ${escHtml(meta.label)}</span>
     </div>
+    <div class="pr-task-bar" id="pr-taskbar-${escHtml(run.runId)}">${_prTaskBarHtml(run)}</div>
     <div class="pr-card-body">
       <div class="pr-card-body-inner">
       <div class="pr-progress-zone">
@@ -1251,11 +1340,7 @@ function _buildPrRunCard(run, idx = 0) {
       <div class="pr-detail" id="pr-detail-${escHtml(run.runId)}">
         <div style="font-size:var(--font-size-xs);color:var(--dim);padding:6px 0">点击展开加载实时详情…</div>
       </div>
-      <div class="pr-actions">
-        ${isApproval && _prApprovalKind[run.runId] === 'human' ? `
-          <a class="pr-act" style="color:#f5b942;font-weight:700" href="#"
-             onclick="event.preventDefault();retryStartBuild('${escHtml(run.runId)}')"
-             title="以 PR 作者身份评论 start build 并唤醒监控（作者需已绑定 GitCode 令牌）">🔄 一键重发 start build</a>` : ''}
+      <div class="pr-actions" data-actions="task-controls">
         <a class="pr-act" href="#" onclick="event.preventDefault();showPrRunOutputs('${escHtml(run.runId)}')">📄 步骤输出</a>
         <a class="pr-act" href="#" onclick="event.preventDefault();showReviewFix('${escHtml(run.runId)}')">🤖 检视修复</a>
         <a class="pr-act" href="#" onclick="event.preventDefault();_loadPrRunDetail('${escHtml(run.runId)}')">🔄 刷新详情</a>
@@ -1319,12 +1404,13 @@ async function _loadPrRunDetail(runId) {
             <span>等待 CI 门禁结果 — 工作流已挂起待命，CI 出结果后<b>自动继续</b>，无需操作</span>
           </div>`;
       } else {
+        const ask = st.approval?.ask || _prRunCache[runId]?.approvalAsk || '需要你确认下一步。请看下方说明。';
+        const next = st.approval?.suggestedNextState || _prRunCache[runId]?.approvalNext || '';
         html += `
           <div class="pr-banner pr-banner-approval">
             <span>⚠️</span>
-            <span>工作流需要你处理（如测试失败/推送无权限），请查看时间线确认原因</span>
-            <a class="pr-wb-link" href="${escHtml(_prRunCache[runId]?.workbenchUrl || '#')}" target="_blank" rel="noopener noreferrer"
-               style="margin-left:auto">前往处理 →</a>
+            <span>${escHtml(ask)}</span>
+            ${next ? `<a class="pr-wb-link" href="#" onclick="event.preventDefault();confirmPrApproval('${escHtml(runId)}')">确认进入「${escHtml(next)}」</a>` : ''}
           </div>`;
       }
     }
@@ -1786,9 +1872,13 @@ function _rfPairCardHtml(runId, p) {
         </div>`).join('')}</div>` : ''}
     </div>`;
 
+  const diffNames = Array.isArray(p.diffFiles) && p.diffFiles.length
+    ? p.diffFiles
+    : (p.diffFile ? String(p.diffFile).split('\n').filter(Boolean) : []);
+  const diffLabel = diffNames.map(name => name.split('/').pop()).filter(Boolean).join('、') || '修改';
   const diffSide = p.hasDiff ? `
     <div class="rf-pair-side rf-pair-diff">
-      <div class="rf-pair-diff-file" title="${escHtml(p.diffFile || '')}">${escHtml((p.diffFile || '').split('/').pop() || '修改')}</div>
+      <div class="rf-pair-diff-file" title="${escHtml(diffNames.join('\n'))}">${escHtml(diffLabel)}</div>
       <div class="rf-pair-diff-scroll">${_rfDiffHtml(p.diff)}</div>
     </div>` : `
     <div class="rf-pair-side rf-pair-diff rf-pair-diff-empty">

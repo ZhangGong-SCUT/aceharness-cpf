@@ -57,7 +57,7 @@ window.addEventListener('load', async () => {
   initSessionStats();  // Session 调用统计（不阻塞，异步加载）
   doHealth();  // 健康检查（不阻塞，UI 无需等待）
   startSemaphorePolling();  // 信号量状态轮询（每 5s 更新）
-  initAuth();  // 登录态初始化（header 用户区 + token 校验，不阻塞）
+  await initAuth();  // 本地部署先建立本机会话，再加载需要登录态的面板
 
   // 历史任务加载
   await Promise.allSettled([

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
+import { isDirectRun, siblingScript } from './script-path.mjs';
 import { classifyOhosPrGates, commentBelongsToPull, DEFAULT_START_BUILD_MAX, DEFAULT_JITTER_RETRY_MAX, normalizeComments, normalizeLabels } from './ohos-pr-gates.mjs';
 import { extractBuildLogUrls, extractEcoTestReportUrls } from './gate-log-analysis.mjs';
 import { gitcodeRead, gitcodeReadPages } from './gitcode-read.mjs';
@@ -61,7 +61,7 @@ async function fetchDcpDefectCount(comments, labels, outDir, headSha) {
     if (cached.reportUrl === reportUrl && cached.headSha === headSha && Date.now() - cached.savedAt < 300000) return cached.count;
   } catch { /* no current report */ }
   try {
-    const script = resolve(new URL(import.meta.url).pathname, '../fetch-dcp-report.mjs');
+    const script = siblingScript(import.meta.url, 'fetch-dcp-report.mjs');
     await new Promise((fulfil, reject) => {
       const child = spawn(process.execPath, [script, '--report-url', reportUrl, '--out', outDir], {
         stdio: ['ignore', 'ignore', 'pipe'],
@@ -115,7 +115,7 @@ async function fetchGateLogAnalysis(comments, labels, outDir, headSha) {
   } catch { /* 无缓存 */ }
 
   try {
-    const script = resolve(new URL(import.meta.url).pathname, '../fetch-gate-logs.mjs');
+    const script = siblingScript(import.meta.url, 'fetch-gate-logs.mjs');
     const args = [script, '--out', outDir];
     if (buildLogUrl) args.push('--build-log-url', buildLogUrl);
     if (reportUrl) args.push('--report-url', reportUrl);
@@ -357,16 +357,7 @@ async function main() {
   if (result.verdict === 'fail' && (closed || !ownPr)) process.exit(2);
 }
 
-function isDirectRun() {
-  // realpath 双向解析符号链接（skills 目录经 .aceharness 链接调用时 argv 与 import.meta.url 路径不一致）
-  try {
-    return realpathSync(resolve(process.argv[1] || '')) === realpathSync(resolve(new URL(import.meta.url).pathname));
-  } catch {
-    return false;
-  }
-}
-
-if (isDirectRun()) {
+if (isDirectRun(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`${error.message || error}\n`);
     process.exit(1);

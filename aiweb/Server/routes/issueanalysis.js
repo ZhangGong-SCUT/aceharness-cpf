@@ -8,6 +8,7 @@
  *  POST   /api/issue-analysis                              启动 Issue 分析任务
  *  POST   /api/issue-analysis/validate                     校验 URL 是否合法
  *  GET    /api/issue-analysis/:taskId/status               查询任务状态（代理到 AceHarness）
+ *  POST   /api/issue-analysis/:taskId/continue             服务重启中断后从原步骤继续
  *  GET    /api/issue-analysis                               列出所有任务
  *  GET    /api/issue-analysis/:taskId/artifacts            列出 run 产物（截图/日志/补丁，本地磁盘直读）
  *  GET    /api/issue-analysis/:taskId/artifacts/file       读取单个产物（?ref=work/xx.png）
@@ -33,6 +34,7 @@ import {
     listTaskArtifacts,
     readTaskArtifact,
     submitFeedback,
+    continueIssueAnalysis,
     getIssueChainHealth,
     getIterationChain,
     compareIterations,
@@ -182,6 +184,19 @@ export function createIssueAnalysisRouter(orchestrator) {
     });
 
     // ── 3. 任务状态（代理到 AceHarness） ──────────────────────────────────────
+
+    router.post('/issue-analysis/:taskId/continue', async (req, res) => {
+        const { taskId } = req.params;
+        const auth = await _authTask(req, res, taskId);
+        if (!auth) return;
+        try {
+            const result = await continueIssueAnalysis(taskId);
+            res.json({ success: true, ...result });
+        } catch (err) {
+            logger.error('继续分析失败', { taskId, error: err.message });
+            res.status(err.status || 500).json({ success: false, message: err.message });
+        }
+    });
 
     router.get('/issue-analysis/:taskId/status', async (req, res) => {
         const { taskId } = req.params;

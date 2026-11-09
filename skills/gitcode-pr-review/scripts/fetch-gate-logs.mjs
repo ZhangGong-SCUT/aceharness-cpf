@@ -16,8 +16,8 @@
  * 该脚本永不因网络失败而抛错退出：降级路径写进 JSON 的 reasons/available 字段。
  */
 import { mkdir, writeFile } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { isDirectRun } from './script-path.mjs';
 import {
   analyzeTestReport,
   classifyGateLogRootCause,
@@ -222,15 +222,7 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-function isDirectRun() {
-  try {
-    return realpathSync(resolve(process.argv[1] || '')) === realpathSync(resolve(new URL(import.meta.url).pathname));
-  } catch {
-    return false;
-  }
-}
-
-if (isDirectRun()) {
+if (isDirectRun(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`${error?.stack || error}\n`);
     process.exit(1);

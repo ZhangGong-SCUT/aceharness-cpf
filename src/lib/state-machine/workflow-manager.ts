@@ -5,6 +5,8 @@
 
 import { EventEmitter } from 'events';
 import { executePrScript } from '@/lib/workflow/pr-script-step';
+import { resolvePrScript } from '@/lib/workflow/pr-identity-step';
+import { portableSummaryFileName } from '@/lib/core/portable-filename';
 import { ensurePrHeadCheckout, shouldCheckoutPrHead } from '@/lib/workflow/pr-checkout';
 import { resolveRunEngineDirectory } from '@/lib/workflow/run-engine-directory';
 import { executeDiagnosisScript } from '@/lib/workflow/diagnosis-script-step';
@@ -628,6 +630,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private shouldStop = false;
   private currentState: string | null = null;
   private currentRunId: string | null = null;
+  /** 本步骤提示里要求的「步骤成果详细总结」文件名。模型未落盘时由引擎按同名补写。 */
+  private pendingStepSummaryFile: string | null = null;
   private currentConfigFile: string = '';
   private currentRequirements: string = '';
   private rootRunId: string | null = null;
@@ -6414,8 +6418,13 @@ try {
         }
       }
 
-      const conditionalPrScript = step.prScript === 'approved-apply' || step.prScript === 'approved-apply-audit';
-      const scriptOnly = (!!step.prScript && !conditionalPrScript) || (!!step.diagnosisScript && step.diagnosisScript !== 'restore');
+      const effectivePrScript = resolvePrScript(this.currentConfigFile, state.name, step);
+      const effectiveStep = effectivePrScript === step.prScript
+        ? step
+        : { ...step, prScript: effectivePrScript as WorkflowStep['prScript'] };
+      const conditionalPrScript = effectiveStep.prScript === 'approved-apply' || effectiveStep.prScript === 'approved-apply-audit';
+      const scriptOnly = (!!effectiveStep.prScript && !conditionalPrScript) || (!!step.diagnosisScript && step.diagnosisScript !== 'restore');
+      this.pendingStepSummaryFile = null;
       const context = scriptOnly ? '' : await this.buildStepContext(step, state, config, requirements, extraContext);
       console.log(`[StepTiming] context-done ts=${Date.now()} run=${this.currentRunId || '-'} step=${stepTimingTag} elapsed=${Date.now() - stepTimingStartMs}ms ctxLen=${context.length}`);
       const executionKind = scriptOnly ? 'script' : 'model';
@@ -6430,7 +6439,7 @@ try {
       }, executionKind === 'model' && !context.includes('# 全局上下文') ? 'warn' : 'info');
 
       // Execute step (reuse existing process manager logic)
-      let stepResult = await this.runAgentStep(step, context, config, stepId);
+      let stepResult = await this.runAgentStep(effectiveStep, context, config, stepId);
       let output = stepResult.output;
       if (!scriptOnly && this.shouldRequireFinalVerdict(step, state) && !this.hasRequiredVerdictJson(output)) {
         const repairContext = this.buildMissingFinalVerdictPrompt(context, output, state, step);
@@ -6578,6 +6587,7 @@ try {
           ? redactOfficialFixLeak(conclusion || output).text
           : (conclusion || output);
         await saveProcessOutput(this.currentRunId, stepFileName, archived).catch(() => {});
+        await this.persistRequiredStepSummary(output);
       }
 
       if (step.channelIds?.length) {
@@ -6668,6 +6678,7 @@ try {
       });
 
       // Save error output
+      this.pendingStepSummaryFile = null;
       if (this.currentRunId) {
         await saveProcessOutput(this.currentRunId, stepKey, `ERROR: ${errorMsg}`).catch(() => {});
       }
@@ -6852,6 +6863,18 @@ try {
       transitions.length > 0 ? transitions.join('\n') : '- 当前状态没有配置 verdict 转移。',
       '如果你的自然语言建议进入某个状态，最终 JSON verdict 必须能通过上述配置到达该状态；例如 conditional_pass 可能自迭代，也可能前进，必须看上面的实际目标。',
     ].join('\n');
+  }
+
+  /** 模型未写入提示指定的步骤总结时，用本回复补写同名文件，供完成阶段归档。 */
+  private async persistRequiredStepSummary(output: string): Promise<void> {
+    const name = this.pendingStepSummaryFile;
+    this.pendingStepSummaryFile = null;
+    if (!name || !this.currentRunId || !output.trim()) return;
+    const dir = join(getWorkspaceRunsDir(), this.currentRunId, 'outputs');
+    const file = join(dir, name);
+    if (existsSync(file)) return;
+    await mkdir(dir, { recursive: true }).catch(() => {});
+    await writeFile(file, output, 'utf-8').catch(() => {});
   }
 
   private async buildStepContext(
@@ -7076,12 +7099,13 @@ try {
     // Add system-managed step conclusion protocol for every step.
     if (this.currentRunId) {
       const outputPath = `${join(getWorkspaceRunsDir(), this.currentRunId, 'outputs')}/`;
-      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const summaryFileName = `${ts}-${state.name}-${step.name}.md`;
+      const summaryFileName = portableSummaryFileName(new Date(), state.name, step.name);
+      this.pendingStepSummaryFile = summaryFileName;
       parts.push([
         '\n# 文档输出要求',
         `请将你产出的步骤成果详细总结写入以下目录：\n\`${outputPath}\``,
         `当前步骤的步骤成果详细总结文件名必须是：\`${summaryFileName}\``,
+        '若本回复已经包含该总结、你没有另行写文件，引擎会在步骤结束时按这个文件名补写。',
         '以上规则仅适用于系统要求的“步骤成果详细总结”归档文件。',
         '除步骤成果详细总结外，其他正式产物文件（例如代码、设计文档、API 文档、说明文档、脚本、配置等）应严格按照用户要求、任务要求和项目目录约定写入；如果用户要求产出到工作目录，就写入工作目录，不要写入该归档目录。',
       ].join('\n'));

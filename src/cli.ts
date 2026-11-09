@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'fs';
 import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { dirname, join } from 'path';
+import { pathToFileURL } from 'url';
 import { totalmem } from 'os';
 import { spawn, ChildProcess } from 'child_process';
 import { commandExists } from '@/lib/core/command-exists';
@@ -206,6 +207,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
       '用法:',
       '  ace              启动 ACEHarness',
       '  ace start        启动 ACEHarness',
+      '  ace up           同时启动 ACEHarness 和 AIWeb 工作台',
       '  ace service      查看并停止 ACE 进程',
       '  ace update [tag|version] 从 npm 更新 ACEHarness',
       '  ace doctor       环境自检（Node/SDK/hdc/凭据等，--json 结构化输出）',
@@ -298,6 +300,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
       'Usage:',
       '  ace               Start ACEHarness',
       '  ace start         Start ACEHarness',
+      '  ace up            Start ACEHarness and the AIWeb workbench together',
       '  ace service       Inspect and stop ACE processes',
       '  ace update [tag|version] Update ACEHarness from npm',
       '  ace doctor        Environment self-check (Node/SDK/hdc/credentials, --json for structured output)',
@@ -668,6 +671,7 @@ async function setupFirstAdmin(data: {
     question: data.question,
     answerHash: hashAnswer(data.answer, salt),
     role: 'admin',
+    status: 'active',
     personalDir: data.personalDir,
     createdAt: Date.now(),
   };
@@ -1540,6 +1544,41 @@ async function serviceCommand(locale: Locale): Promise<void> {
   }
 }
 
+/** 给已有管理员补一份本机服务令牌，AIWeb 免登录会话直接读 tokens.json。 */
+async function ensureAdminServiceToken(): Promise<void> {
+  if (!existsSync(USERS_FILE)) return;
+  let users: Array<Record<string, unknown>>;
+  try {
+    const parsed = JSON.parse(await readFile(USERS_FILE, 'utf-8'));
+    if (!Array.isArray(parsed)) return;
+    users = parsed;
+  } catch {
+    return;
+  }
+  const admin = users.find((user) => user?.role === 'admin' && user.status !== 'pending' && user.status !== 'rejected');
+  if (!admin || typeof admin.id !== 'string') return;
+  if (!admin.status) {
+    admin.status = 'active';
+    await writeFile(USERS_FILE, JSON.stringify(users, null, 2), 'utf-8');
+  }
+
+  let tokens: Array<[string, { userId?: string; expiry?: number }]> = [];
+  if (existsSync(TOKENS_FILE)) {
+    try {
+      const parsed = JSON.parse(await readFile(TOKENS_FILE, 'utf-8'));
+      if (Array.isArray(parsed)) tokens = parsed;
+    } catch {
+      tokens = [];
+    }
+  }
+  const now = Date.now();
+  const live = tokens.some((entry) => entry?.[1]?.userId === admin.id && Number(entry[1]?.expiry) > now);
+  if (live) return;
+  tokens.push([randomBytes(32).toString('hex'), { userId: admin.id, expiry: now + 7 * 24 * 60 * 60 * 1000 }]);
+  await mkdir(getWorkspaceDataDir(), { recursive: true });
+  await writeFile(TOKENS_FILE, JSON.stringify(tokens), 'utf-8');
+}
+
 async function start(interactive: boolean) {
   await ensureRuntimeHome();
 
@@ -1549,6 +1588,7 @@ async function start(interactive: boolean) {
   if (!settings.locale || !configuredEngine.engine || !configuredEngine.defaultModel || !adminExists) {
     await runFirstLaunchWizard();
   }
+  await ensureAdminServiceToken();
 
   const nextSettings = await loadSystemSettings();
   const locale = normalizeLocale(nextSettings.locale);
@@ -1619,8 +1659,7 @@ async function main() {
   if (command === 'doctor') {
     // 环境自检：分发到包内零依赖脚本（scripts/ace-doctor.mjs），不经服务进程。
     // 注意：经 new Function 触发动态 import，避免 TS commonjs 降级把 import() 转成 require(ESM 路径)。
-    const { pathToFileURL } = await import('node:url');
-    const { join } = await import('node:path');
+    // node:url / node:path 用顶部静态导入。动态 import('node:…') 会被 Next 写成文件名含冒号的 chunk。
     const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<unknown>;
     await dynamicImport(pathToFileURL(join(__dirname, '..', 'scripts', 'ace-doctor.mjs')).href);
     return;

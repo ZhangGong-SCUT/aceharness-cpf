@@ -1,5 +1,11 @@
 import { delimiter } from 'path';
 import { buildEnvObject, loadEnvVars, loadEnvVarsSync } from '@/lib/core/env-manager';
+import {
+  isPathEnvKey,
+  isPlaceholderSecret,
+  mergeProcessPath,
+  readWindowsRegistryPath,
+} from '@/lib/core/process-path';
 
 type EnvInput = Record<string, string | undefined>;
 type ConfiguredEnvOptions = {
@@ -21,11 +27,45 @@ function applyOverrides(target: NodeJS.ProcessEnv, overrides?: EnvInput): NodeJS
     return target;
   }
   for (const [key, value] of Object.entries(overrides)) {
-    if (value !== undefined) {
-      target[key] = value;
-    }
+    if (value === undefined || isPathEnvKey(key) || isPlaceholderSecret(key, value)) continue;
+    target[key] = value;
   }
   return target;
+}
+
+export function applyConfiguredEnv(
+  baseEnv: EnvInput,
+  configured: Record<string, string>,
+  overrides?: EnvInput,
+  platform: NodeJS.Platform = process.platform,
+  execPath: string = process.execPath,
+  registryPath = '',
+): NodeJS.ProcessEnv {
+  const env = normalizeEnv(baseEnv);
+  const sep = platform === 'win32' ? ';' : ':';
+  const configuredPath = [overrides?.PATH, overrides?.Path, configured.PATH, configured.Path]
+    .filter((entry): entry is string => Boolean(entry))
+    .join(sep);
+  for (const [key, value] of Object.entries(configured)) {
+    if (isPathEnvKey(key) || isPlaceholderSecret(key, value)) continue;
+    env[key] = value;
+  }
+  for (const key of Object.keys(env)) {
+    const value = env[key];
+    if (value && isPlaceholderSecret(key, value)) delete env[key];
+  }
+  const merged = mergeProcessPath({
+    base: env.PATH || env.Path || '',
+    configured: configuredPath,
+    registry: registryPath,
+    platform,
+    execPath,
+    env,
+  });
+  env.PATH = merged;
+  if (platform === 'win32') env.Path = merged;
+  env.ACE_NODE = execPath;
+  return applyOverrides(env, overrides);
 }
 
 export async function loadConfiguredEnvObject(options?: ConfiguredEnvOptions): Promise<Record<string, string>> {
@@ -53,9 +93,14 @@ export async function buildConfiguredProcessEnv(
   baseEnv: EnvInput = process.env as EnvInput,
   options?: ConfiguredEnvOptions,
 ): Promise<NodeJS.ProcessEnv> {
-  const env = normalizeEnv(baseEnv);
-  Object.assign(env, await loadConfiguredEnvObject(options));
-  return applyOverrides(env, overrides);
+  return applyConfiguredEnv(
+    baseEnv,
+    await loadConfiguredEnvObject(options),
+    overrides,
+    process.platform,
+    process.execPath,
+    readWindowsRegistryPath(),
+  );
 }
 
 export function buildConfiguredProcessEnvSync(
@@ -63,9 +108,14 @@ export function buildConfiguredProcessEnvSync(
   baseEnv: EnvInput = process.env as EnvInput,
   options?: ConfiguredEnvOptions,
 ): NodeJS.ProcessEnv {
-  const env = normalizeEnv(baseEnv);
-  Object.assign(env, loadConfiguredEnvObjectSync(options));
-  return applyOverrides(env, overrides);
+  return applyConfiguredEnv(
+    baseEnv,
+    loadConfiguredEnvObjectSync(options),
+    overrides,
+    process.platform,
+    process.execPath,
+    readWindowsRegistryPath(),
+  );
 }
 
 export function getConfiguredEnvValueSync(key: string, options?: ConfiguredEnvOptions): string | undefined {

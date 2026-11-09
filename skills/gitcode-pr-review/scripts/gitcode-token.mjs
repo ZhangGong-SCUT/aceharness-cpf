@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { runtimeRoot } from '../../../scripts/runtime-root.mjs';
 
 function envAuthorKey(author) {
   return String(author || '')
@@ -18,7 +18,7 @@ function serverTokenForAuthor(author) {
   const key = envAuthorKey(author);
   if (!key) return '';
   try {
-    const dir = join(homedir(), '.aceharness', 'data', 'env-vars.users');
+    const dir = join(runtimeRoot(), 'data', 'env-vars.users');
     const keyRe = new RegExp(`key:\\s*GITCODE_TOKEN_${key}\\b`);
     for (const file of readdirSync(dir)) {
       if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;

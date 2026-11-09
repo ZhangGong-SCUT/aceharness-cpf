@@ -1,5 +1,7 @@
+import { aceDataDir, aceRunsDir, aceRuntimeRoot, isActiveAdmin } from '../library/aceRuntime.js';
 import { buildPrMonitorHealth } from '../prReview/monitorHealth.js';
-import { classifyParkApproval } from '../prReview/approvalState.js';
+import { classifyParkApproval, readHumanApproval } from '../prReview/approvalState.js';
+import { splitPatch, patchContextApplies, decideSync, loadModelEndpoint, askSyncModel } from '../prReview/siblingSync.js';
 /**
  * PR 监控路由 — AceHarness 只读代理层
  *
@@ -30,6 +32,7 @@ import { join } from 'path';
 import { httpRequest, ACEHARNESS_API_BASE_URL } from '../issueAnalysis/aceHarnessClient.js';
 import {
     loginUser,
+    openLocalSession,
     registerUser,
     getUserByToken,
     listPrReviewRuns,
@@ -57,6 +60,7 @@ import {
     siblingGroupKey,
     listAllGitcodeIdentities,
     getGitcodePrDetail,
+    fetchRepoFile,
     listGitcodeOrgPrs,
     listGitcodeOrgRepos,
     listGitcodeRepoPrsPage,
@@ -88,7 +92,7 @@ const logger = createLogger('Router.PrReview');
 
 /* ═══════════ 通知事件（小鲁班拉模式） ═══════════ */
 
-const NOTIFY_STATE_FILE = join(homedir(), '.aceharness', 'data', 'aiweb-notify-state.json');
+const NOTIFY_STATE_FILE = join(aceDataDir(), 'aiweb-notify-state.json');
 const HUMAN_PHASE = '__human_approval__';
 const TERMINAL = new Set(['completed', 'failed', 'crashed']);
 const RUN_STATUS_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -106,7 +110,7 @@ const runOutputsInflight = new Map();
  */
 function _isRunPreflightFailure(runId) {
     if (!/^run-[A-Za-z0-9-]+$/.test(String(runId || ''))) return false;
-    const runDir = join(homedir(), '.aceharness', 'runs', runId);
+    const runDir = join(aceRunsDir(), runId);
     try { readFileSync(join(runDir, 'summary.json'), 'utf8'); return false; } catch { /* 尚无最终摘要 */ }
     try { readFileSync(join(runDir, 'state.yaml'), 'utf8'); return false; } catch { /* 预校验失败时尚未创建状态 */ }
     try {
@@ -121,7 +125,7 @@ function _isRunPreflightFailure(runId) {
 function _runSummaryStatus(runId) {
     if (!/^run-[A-Za-z0-9-]+$/.test(String(runId || ''))) return '';
     try {
-        const summary = JSON.parse(readFileSync(join(homedir(), '.aceharness', 'runs', runId, 'summary.json'), 'utf8'));
+        const summary = JSON.parse(readFileSync(join(aceRunsDir(), runId, 'summary.json'), 'utf8'));
         return String(summary.status || '').toLowerCase();
     } catch { return ''; }
 }
@@ -177,7 +181,7 @@ function _loadNotifyState() {
 function _saveNotifyState(state) {
     try {
         const { mkdirSync, writeFileSync } = require('fs');
-        mkdirSync(join(homedir(), '.aceharness', 'data'), { recursive: true });
+        mkdirSync(aceDataDir(), { recursive: true });
         writeFileSync(NOTIFY_STATE_FILE, JSON.stringify(state, null, 2));
     } catch (e) {
         logger.warn('通知状态写入失败', { error: e.message });
@@ -193,7 +197,7 @@ function _saveNotifyState(state) {
 function collectNotifyEvents() {
     const state = _loadNotifyState();
     const events = [];
-    const runsDir = join(homedir(), '.aceharness', 'runs');
+    const runsDir = join(aceRunsDir());
     let dirs = [];
     try { dirs = readdirSync(runsDir); } catch { return events; }
     for (const name of dirs) {
@@ -274,7 +278,7 @@ function _runMonitorStartTask(task) {
  */
 function findActiveRunByPr(prNumber, repo = '') {
     try {
-        const runsDir = join(homedir(), '.aceharness', 'runs');
+        const runsDir = join(aceRunsDir());
         const re = new RegExp(`-pr${prNumber}(-|$)`);
         for (const name of readdirSync(runsDir)) {
             if (!re.test(name)) continue;
@@ -302,7 +306,7 @@ function findActiveRunByPr(prNumber, repo = '') {
  */
 const PRS_CACHE_TTL_MS = 30000;
 const PRS_STALE_MAX_MS = 10 * 60 * 1000;
-const PRS_CACHE_FILE = join(homedir(), '.aceharness', 'data', 'aiweb-prs-cache.json');
+const PRS_CACHE_FILE = join(aceDataDir(), 'aiweb-prs-cache.json');
 const _prsCache = new Map();      // author -> { at, repo, repos, prs, complete, incompleteRepos }
 const _prsInflight = new Map();   // author -> Promise<cached PR list>
 
@@ -327,7 +331,7 @@ _loadDiskPrsCache();
 
 /* ── 邮件通知开关：读写 AceHarness 同机 system-settings.yaml（ACEHarness 每次现读文件，改完即生效） ── */
 
-const ACE_SETTINGS_FILE = () => join(homedir(), '.aceharness', 'data', 'system-settings.yaml');
+const ACE_SETTINGS_FILE = () => join(aceDataDir(), 'system-settings.yaml');
 
 /** 提取 emailNotifications 段落文本（按行扫描：段头之后的所有缩进行，遇顶级键结束）。 */
 function _emailNotifySection(text) {
@@ -381,7 +385,7 @@ export function setEmailNotifyEnabled(enabled) {
         else lines.splice(start + 1, 0, `  enabled: ${want}`);
     }
     // 原子写：tmp + rename，防并发撕裂
-    mkdirSync(join(homedir(), '.aceharness', 'data'), { recursive: true });
+    mkdirSync(aceDataDir(), { recursive: true });
     const tmp = `${file}.aiweb-tmp`;
     writeFileSync(tmp, lines.join('\n'), 'utf8');
     renameSync(tmp, file);
@@ -390,7 +394,7 @@ export function setEmailNotifyEnabled(enabled) {
 
 function _saveDiskPrsCache() {
     try {
-        mkdirSync(join(homedir(), '.aceharness', 'data'), { recursive: true });
+        mkdirSync(aceDataDir(), { recursive: true });
         const obj = {};
         for (const [author, entry] of _prsCache) obj[author] = entry;
         writeFileSync(PRS_CACHE_FILE, JSON.stringify(obj, null, 1));
@@ -481,7 +485,37 @@ export function createPrReviewRouter(orchestrator) {
         return h.startsWith('Bearer ') ? h.slice(7) : null;
     }
 
-    // ── 1. 用户登录 ───────────────────────────────────────────────────────────
+    // ── 1. 本地个人部署：直接进入本机管理员，不展示登录页 ─────────────────────
+
+    router.get('/pr-review/local-session', async (req, res) => {
+        if (process.env.AIWEB_DEPLOYMENT !== 'personal') {
+            return res.status(404).json({ success: false, message: '当前部署需要登录' });
+        }
+        const ip = req.socket?.remoteAddress || '';
+        if (ip !== '127.0.0.1' && ip !== '::1' && ip !== '::ffff:127.0.0.1') {
+            return res.status(403).json({ success: false, message: '只允许本机进入' });
+        }
+        try {
+            const { token, user } = await openLocalSession();
+            res.json({
+                success: true,
+                local: true,
+                token,
+                user: {
+                    id: user?.id,
+                    username: user?.username,
+                    email: user?.email,
+                    role: user?.role,
+                    prScope: 'self',
+                },
+            });
+        } catch (err) {
+            logger.warn('本地会话不可用', { error: err.message });
+            res.status(503).json({ success: false, message: err.message });
+        }
+    });
+
+    // ── 1b. 用户登录 ──────────────────────────────────────────────────────────
 
     router.post('/pr-review/login', async (req, res) => {
         const { email, password } = req.body ?? {};
@@ -551,29 +585,15 @@ export function createPrReviewRouter(orchestrator) {
         }
     });
 
-    // ── 1e. 注册（改造版：强制邮箱验证码） ─────────────────────────────────────
+    // ── 1e. 注册（无需邮箱验证码） ─────────────────────────────────────────────
 
     router.post('/pr-review/register', async (req, res) => {
-        const { username, email, password, question, answer, emailVerifyCode } = req.body ?? {};
+        const { username, email, password, question, answer } = req.body ?? {};
         try {
-            // 先验证邮箱验证码（防无效邮箱注册——谁都能填假邮箱的时代结束了）
-            if (!emailVerifyCode || String(emailVerifyCode).length !== 6) {
-                return res.status(400).json({ success: false, message: '请输入 6 位邮箱验证码（点邮箱旁边的「发送验证码」按钮）' });
-            }
-            const verifyResult = await httpRequest('POST', '/api/auth/verify-email', {
-                email, code: String(emailVerifyCode), action: 'verify',
-            }, { baseUrl: ACEHARNESS_API_BASE_URL, timeoutMs: 30000 });
-            if (verifyResult.status !== 200 || !verifyResult.data?.verified) {
-                return res.status(400).json({
-                    success: false,
-                    message: verifyResult.data?.error || '邮箱验证码校验失败，请重新获取',
-                });
-            }
-
             const { user, message, activated, degradedReason } = await registerUser({
                 username, email, password, question, answer,
             });
-            logger.info('PR 监控用户注册完成', { username, activated: !!activated, emailVerified: true });
+            logger.info('PR 监控用户注册完成', { username, activated: !!activated });
             res.status(201).json({
                 success: true,
                 activated: !!activated,
@@ -656,10 +676,11 @@ export function createPrReviewRouter(orchestrator) {
         const cacheKey = _runStatusCacheKey(token, req.params.runId);
         // 门禁根因/维护提醒：让"普通详情"也能看到，不必打开"检视修复"面板。读磁盘小文件，不进缓存。
         const gateDiagnosis = runGateDiagnosisOf(req.params.runId);
+        const approval = readHumanApproval(req.params.runId);
         const cached = runStatusCache.get(cacheKey);
         const cacheAge = cached ? Date.now() - cached.savedAt : Infinity;
         if (cached && cacheAge <= RUN_STATUS_FRESH_MS) {
-            return res.json({ success: true, status: { ...cached.status, gateDiagnosis } });
+            return res.json({ success: true, status: { ...cached.status, gateDiagnosis, approval } });
         }
         if (cached && cacheAge <= RUN_STATUS_CACHE_TTL_MS) {
             // 先返回最近快照，后台刷新。状态页不会再等 15-20 秒超时才看到旧进度。
@@ -671,6 +692,7 @@ export function createPrReviewRouter(orchestrator) {
                 status: {
                     ...cached.status,
                     gateDiagnosis,
+                    approval,
                     staleStatus: true,
                     staleAt: new Date(cached.savedAt).toISOString(),
                     refreshing: runStatusInflight.has(cacheKey),
@@ -679,7 +701,7 @@ export function createPrReviewRouter(orchestrator) {
         }
         try {
             const status = await _refreshRunStatus(token, req.params.runId, cacheKey);
-            res.json({ success: true, status: { ...status, gateDiagnosis } });
+            res.json({ success: true, status: { ...status, gateDiagnosis, approval } });
         } catch (err) {
             logger.error('查询 run 状态失败', { runId: req.params.runId, error: err.message });
             const statusCode = err.message.includes('HTTP 401') ? 401
@@ -689,7 +711,7 @@ export function createPrReviewRouter(orchestrator) {
             if (statusCode !== 401 && statusCode !== 403 && cached && Date.now() - cached.savedAt <= RUN_STATUS_CACHE_TTL_MS) {
                 return res.json({
                     success: true,
-                    status: { ...cached.status, gateDiagnosis, staleStatus: true, staleAt: new Date(cached.savedAt).toISOString() },
+                    status: { ...cached.status, gateDiagnosis, approval, staleStatus: true, staleAt: new Date(cached.savedAt).toISOString() },
                 });
             }
             res.status(statusCode).json({ success: false, message: err.message });
@@ -1326,7 +1348,7 @@ export function createPrReviewRouter(orchestrator) {
 
     // 决策持久化（同机 JSON，与通知状态同目录）
     const decisionInflight = new Set();
-    const DECISION_FILE = join(homedir(), '.aceharness', 'data', 'aiweb-review-decisions.json');
+    const DECISION_FILE = join(aceDataDir(), 'aiweb-review-decisions.json');
 
     function _loadDecisions() {
         let all = {};
@@ -1341,7 +1363,7 @@ export function createPrReviewRouter(orchestrator) {
 
     function _saveDecision(runId, entry) {
         try {
-            mkdirSync(join(homedir(), '.aceharness', 'data'), { recursive: true });
+            mkdirSync(aceDataDir(), { recursive: true });
             const all = _loadDecisions();
             all[runId] = entry;
             const tmp = `${DECISION_FILE}.${process.pid}.tmp`;
@@ -1936,7 +1958,7 @@ export function createPrReviewRouter(orchestrator) {
     /** 从 run 的 state.yaml 读 globalContext（routes 侧轻量版，不引依赖） */
     function _readRunGlobalContextPublic(runId) {
         try {
-            const yaml = readFileSync(join(homedir(), '.aceharness', 'runs', runId, 'state.yaml'), 'utf8');
+            const yaml = readFileSync(join(aceRunsDir(), runId, 'state.yaml'), 'utf8');
             const m = /^globalContext:\s*[|>][+-]?\n([\s\S]*?)(?=\n[^\s])/m.exec(yaml);
             return m ? m[1] : '';
         } catch {
@@ -1947,9 +1969,9 @@ export function createPrReviewRouter(orchestrator) {
     /** 读取 admin 服务 token 用于唤醒 run（同机 tokens.json） */
     function _readAdminTokenForWake() {
         try {
-            const dataDir = join(homedir(), '.aceharness', 'data');
+            const dataDir = aceDataDir();
             const users = JSON.parse(readFileSync(join(dataDir, 'users.json'), 'utf8'));
-            const adminIds = new Set(users.filter(u => u.role === 'admin' && u.status === 'active').map(u => u.id));
+            const adminIds = new Set(users.filter(isActiveAdmin).map(u => u.id));
             const tokens = JSON.parse(readFileSync(join(dataDir, 'tokens.json'), 'utf8'));
             const now = Date.now();
             for (const [token, info] of tokens) {
@@ -2176,6 +2198,178 @@ export function createPrReviewRouter(orchestrator) {
         }
     });
 
+    // ── 13c. 确认当前人工待办建议的下一步 ────────────────────────────────────
+
+    router.post('/pr-review/runs/:runId/confirm-approval', async (req, res) => {
+        const token = extractToken(req);
+        if (!token) return res.status(401).json({ success: false, message: '未登录' });
+        try {
+            const auth = await _authRun(req, res, req.params.runId);
+            if (!auth) return;
+            const approval = readHumanApproval(req.params.runId);
+            if (!approval || approval.kind !== 'human' || !approval.suggestedNextState) {
+                return res.status(422).json({ success: false, message: '当前没有需要确认的下一步' });
+            }
+            const wake = await fetch(`${ACEHARNESS_API_BASE_URL}/api/workflow/resume`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    runId: req.params.runId,
+                    action: 'force-transition',
+                    targetState: approval.suggestedNextState,
+                    instruction: `用户已确认进入「${approval.suggestedNextState}」。原因：${approval.reason || approval.ask}`,
+                }),
+                signal: AbortSignal.timeout(20000),
+            });
+            const body = await wake.json().catch(() => ({}));
+            if (!wake.ok) {
+                const message = body?.error || body?.message || `确认失败（HTTP ${wake.status}）`;
+                return res.status(wake.status === 401 ? 401 : 502).json({ success: false, message: String(message).slice(0, 300) });
+            }
+            logger.info('用户确认人工待办', { username: auth.user?.username, runId: req.params.runId, next: approval.suggestedNextState });
+            res.json({ success: true, message: `已确认进入「${approval.suggestedNextState}」`, next: approval.suggestedNextState });
+        } catch (err) {
+            logger.warn('确认人工待办失败', { runId: req.params.runId, error: err.message });
+            res.status(500).json({ success: false, message: err.message });
+        }
+    });
+
+    // ── 13d. 先分析、再把本任务的修改同步到兄弟 PR，并重新开启那些监控 ────────
+
+    router.post('/pr-review/runs/:runId/sync-to-siblings', async (req, res) => {
+        const token = extractToken(req);
+        if (!token) return res.status(401).json({ success: false, message: '未登录' });
+        try {
+            const auth = await _authRun(req, res, req.params.runId);
+            if (!auth) return;
+            const runId = req.params.runId;
+            const gc = _readRunGlobalContextPublic(runId);
+            const owner = /^\s*owner:\s*(\S+)/m.exec(gc)?.[1] || '';
+            const repo = /^\s*repo:\s*(\S+)/m.exec(gc)?.[1] || '';
+            const number = /^\s*number:\s*(\d+)/m.exec(gc)?.[1] || '';
+            const author = /^\s*author:\s*(\S+)/m.exec(gc)?.[1] || '';
+            const title = /^\s*title:\s*(.+)$/m.exec(gc)?.[1]?.trim() || '';
+            const headRef = /^\s*head_ref:\s*(\S+)/m.exec(gc)?.[1] || '';
+            if (!owner || !repo || !number || !author) {
+                return res.status(422).json({ success: false, message: '任务里缺少 PR 身份，无法找兄弟分支' });
+            }
+            const workDir = /^\s*workingDirectory:\s*(\S+)/m.exec(readFileSync(join(aceRunsDir(), runId, 'state.yaml'), 'utf8'))?.[1] || '';
+            const patchPaths = [
+                join(aceRunsDir(), runId, 'outputs', 'fix.patch'),
+                workDir && workDir.endsWith('/' + runId) ? join(workDir, 'outputs', 'fix.patch') : '',
+            ].filter(Boolean);
+            let patch = '';
+            for (const path of patchPaths) {
+                try { patch = readFileSync(path, 'utf8'); break; } catch { /* 下一个位置 */ }
+            }
+            const files = splitPatch(patch);
+            if (!patch.trim() || !files.length) {
+                return res.status(422).json({ success: false, message: '这个任务没有可同步的代码修改（没有 fix.patch）' });
+            }
+            const cached = await getPrsCached(author);
+            const openPrs = (cached.prs || []).filter((item) => String(item.state || '').toLowerCase() === 'open'
+                && String(item.author || '').toLowerCase() === author.toLowerCase());
+            const self = openPrs.find((item) => String(item.number) === String(number) && String(item.repoFull || '').toLowerCase().endsWith('/' + repo.toLowerCase()))
+                || { number: Number(number), title, headRef, author, repoFull: `${owner}/${repo}`, state: 'open', labels: [] };
+            const pool = openPrs.some((item) => item === self) ? openPrs : [self, ...openPrs];
+            const grouped = groupSiblingPrs(pool);
+            const mine = grouped.find((item) => String(item.number) === String(number)) || self;
+            const siblings = grouped.filter((item) => item.siblingGroup && mine.siblingGroup
+                && item.siblingGroup.key
+                && item.siblingGroup.key === mine.siblingGroup.key
+                && String(item.number) !== String(number)
+                && String(item.repoFull || '').toLowerCase() === String(mine.repoFull || self.repoFull).toLowerCase());
+            if (!siblings.length) {
+                return res.json({ success: true, message: '没有找到仍开着的同主题兄弟 PR', results: [] });
+            }
+            const endpoint = loadModelEndpoint();
+            if (!endpoint) {
+                return res.status(503).json({ success: false, message: '本机没有可用的模型配置，没有同步' });
+            }
+            const results = [];
+            for (const sibling of siblings.slice(0, 6)) {
+                const detail = await getGitcodePrDetail(owner, repo, sibling.number, 8000);
+                const ref = detail?.head?.ref || sibling.headRef || '';
+                const excerpts = [];
+                let missing = false;
+                let applies = true;
+                for (const file of files) {
+                    const text = await fetchRepoFile(owner, repo, file.path, ref);
+                    if (!text) { missing = true; applies = false; break; }
+                    excerpts.push(`文件 ${file.path}\n${text.slice(0, 8000)}`);
+                    if (!patchContextApplies(text, file.diff)) applies = false;
+                }
+                let ai = null;
+                let modelError = '';
+                if (!missing) {
+                    try {
+                        ai = await askSyncModel({
+                            endpoint,
+                            patch,
+                            sibling: { number: sibling.number, headRef: ref, baseRef: detail?.base?.ref || sibling.baseRef || '' },
+                            fileExcerpt: excerpts.join('\n\n'),
+                        });
+                    } catch (err) {
+                        modelError = err.message;
+                    }
+                }
+                const decision = modelError
+                    ? { canSync: false, reason: `AI 分析失败，没有推送：${modelError}` }
+                    : decideSync({ ai, applies, fileMissing: missing });
+                const row = {
+                    number: sibling.number,
+                    headRef: ref,
+                    canSync: false,
+                    reason: decision.reason,
+                    newRunId: '',
+                };
+                if (decision.canSync && detail && !detail.merged && String(detail.state || '').toLowerCase() === 'open') {
+                    const active = findActiveRunByPr(sibling.number, repo);
+                    if (active) {
+                        try { await stopPrMonitor(token, active.runId); } catch (err) {
+                            row.reason = `能同步，但停掉旧监控失败，没有推送：${err.message}`;
+                            results.push(row);
+                            continue;
+                        }
+                    }
+                    try {
+                        const started = await startReviewActionRun(token, {
+                            owner, repo, number: String(sibling.number),
+                            title: detail.title || sibling.title || '',
+                            author: detail.user?.login || sibling.author || author,
+                            headRef: ref,
+                            baseRef: detail.base?.ref || sibling.baseRef || '',
+                            headSha: detail.head?.sha || detail.head?.id || '',
+                            headRepo: detail.head?.repo?.full_name || '',
+                            state: 'open',
+                        }, { kind: 'apply_patch', sourceRunId: runId });
+                        row.canSync = true;
+                        row.newRunId = started.runId;
+                        const reset = isTesterApproved(detail.testers) ? ' 该 PR 测试人已通过，这次推送会重置测试状态。' : '';
+                        row.reason = `${decision.reason} 已开始同步并重新开启监控（${started.runId}）。${reset}`.trim();
+                    } catch (err) {
+                        row.reason = `能同步，但启动失败，没有推送：${err.message}`;
+                    }
+                }
+                results.push(row);
+            }
+            const synced = results.filter((item) => item.canSync).map((item) => `#${item.number}`);
+            const blocked = results.filter((item) => !item.canSync);
+            logger.info('兄弟分支同步分析', { username: auth.user?.username, runId, synced, blocked: blocked.map((item) => item.number) });
+            res.json({
+                success: true,
+                message: synced.length
+                    ? `已同步并重新开启 ${synced.join('、')} 的监控`
+                    : '没有兄弟分支被自动同步',
+                results,
+            });
+        } catch (err) {
+            logger.error('同步到兄弟分支失败', { runId: req.params.runId, error: err.message });
+            const status = err.message.includes('HTTP 401') ? 401 : 500;
+            res.status(status).json({ success: false, message: err.message });
+        }
+    });
+
     // ── 14. 管理员统计（仅 admin 角色可见） ──────────────────────────────────
 
     router.get('/pr-review/admin/stats', async (req, res) => {
@@ -2196,7 +2390,7 @@ export function createPrReviewRouter(orchestrator) {
             /* ── 用户统计：同机直读 AceHarness users.json（只回安全字段） ── */
             let users = [];
             try {
-                users = JSON.parse(readFileSync(join(homedir(), '.aceharness', 'data', 'users.json'), 'utf8'));
+                users = JSON.parse(readFileSync(join(aceDataDir(), 'users.json'), 'utf8'));
             } catch { /* 读失败按空处理 */ }
             // 时间戳归一化（历史数据秒/毫秒混存）
             const toMs = (v) => {
@@ -2255,7 +2449,7 @@ export function createPrReviewRouter(orchestrator) {
             /* ── 监控统计：扫 runs 目录（collectNotifyEvents 同模式；含 PR 监控 + Issue 诊断） ── */
             const TERMINAL_RUN = new Set(['completed', 'failed', 'crashed', 'stopped']);
             const ISSUE_CONFIG_RE = /^cpf-ohos-diagnosis(?:-iterate)?\.yaml$/;
-            const runsDir = join(homedir(), '.aceharness', 'runs');
+            const runsDir = join(aceRunsDir());
             const runRows = [];
             try {
                 for (const name of readdirSync(runsDir)) {

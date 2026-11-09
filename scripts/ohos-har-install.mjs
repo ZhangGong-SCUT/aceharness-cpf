@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, realpathSync, openSync, readSync, closeSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 function parseArgs(argv) {
   const out = { device: null, record: null, checkOnly: false, expectedTarget: null, expectPathPrefix: null };
@@ -131,5 +132,5 @@ async function main() {
   }
 }
 
-const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname);
+const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
 if (isMain) main().catch(error => { console.error(String(error.message || error)); process.exitCode = 2; });

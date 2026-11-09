@@ -214,18 +214,12 @@
           <!-- 人工待办横幅：有任务停在"人工确认"（非挂起）时醒目提醒 -->
           <div id="pr-approval-banner" class="pr-approval-banner" style="display:none"></div>
 
-          <!-- 未登录：登录引导 -->
+          <!-- 本机会话未建立时的提示。本地部署会自动进入，正常情况下不显示。 -->
           <div id="pr-login-box" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:20px;display:flex;flex-direction:column;gap:12px;align-items:center">
-            <div style="font-size:32px">🔐</div>
-            <div style="font-size:var(--font-size-md);font-weight:600;color:#fff">登录后查看你的 PR 监控任务</div>
+            <div style="font-size:var(--font-size-md);font-weight:600;color:#fff">本机工作台还没有可用会话</div>
             <div style="font-size:var(--font-size-sm);color:var(--text-aux);text-align:center;line-height:1.7">
-              使用 <b>AceHarness 账号</b>登录，即可实时查看自己启动的 PR 监控工作流状态。<br/>
-              没有账号？可在登录页直接注册，注册后立即可用。
+              请先在终端运行一次 <b>ace</b>，完成本机管理员初始化后再刷新此页。
             </div>
-            <a href="login.html?redirect=p-prreview"
-               style="display:inline-flex;align-items:center;gap:6px;padding:8px 22px;border-radius:8px;
-                      font-size:var(--font-size-sm);font-weight:700;background:linear-gradient(135deg,#4d8cf7,#6d5df7);
-                      color:#fff;text-decoration:none;cursor:pointer;margin-top:4px">🔓 登录 / 注册</a>
           </div>
 
           <!-- 已登录信息栏 -->
@@ -238,7 +232,7 @@
               <span class="pr-live-dot"></span><span id="pr-refresh-text">实时</span>
               <a class="pr-refresh-btn" href="#" onclick="event.preventDefault();manualRefreshPr()" title="立即刷新（PR 列表 + 监控任务 + 展开详情）">↻</a>
             </span>
-            <a href="login.html?redirect=p-prreview" style="font-size:var(--font-size-xs);color:var(--dim);padding:4px 8px;border-radius:6px;text-decoration:none;cursor:pointer">切换账号</a>
+            <a id="pr-switch-account" href="login.html?redirect=p-prreview" style="display:none;font-size:var(--font-size-xs);color:var(--dim);padding:4px 8px;border-radius:6px;text-decoration:none;cursor:pointer">切换账号</a>
           </div>
 
           <!-- 统计概览 -->

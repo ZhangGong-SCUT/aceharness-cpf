@@ -2448,6 +2448,24 @@ main {
   margin-bottom: 12px;
 }
 
+.pr-task-bar {
+  padding: 0 16px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pr-approval-ask {
+  font-size: var(--font-size-xs);
+  line-height: 1.55;
+  color: #f0c2c6;
+}
+.pr-task-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.pr-act-confirm { color: #f5b942; font-weight: 700; }
+.pr-sync-result { display: flex; flex-direction: column; gap: 4px; }
+.pr-sync-line { font-size: var(--font-size-xs); line-height: 1.5; color: var(--text-aux); }
+.pr-sync-line.ok { color: #5fd69b; }
+.pr-sync-line.bad { color: #ee9ba1; }
+
 .pr-banner-approval {
   background: linear-gradient(120deg, rgba(224, 108, 117, .13), rgba(224, 108, 117, .06));
   border: 1px solid rgba(224, 108, 117, .4);

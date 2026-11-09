@@ -1,4 +1,6 @@
 import { spawn } from 'child_process';
+import { tmpdir, homedir } from 'os';
+import { isAbsolute, relative, resolve } from 'path';
 
 export const ACE_PACKAGE_NAME = '@cpf-ohos/aceharness';
 export const DEFAULT_UPDATE_TARGET = 'latest';
@@ -72,6 +74,31 @@ export function resolveNpmCommand(customCommand?: string): string {
   return 'npm';
 }
 
+function isSameOrInside(child: string, parent: string): boolean {
+  const parentPath = resolve(parent);
+  const childPath = resolve(child);
+  const rel = relative(parentPath, childPath);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+/**
+ * Windows refuses to rename a directory that is the current directory of this
+ * process. Global update must leave the install directory first. Other
+ * platforms keep the caller's working directory.
+ */
+export function resolveWindowsGlobalInstallCwd(occupiedDir = process.cwd()): string {
+  const blocked = resolve(occupiedDir);
+  const candidates = [tmpdir(), homedir()];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const resolved = resolve(candidate);
+    if (!isSameOrInside(resolved, blocked)) return resolved;
+  }
+  const parent = resolve(blocked, '..');
+  if (!isSameOrInside(parent, blocked)) return parent;
+  return blocked;
+}
+
 function quoteWindowsCmdArg(arg: string): string {
   if (!arg) return '""';
   if (/^[A-Za-z0-9@%_+=:,./\\~-]+$/.test(arg)) return arg;
@@ -141,19 +168,41 @@ export async function fetchNpmPackageVersion(options: NpmUpdateOptions = {}): Pr
 export async function installNpmPackageGlobally(options: NpmUpdateOptions = {}): Promise<void> {
   const npmCommand = resolveNpmCommand(options.npmCommand);
   const packageSpec = buildNpmPackageSpec(options.packageName, options.target);
+  const previousCwd = process.cwd();
+  const explicitCwd = options.cwd ? resolve(options.cwd) : undefined;
+  const windowsCwd = process.platform === 'win32'
+    ? (explicitCwd && !isSameOrInside(explicitCwd, previousCwd) ? explicitCwd : resolveWindowsGlobalInstallCwd(previousCwd))
+    : undefined;
+  const movedOffInstallDir = process.platform === 'win32'
+    && !!windowsCwd
+    && resolve(windowsCwd) !== resolve(previousCwd);
 
-  await new Promise<void>((resolve, reject) => {
-    const child = spawnNpm(npmCommand, ['install', '-g', packageSpec], {
-      cwd: options.cwd,
-      stdio: 'inherit',
+  if (movedOffInstallDir && windowsCwd) {
+    process.chdir(windowsCwd);
+  }
+
+  try {
+    await new Promise<void>((resolveInstall, reject) => {
+      const child = spawnNpm(npmCommand, ['install', '-g', packageSpec], {
+        cwd: process.platform === 'win32' ? windowsCwd : options.cwd,
+        stdio: 'inherit',
+      });
+      child.once('error', reject);
+      child.once('close', (code, signal) => {
+        if (code === 0) {
+          resolveInstall();
+          return;
+        }
+        reject(new Error(signal ? `npm install stopped by ${signal}` : `npm install exited with code ${code ?? 'unknown'}`));
+      });
     });
-    child.once('error', reject);
-    child.once('close', (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
+  } finally {
+    if (movedOffInstallDir && resolve(process.cwd()) !== resolve(previousCwd)) {
+      try {
+        process.chdir(previousCwd);
+      } catch {
+        // npm may already have replaced the install directory.
       }
-      reject(new Error(signal ? `npm install stopped by ${signal}` : `npm install exited with code ${code ?? 'unknown'}`));
-    });
-  });
+    }
+  }
 }

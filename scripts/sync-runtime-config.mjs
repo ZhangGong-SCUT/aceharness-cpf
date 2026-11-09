@@ -19,14 +19,14 @@
  */
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runtimeRoot } from './runtime-root.mjs';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const TEMPLATE_DIR = join(REPO_ROOT, 'configs');
-const RUNTIME_DIR = process.env.ACEHARN_CONFIGS_DIR || join(homedir(), '.aceharness', 'configs');
-const RUNS_DIR = process.env.ACEHARN_RUNS_DIR || join(homedir(), '.aceharness', 'runs');
+const RUNTIME_DIR = process.env.ACEHARN_CONFIGS_DIR || join(runtimeRoot(), 'configs');
+const RUNS_DIR = process.env.ACEHARN_RUNS_DIR || join(runtimeRoot(), 'runs');
 
 const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
 

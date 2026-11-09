@@ -8,26 +8,16 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import net from 'node:net';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runtimeRoot } from './runtime-root.mjs';
 
 const require = createRequire(import.meta.url);
 const installRoot = path.resolve(process.env.ACE_INSTALL_ROOT || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
 const aiwebRoot = path.join(installRoot, 'aiweb');
 
-function runtimeRoot() {
-  const aceHome = process.env.ACE_HOME?.trim();
-  if (aceHome) return path.resolve(aceHome);
-  if (process.platform === 'win32' && process.env.APPDATA?.trim()) {
-    return path.resolve(process.env.APPDATA.trim(), 'ACEHarness');
-  }
-  const xdg = process.env.XDG_DATA_HOME?.trim();
-  if (xdg) return path.resolve(xdg, 'aceharness');
-  return path.join(os.homedir(), '.aceharness');
-}
-
 const dataRoot = runtimeRoot();
+if (!process.env.ACE_HOME?.trim()) process.env.ACE_HOME = dataRoot;
 const envFile = path.join(dataRoot, 'aiweb.env');
 
 function loadEnvFile(file) {
@@ -125,7 +115,7 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
     '  ace aiweb            启动 CPF-AIWeb 工作台（页面默认 8080，接口默认 3010）',
     '  ace aiweb --no-open  只启动，不打开浏览器',
     '',
-    'ACEHarness 本身仍用 ace / ace start。',
+    '只启动工作台。要连 ACEHarness 一起启动，用 ace up。',
     `配置：${envFile}`,
   ].join('\n'));
   process.exit(0);
@@ -209,7 +199,7 @@ function spawnNode(script, extraEnv) {
 console.log(`[ACE] AIWeb 接口：http://127.0.0.1:${apiPort}`);
 console.log(`[ACE] AIWeb 工作台：${webUrl}`);
 console.log(`[ACE] 对接 ACEHarness：${process.env.ACEHARNESS_API_BASE_URL}`);
-console.log('[ACE] 提交任务前请先在另一个终端运行 ace。Ctrl+C 停止工作台。');
+console.log('[ACE] 提交任务前 ACEHarness 需要已在监听。一次启动两者用 ace up。Ctrl+C 停止工作台。');
 
 spawnNode(path.join(aiwebRoot, 'Server', 'server.js'), {
   PORT: String(apiPort),

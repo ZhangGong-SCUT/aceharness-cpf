@@ -1,8 +1,7 @@
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, writeFile, rename, cp, realpath, rm, readdir, stat, lstat } from 'node:fs/promises';
-import { existsSync, createReadStream } from 'node:fs';
+import { existsSync, createReadStream, realpathSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { parse } from 'yaml';
@@ -120,14 +119,19 @@ export function issueApiAddress(raw: string) {
  * 路径必须落在该目录内且以内容哈希命名，防止借 globalContext 任意读文件。
  */
 export function evalInputsDir(): string {
-  return join(homedir(), '.aceharness', 'eval-inputs');
+  return join(getWorkspaceRoot(), 'eval-inputs');
+}
+
+function canonicalDir(dir: string): string {
+  const resolved = resolve(dir);
+  try { return realpathSync(resolved); } catch { return resolved; }
 }
 
 export async function readIssueSnapshot(rawPath: string, expectedSha256: string): Promise<{
   title: string; body: string; sha256: string;
 }> {
   const resolved = resolve(String(rawPath || ''));
-  if (dirname(resolved) !== evalInputsDir() || !/^[a-f0-9]{64}\.md$/.test(basename(resolved))) {
+  if (canonicalDir(dirname(resolved)) !== canonicalDir(evalInputsDir()) || !/^[a-f0-9]{64}\.md$/.test(basename(resolved))) {
     throw new Error('快照路径无效：必须位于受控输入目录内并以内容哈希命名');
   }
   let body: string;
@@ -232,9 +236,10 @@ export function runSdkOverlayDir(runDirectory: string): string {
   return join(runDirectory, 'sdk-overlay');
 }
 
-/** 枚举共享 SDK 缓存中的 HAR（flutter_embedding/flutter，debug/release/profile） */
+/** 枚举共享 SDK 缓存中的 HAR（flutter_embedding/flutter，debug/release/profile）。
+ *  使用文件顶部的静态 readdir。动态 import('node:fs/promises') 会被 Next 拆成
+ *  文件名含冒号的 chunk，Windows 上该文件写成 U+F03A，加载器仍请求冒号路径。 */
 export async function listSharedSdkHars(sdkRoot: string): Promise<string[]> {
-  const { readdir } = await import('node:fs/promises');
   const engineDir = join(sdkRoot, 'bin', 'cache', 'artifacts', 'engine');
   const out: string[] = [];
   let targets: string[] = [];
@@ -321,7 +326,7 @@ async function collectLocaleLogText(roots: string[]): Promise<string> {
   const parts: string[] = [];
   const seen = new Set<string>();
   const walk = async (root: string, dir: string) => {
-    let entries: import('node:fs').Dirent<string>[] = [];
+    let entries;
     try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
       if (entry.isSymbolicLink()) continue;
@@ -714,9 +719,16 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
           status: already ? 'already_present' : 'archived', bytes: info.size, sha256: digest,
           ...(harInfo ? { har_build_mode: harInfo.build_mode, har_debug: harInfo.debug } : {}) });
       } catch (error: any) {
+        // 时间戳步骤总结只是回复的副本。正文已在步骤日志里，缺这份副本不能把整次诊断判失败。
+        const supplementarySummary = role === 'referenced'
+          && error?.code === 'ENOENT'
+          && /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-.+\.md$/.test(name);
         recordEntry({ name, role, source_path: src, archived_to: null,
-          status: error?.code === 'ENOENT' ? 'missing' : 'failed', bytes: null, sha256: null,
-          error: String(error?.message || error).slice(0, 200) });
+          status: supplementarySummary ? 'not_applicable' : (error?.code === 'ENOENT' ? 'missing' : 'failed'),
+          bytes: null, sha256: null,
+          error: supplementarySummary
+            ? '步骤成果总结已在步骤日志中，缺失的时间戳副本不阻断完成'
+            : String(error?.message || error).slice(0, 200) });
       }
     };
     try {

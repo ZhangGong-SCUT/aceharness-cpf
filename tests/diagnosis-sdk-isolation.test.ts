@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   diffSharedSdkFingerprints,
   executeDiagnosisScript,
+  listSharedSdkHars,
   runSdkOverlayDir,
 } from '../src/lib/workflow/diagnosis-script-step';
 
@@ -40,6 +41,20 @@ describe('diffSharedSdkFingerprints（F11）', () => {
   it('无变化为全空', () => {
     const diff = diffSharedSdkFingerprints(before, before.map((e) => ({ ...e })));
     expect(diff).toEqual({ modified: [], added: [], removed: [] });
+  });
+});
+
+describe('listSharedSdkHars', () => {
+  it('只列出 ohos 引擎目录里的 HAR，使用静态 readdir', async () => {
+    const root = makeTmp();
+    const engine = join(root, 'bin', 'cache', 'artifacts', 'engine');
+    mkdirSync(join(engine, 'ohos-arm64'), { recursive: true });
+    mkdirSync(join(engine, 'android-arm64'), { recursive: true });
+    writeFileSync(join(engine, 'ohos-arm64', 'flutter.har'), 'a');
+    writeFileSync(join(engine, 'android-arm64', 'skip.har'), 'b');
+    await expect(listSharedSdkHars(root)).resolves.toEqual([
+      join(engine, 'ohos-arm64', 'flutter.har'),
+    ]);
   });
 });
 

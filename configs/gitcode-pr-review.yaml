@@ -31,9 +31,9 @@ workflow:
           agent: developer
           role: defender
           task: |
-            运行 node skills/gitcode-pr-review/scripts/validate-pr-identity.mjs --out outputs，读取 outputs/pr-identity.json。
-            该脚本只解析本次 run 的 globalContext，并确定性校验 URL、必需字段、作者准入和监听仓；不要重新推断或改写脚本结论。
-            字段缺失、身份不匹配或仓库不在监听范围时按脚本 verdict 终止，不要补造信息。PR 是否仍 open/是否合入交给下一状态的门禁脚本实时检查。
+            本步由引擎用 ACE_NODE 直接执行 skills/gitcode-pr-review/scripts/validate-pr-identity.mjs --out outputs。
+            脚本读取本次 run 的 globalContext，校验 URL、必需字段、作者准入和监听仓，结果写入 outputs/pr-identity.json。
+            作者白名单和 GITCODE_TOKEN_<作者> 由脚本读取。不要搜索 node，不要查 PATH 或注册表，不要手写 curl 拉 PR。
             原样输出 JSON：verdict、summary、pr_url、author、head_repo、head_ref、own_pr。
       transitions:
         - to: 等待门禁
@@ -365,6 +365,8 @@ workflow:
           role: defender
           task: |
             先运行 node skills/gitcode-pr-review/scripts/checkout-pr-head.mjs --run . --base-ref <base_ref> --head-ref <head_ref> --head-sha <head_sha> --head-repo <head_repo>
+            再运行 node skills/gitcode-pr-review/scripts/fetch-pr-diff.mjs --pr-url <PR_URL> --author <author> --out outputs
+            outputs/review.diff 是 GitCode 上这次 PR 的改动。不要请求 /pulls/{number}.diff，也不要用 git diff HEAD~1 或 <sha>~1..<sha> 代替它。
             禁止自己执行 git clone。禁止在 repo 里直接 git push。
             先检查 state.yaml 的 globalContext 是否包含 user_fix_feedback: / user_revert: / user_apply_patch:。
             命中任一用户人工指令时，模式C优先：直接执行指令，不要先用目标 PR 的 ai_reviewed 标签或 actionable_count=0 短路；

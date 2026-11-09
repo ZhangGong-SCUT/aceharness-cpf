@@ -110,50 +110,6 @@ async function doLogin() {
 }
 
 /* ── 注册 ── */
-/* ── 注册邮箱验证码 ── */
-
-let _regCodeCountdown = 0;
-
-async function sendRegVerifyCode() {
-  const email = document.getElementById('reg-email')?.value?.trim();
-  if (!email) { _showAuthErr('请先输入邮箱'); return; }
-
-  const btn = document.getElementById('reg-send-code-btn');
-  if (btn?.disabled) return;
-
-  btn.disabled = true;
-  btn.textContent = '发送中…';
-  _hideAuthMsg();
-
-  try {
-    const res = await _authFetch('/api/pr-review/verify-email', { email }, 30000);
-    const data = await res.json().catch(() => ({}));
-    if (res.status === 200 && data?.success) {
-      _showAuthOk(`验证码已发送到 <b>${escHtml(email)}</b>，请查收（10 分钟内有效）`);
-      // 60 秒倒计时
-      _regCodeCountdown = 60;
-      const tick = () => {
-        if (_regCodeCountdown <= 0) {
-          btn.disabled = false;
-          btn.textContent = '发送验证码';
-          return;
-        }
-        btn.textContent = `重发(${_regCodeCountdown}s)`;
-        _regCodeCountdown--;
-        setTimeout(tick, 1000);
-      };
-      tick();
-    } else {
-      _showAuthErr(data?.message || '验证码发送失败');
-      btn.disabled = false;
-      btn.textContent = '发送验证码';
-    }
-  } catch (e) {
-    _showAuthErr('发送失败：' + e.message);
-    btn.disabled = false;
-    btn.textContent = '发送验证码';
-  }
-}
 
 async function doRegister() {
   const username = document.getElementById('reg-username').value.trim();
@@ -162,14 +118,12 @@ async function doRegister() {
   const password2 = document.getElementById('reg-password2').value;
   const question = document.getElementById('reg-question').value.trim();
   const answer = document.getElementById('reg-answer').value.trim();
-  const emailVerifyCode = document.getElementById('reg-verify-code')?.value?.trim() || '';
 
   if (!username || !email || !password || !question || !answer) {
     _showAuthErr('所有字段都不能为空'); return;
   }
   if (password.length < 6) { _showAuthErr('密码至少 6 个字符'); return; }
   if (password !== password2) { _showAuthErr('两次输入的密码不一致'); return; }
-  if (!emailVerifyCode || emailVerifyCode.length !== 6) { _showAuthErr('请输入 6 位邮箱验证码（点邮箱旁边的「发送验证码」）'); return; }
 
   const btn = document.getElementById('register-btn');
   btn.disabled = true; btn.textContent = '创建中…';
@@ -177,7 +131,7 @@ async function doRegister() {
 
   try {
     const res = await _authFetch('/api/pr-review/register', {
-      username, email, password, question, answer, emailVerifyCode,
+      username, email, password, question, answer,
     }, 30000);
     const data = await res.json().catch(() => ({}));
     if (res.status !== 201 && res.status !== 200) {
@@ -215,12 +169,13 @@ async function doRegister() {
 
 /* ── 初始化 ── */
 (async function initLoginPage() {
-  // 已登录用户直接跳转工作台
-  const auth = await validateAuth();
+  document.documentElement.style.visibility = 'hidden';
+  const auth = await validateAuth() || (typeof ensureLocalSession === 'function' ? await ensureLocalSession() : null);
   if (auth?.user) {
-    _showAuthOk(`已登录为 <b>${escHtml(auth.user.username || '')}</b>，正在进入工作台…`);
-    setTimeout(() => { location.href = _loginRedirectTarget(); }, 500);
+    location.replace(_loginRedirectTarget());
+    return;
   }
+  document.documentElement.style.visibility = '';
 
   // 回车提交
   document.getElementById('login-password').addEventListener('keydown', e => {

@@ -153,6 +153,53 @@ describe('finish 收尾（F01+F02+F05 集成）', () => {
     expect(context.evaluation_integrity).toBe('not_independent');
   });
 
+  it('报告引用的时间戳步骤总结缺失时不阻断完成，其他缺失证据仍然阻断', async () => {
+    const root = makeTmp();
+    const runDir = join(root, 'run');
+    const workDir = join(root, 'work');
+    mkdirSync(join(workDir, 'outputs'), { recursive: true });
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(workDir, 'outputs', '报告沉淀-生成诊断报告.md'), [
+      '# 诊断报告',
+      'report_path 指向 outputs/2026-11-06T03-33-48-报告沉淀-生成诊断报告.md。',
+      '截图见 outputs/missing-shot.png。',
+    ].join('\n'));
+    writeFileSync(join(workDir, 'outputs', '修复验证-修复方案对抗验证.md'), R7_STYLE_VERIFICATION);
+
+    const output = await executeDiagnosisScript({
+      operation: 'finish', workingDirectory: workDir, runDirectory: runDir, globalContext: '',
+    });
+    const result = parseConclusion(output);
+    const manifest = JSON.parse(readFileSync(join(runDir, 'outputs', 'diagnosis-archive-manifest.json'), 'utf8'));
+    const summary = manifest.entries.find((entry: any) => entry.name === '2026-11-06T03-33-48-报告沉淀-生成诊断报告.md');
+    const shot = manifest.entries.find((entry: any) => entry.name === 'missing-shot.png');
+    expect(summary.status).toBe('not_applicable');
+    expect(shot.status).toBe('missing');
+    expect(result.artifact_status).toBe('partial');
+    expect(result.verdict).toBe('fail');
+  });
+
+  it('只有时间戳步骤总结缺失时，归档仍 complete', async () => {
+    const root = makeTmp();
+    const runDir = join(root, 'run');
+    const workDir = join(root, 'work');
+    mkdirSync(join(workDir, 'outputs'), { recursive: true });
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(workDir, 'outputs', '报告沉淀-生成诊断报告.md'),
+      '报告正文。{"report_path":"outputs/2026-11-06T03-33-48-报告沉淀-生成诊断报告.md"}');
+    writeFileSync(join(workDir, 'outputs', '修复验证-修复方案对抗验证.md'), R7_STYLE_VERIFICATION);
+
+    const output = await executeDiagnosisScript({
+      operation: 'finish', workingDirectory: workDir, runDirectory: runDir, globalContext: '',
+    });
+    const result = parseConclusion(output);
+    const manifest = JSON.parse(readFileSync(join(runDir, 'outputs', 'diagnosis-archive-manifest.json'), 'utf8'));
+    expect(manifest.entries.find((entry: any) => entry.name === '2026-11-06T03-33-48-报告沉淀-生成诊断报告.md').status)
+      .toBe('not_applicable');
+    expect(result.artifact_status).toBe('complete');
+    expect(result.verdict).toBe('pass');
+  });
+
   it('只有无效 L1 OK 时，issue_golden_flag_met 降为 unknown', async () => {
     const root = makeTmp();
     const runDir = join(root, 'run');

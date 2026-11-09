@@ -8,6 +8,7 @@ import {
   getWorkspaceConfigPath,
   getWorkspaceConfigsDir,
 } from '@/lib/core/app-paths';
+import { bundledPrWorkflowNeedsRefresh } from '@/lib/workflow/pr-identity-step';
 
 const DELETED_MARKER = '.deleted.json';
 
@@ -62,6 +63,24 @@ async function copyMissingRecursive(src: string, dst: string, deletedSet: Set<st
   await cp(src, dst, { force: false });
 }
 
+const PR_WORKFLOW = 'gitcode-pr-review.yaml';
+
+async function refreshStalePrWorkflow(
+  installConfigsDir: string,
+  runtimeConfigsDir: string,
+  deletedSet: Set<string>,
+): Promise<void> {
+  if (deletedSet.has(PR_WORKFLOW)) return;
+  const runtimeFile = resolve(runtimeConfigsDir, PR_WORKFLOW);
+  const installFile = resolve(installConfigsDir, PR_WORKFLOW);
+  if (!existsSync(runtimeFile) || !existsSync(installFile)) return;
+  const current = await readFile(runtimeFile, 'utf8');
+  if (!bundledPrWorkflowNeedsRefresh(current)) return;
+  const backup = `${runtimeFile}.bak-before-identity-script`;
+  if (!existsSync(backup)) await cp(runtimeFile, backup);
+  await cp(installFile, runtimeFile, { force: true });
+}
+
 export async function ensureRuntimeConfigsSeeded(): Promise<void> {
   if (seedPromise) return seedPromise;
 
@@ -86,6 +105,7 @@ export async function ensureRuntimeConfigsSeeded(): Promise<void> {
     }
 
     await copyMissingRecursive(installConfigsDir, runtimeConfigsDir, deletedSet, runtimeConfigsDir);
+    await refreshStalePrWorkflow(installConfigsDir, runtimeConfigsDir, deletedSet);
   })().finally(() => {
     seedPromise = null;
   });

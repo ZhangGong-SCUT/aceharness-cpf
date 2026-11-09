@@ -1,12 +1,12 @@
 {
   "name": "@cpf-ohos/aceharness",
-  "version": "1.0.0-beta.94",
+  "version": "1.0.0-beta.103",
   "description": "ACEHarness - Agent Centric Engineering Harness (From Cangjie Team)",
   "scripts": {
     "build:napi-cj": "npm run build --prefix packages/napi-cj",
     "build:cli": "node scripts/build-cli.js",
     "dev": "npm run build:cli && node --max-old-space-size=8192 server.js dev",
-    "build": "npm run build:napi-cj && npm run build:cli && next build",
+    "build": "npm run build:napi-cj && npm run build:cli && next build && node scripts/sanitize-next-chunk-names.js",
     "prune:package-maps": "node scripts/prune-package-maps.js",
     "clean": "node -e \"const fs=require('fs'); for (const p of ['dist','.next','dist-build']) fs.rmSync(p,{recursive:true,force:true});\"",
     "sync:configs": "node -e \"const fs=require('fs'),path=require('path');const src='configs',dst=path.join(require('os').homedir(),'.aceharness','configs');if(!fs.existsSync(dst)){console.log('Runtime configs dir not found:',dst);process.exit(0);}function copy(s,d){for(const e of fs.readdirSync(s,{withFileTypes:true})){const sp=path.join(s,e.name),dp=path.join(d,e.name);if(e.isDirectory()){fs.mkdirSync(dp,{recursive:true});copy(sp,dp);}else if(/\\.(ya?ml|json)$/.test(e.name)){fs.copyFileSync(sp,dp);console.log('  synced:',e.name);}}}copy(src,dst);console.log('✅ Configs synced to',dst);\"",
@@ -30,7 +30,7 @@
     "check:spec-then-workflow": "node ./scripts/check-spec-then-workflow.cjs",
     "check:acp": "node ./scripts/check-acp-connectivity.mjs",
     "office:stabilize-sprite": "node scripts/stabilize-office-agent-sprite.mjs",
-    "prepack": "npm run build && npm run prune:package-maps",
+    "prepack": "node scripts/assert-no-shipped-identity.mjs && npm run build && npm run prune:package-maps",
     "publish:npm": "npm publish",
     "publish:beta": "npm publish --tag beta"
   },

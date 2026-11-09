@@ -1,15 +1,16 @@
 /**
  * F03：受控快照输入（盲测/受控回放通道的 CPF 侧）。
  *
- * 与 ACEHarness 约定：快照写入 ~/.aceharness/eval-inputs/<sha256>.md，
+ * 与 ACEHarness 约定：快照写入 <运行时根>/eval-inputs/<sha256>.md，
  * 引擎端 collectIssue 校验路径位置与哈希后才采用（见 diagnosis-script-step.ts readIssueSnapshot）。
  */
+import { aceDataDir, aceRunsDir, aceRuntimeRoot } from '../library/aceRuntime.js';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-export const EVAL_INPUTS_DIR = join(homedir(), '.aceharness', 'eval-inputs');
+export const EVAL_INPUTS_DIR = join(aceRuntimeRoot(), 'eval-inputs');
 export const MAX_SNAPSHOT_BYTES = 256 * 1024;
 export const MIN_SNAPSHOT_LENGTH = 10;
 

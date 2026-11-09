@@ -10,6 +10,7 @@
  * 存储：~/.aceharness/data/aiweb-notify-outbox.json（原子写）。
  */
 
+import { aceDataDir, aceRunsDir, aceRuntimeRoot } from '../library/aceRuntime.js';
 import { createHash, randomUUID } from 'crypto';
 import { readFileSync, mkdirSync, writeFileSync, renameSync } from 'fs';
 import { homedir } from 'os';
@@ -17,7 +18,7 @@ import { join } from 'path';
 import { createLogger } from '../library/logger.js';
 
 const logger = createLogger('PrReviewOutbox');
-const OUTBOX_FILE = join(homedir(), '.aceharness', 'data', 'aiweb-notify-outbox.json');
+const OUTBOX_FILE = join(aceDataDir(), 'aiweb-notify-outbox.json');
 const DEDUPE_WINDOW_MS = 10 * 60 * 1000;
 const SENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_ITEMS = 2000;
@@ -30,7 +31,7 @@ function _read() {
 }
 function _write(items) {
     try {
-        mkdirSync(join(homedir(), '.aceharness', 'data'), { recursive: true });
+        mkdirSync(aceDataDir(), { recursive: true });
         const tmp = `${OUTBOX_FILE}.${process.pid}.tmp`;
         writeFileSync(tmp, JSON.stringify({ items }, null, 2));
         renameSync(tmp, OUTBOX_FILE);

@@ -4,6 +4,7 @@ import { dirname, resolve, join } from 'path';
 import { execSync } from 'child_process';
 import { getInstallPath, getWorkspaceCacheFile, getWorkspaceSkillPath, getWorkspaceSkillsDir, getWorkspaceRoot } from '@/lib/core/app-paths';
 import { createDirectoryLinkSync, isLinkedDirectoryTarget } from '@/lib/core/directory-links';
+import { syncMissingTree } from '../../../scripts/sync-missing-runtime-files.mjs';
 
 const INSTALL_SKILLS_DIR = getInstallPath('skills');
 let seedPromise: Promise<void> | null = null;
@@ -13,10 +14,15 @@ let runtimeSkillsSeeded = false;
 const SKILL_DEPS: string[] = [];
 
 async function linkMissingBundledEntry(src: string, dst: string): Promise<void> {
-  if (existsSync(dst)) return;
-
   const srcStat = await stat(src);
-  if (srcStat.isDirectory()) {
+  if (!srcStat.isDirectory()) {
+    if (existsSync(dst)) return;
+    await mkdir(dirname(dst), { recursive: true });
+    await cp(src, dst, { force: false });
+    return;
+  }
+
+  if (!existsSync(dst)) {
     await mkdir(dirname(dst), { recursive: true });
     try {
       createDirectoryLinkSync(src, dst);
@@ -26,8 +32,8 @@ async function linkMissingBundledEntry(src: string, dst: string): Promise<void> 
     return;
   }
 
-  await mkdir(dirname(dst), { recursive: true });
-  await cp(src, dst, { force: false });
+  if (isLinkedDirectoryTarget(dst, src)) return;
+  syncMissingTree(src, dst);
 }
 
 async function linkMissingBundledSkills(srcDir: string, dstDir: string): Promise<void> {
@@ -76,6 +82,18 @@ async function ensureSkillDeps(): Promise<void> {
   }
 }
 
+async function refreshStalePrSkill(runtimeSkillsDir: string): Promise<void> {
+  const dest = resolve(runtimeSkillsDir, 'gitcode-pr-review', 'SKILL.md');
+  const src = resolve(INSTALL_SKILLS_DIR, 'gitcode-pr-review', 'SKILL.md');
+  if (!existsSync(dest) || !existsSync(src)) return;
+  if (isLinkedDirectoryTarget(resolve(runtimeSkillsDir, 'gitcode-pr-review'), resolve(INSTALL_SKILLS_DIR, 'gitcode-pr-review'))) return;
+  const current = readFileSync(dest, 'utf8');
+  if (current.includes('ACE_NODE')) return;
+  const backup = `${dest}.bak-before-identity-script`;
+  if (!existsSync(backup)) await cp(dest, backup);
+  await cp(src, dest, { force: true });
+}
+
 export async function ensureRuntimeSkillsSeeded(): Promise<void> {
   if (runtimeSkillsSeeded) return;
   if (seedPromise) return seedPromise;
@@ -90,6 +108,7 @@ export async function ensureRuntimeSkillsSeeded(): Promise<void> {
     }
 
     await linkMissingBundledSkills(INSTALL_SKILLS_DIR, runtimeSkillsDir);
+    await refreshStalePrSkill(runtimeSkillsDir);
     await ensureSkillDeps();
     runtimeSkillsSeeded = true;
   })().finally(() => {
@@ -132,6 +151,7 @@ export async function syncInstalledSkillsToRuntime(skillNames: string[]): Promis
 
     const dest = join(runtimeSkillsDir, skillName);
     if (existsSync(dest)) {
+      if (!isLinkedDirectoryTarget(dest, src)) syncMissingTree(src, dest);
       synced.push(skillName);
       continue;
     }

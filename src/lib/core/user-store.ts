@@ -468,9 +468,26 @@ export function storeToken(token: string, userId: string): void {
   persistTokens();
 }
 
+function mergeTokensFromDisk(): void {
+  try {
+    if (!existsSync(TOKENS_FILE)) return;
+    const entries: [string, { userId: string; expiry: number }][] = JSON.parse(require('fs').readFileSync(TOKENS_FILE, 'utf-8'));
+    const now = Date.now();
+    for (const [token, info] of entries) {
+      if (info?.expiry > now && !tokenStore.has(token)) tokenStore.set(token, info);
+    }
+  } catch {
+    // ignore corrupt token cache
+  }
+}
+
 export function validateToken(token: string): { userId: string } | null {
   loadTokensSync();
-  const info = tokenStore.get(token);
+  let info = tokenStore.get(token);
+  if (!info) {
+    mergeTokensFromDisk();
+    info = tokenStore.get(token);
+  }
   if (!info) return null;
   if (info.expiry < Date.now()) {
     tokenStore.delete(token);

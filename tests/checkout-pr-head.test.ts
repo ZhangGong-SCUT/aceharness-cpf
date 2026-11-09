@@ -37,9 +37,25 @@ afterEach(() => {
 describe('checkout-pr-head', () => {
   it('浅克隆参数必须带 depth 和 branch', () => {
     expect(shallowCloneArgs('https://gitcode.com/a/b.git', 'feat', '/tmp/repo')).toEqual([
-      'clone', '--depth', '1', '--branch', 'feat', '--single-branch', 'https://gitcode.com/a/b.git', '/tmp/repo',
+      'clone', '--depth', '2', '--branch', 'feat', '--single-branch', 'https://gitcode.com/a/b.git', '/tmp/repo',
     ]);
     expect(() => shallowCloneArgs('https://gitcode.com/a/b.git', '', '/tmp/repo')).toThrow(/分支/);
+  });
+
+  it('depth 1 没有父提交，depth 2 可以解析 HEAD~1', () => {
+    const root = tempDir();
+    const source = join(root, 'src');
+    const depth1 = join(root, 'depth1');
+    const depth2 = join(root, 'depth2');
+    execFileSync('mkdir', ['-p', source]);
+    const head = initRepo(source);
+    const parent = git(source, ['rev-parse', 'HEAD~1']);
+    const sourceUrl = `file://${source}`;
+    execFileSync('git', ['clone', '--depth', '1', '--branch', 'feat/widget-tap-path-text', '--single-branch', sourceUrl, depth1]);
+    expect(() => git(depth1, ['rev-parse', '--verify', 'HEAD~1'])).toThrow();
+    execFileSync('git', shallowCloneArgs(sourceUrl, 'feat/widget-tap-path-text', depth2));
+    expect(git(depth2, ['rev-parse', 'HEAD'])).toBe(head);
+    expect(git(depth2, ['rev-parse', 'HEAD~1'])).toBe(parent);
   });
 
   it('按 base_ref 别名命中清单', () => {

@@ -6,7 +6,7 @@
 
 | 文件 | 说明 |
 |---|---|
-| `dist/cangjielang-aceharness-1.0.0-beta.90.tgz` | 平台本体（100MB，含 CLI、Web UI、CPF 定制工作流与 skills、HAR/HAP 门禁脚本） |
+| `dist/cpf-ohos-aceharness-<版本>.tgz` | 平台本体（含 CLI、Web UI、CPF 定制工作流与 skills、HAR/HAP 门禁脚本）。安装脚本选 dist 里最新的一个 |
 | `install.sh` | Linux/macOS 一键部署脚本 |
 | `install.ps1` | Windows（PowerShell 7+）一键部署脚本 |
 | `README.md` | 本说明 |
@@ -19,7 +19,7 @@
 - **发布权回到自己手里**：可发布到私有 registry（Verdaccio/Nexus，配 `@cpf-ohos:registry=...`），
   内容适合公开时也可直接发公网 scope；
 - 发布打通后，装机 = `npm i -g @cpf-ohos/aceharness@beta`，升级 = `ace update`（从已配置源拉 latest）；
-- 在此之前（未发布），分发仍走本目录的 tgz：`npm install -g dist/cpf-ohos-aceharness-1.0.0-beta.90.tgz`。
+- 在此之前（未发布），分发仍走本目录的 tgz：`npm install -g dist/cpf-ohos-aceharness-<版本>.tgz`。
 
 > 注意：旧名 `@cangjielang/aceharness` 属于上游仓，本 fork 与之完全脱钩；
 > 已用旧名装过的机器请 `npm uninstall -g @cangjielang/aceharness` 后改用新名安装。
@@ -29,7 +29,7 @@
 ### 方式一：同事装机（推荐）——内网静态托管 + 一句话命令
 
 把两个文件放到内网任意静态目录（nginx 目录 / OSS / 文件共享均可，**无需任何登录态**）：
-`install.sh`（Windows 用 `install.ps1`）和 `cpf-ohos-aceharness-1.0.0-beta.90.tgz`。
+`install.sh`（Windows 用 `install.ps1`）和 `cpf-ohos-aceharness-<版本>.tgz`。远程下载时设置 `ACE_DIST_NAME` 为该文件名。
 
 同事装好 Node.js 20+（和 DevEco Studio）后，只需一条命令：
 
@@ -139,4 +139,4 @@ npm install -g ./cpf-ohos-aceharness-<新版本>.tgz
   /home/flutter，本机行为零变化）。
 - `ace doctor` 子命令：`bin/ace.js` 前置分发 + `src/cli.ts` 正式命令（含 --help 条目），
   实现见 `scripts/ace-doctor.mjs`；自动修复只补缺失、不覆盖本地修改。
-- fork 构建锁定：`bin/ace.js` 与 `dist/cli.js`（src/cli.ts 编译）双重拦截 `ace update`。
+- `ace update`：只有 `package.json` 里写了 `config.aceLineage` 才会拦截。当前安装包没有这个字段，三端都不会拦截。

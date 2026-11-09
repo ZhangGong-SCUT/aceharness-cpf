@@ -1,18 +1,27 @@
-# ACEHarness CPF 诊断平台 一键部署（Windows PowerShell 7+）
-# 用法: .\install.ps1 [-Tgz .\dist\cpf-ohos-aceharness-1.0.0-beta.90.tgz] [-SdkRoot "$HOME\flutter-sdks"]
+# ACEHarness CPF 诊断平台 一键部署（Windows PowerShell 5.1+）
+# 用法: .\install.ps1 [-Tgz .\dist\cpf-ohos-aceharness-<版本>.tgz] [-SdkRoot "$HOME\flutter-sdks"]
 param(
   [string]$Tgz = "",
   [string]$SdkRoot = "$HOME\flutter-sdks",
   [string]$NpmRegistry = ""
 )
 $ErrorActionPreference = "Stop"
-$TgzName = "cpf-ohos-aceharness-1.0.0-beta.90.tgz"
-if (-not $Tgz) { $Tgz = "$PSScriptRoot\dist\$TgzName" }
-if (-not (Test-Path $Tgz) -and $env:ACE_DIST_URL) {
-  # 远程分发模式：tgz 不在本地时从 ACE_DIST_URL 拉取（给同事装机的一句话场景）
-  $Tgz = "$PWD\$TgzName"
-  Write-Host "    从 $env:ACE_DIST_URL 下载 $TgzName ..."
-  Invoke-WebRequest -UseBasicParsing "$env:ACE_DIST_URL/$TgzName" -OutFile $Tgz
+function Select-AceTgz([string]$Explicit, [string]$DistDir) {
+  if ($Explicit) { return $Explicit }
+  $found = Get-ChildItem -Path $DistDir -Filter 'cpf-ohos-aceharness-*.tgz' -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if ($found) { return $found.FullName }
+  $plain = Join-Path $DistDir 'cpf-ohos-aceharness.tgz'
+  if (Test-Path $plain) { return $plain }
+  return ""
+}
+if ($env:ACE_INSTALL_LIBRARY -eq '1') { return }
+if (-not $Tgz) { $Tgz = Select-AceTgz "" "$PSScriptRoot\dist" }
+if (-not $Tgz -and $env:ACE_DIST_URL) {
+  if (-not $env:ACE_DIST_NAME) { Write-Host "✗ 远程安装需要 ACE_DIST_NAME=cpf-ohos-aceharness-<版本>.tgz"; exit 1 }
+  $Tgz = Join-Path $PWD $env:ACE_DIST_NAME
+  Write-Host "    从 $env:ACE_DIST_URL 下载 $env:ACE_DIST_NAME ..."
+  Invoke-WebRequest -UseBasicParsing "$env:ACE_DIST_URL/$env:ACE_DIST_NAME" -OutFile $Tgz
 }
 
 Write-Host "==> 1/5 检查 Node.js（需 >= 20，推荐 22 LTS）..."
@@ -45,23 +54,24 @@ $ace = Get-Command ace -ErrorAction SilentlyContinue
 if (-not $ace) { Write-Host "✗ ace 未进入 PATH，请重新打开终端或检查 npm global bin"; exit 1 }
 Write-Host "    安装根: $aceRoot"
 
-Write-Host "==> 3/5 同步运行时目录 `$HOME\.aceharness\{configs,skills,scripts} ..."
-$rt = "$HOME\.aceharness"
+Write-Host "==> 3/5 同步运行时目录 ..."
+$rt = (& node "$aceRoot\scripts\runtime-root.mjs").Trim()
 New-Item -ItemType Directory -Force $rt | Out-Null
-foreach ($d in 'configs','skills','scripts') {
-  if (-not (Test-Path "$rt\$d")) {
-    Copy-Item -Recurse "$aceRoot\$d" "$rt\$d"
-    Write-Host "    已同步 $d/"
-  } else {
-    Write-Host "    $rt\$d 已存在，跳过"
-  }
+$homeLink = Join-Path $HOME '.aceharness'
+if ($rt -ne $homeLink -and -not (Test-Path $homeLink)) {
+  New-Item -ItemType Junction -Path $homeLink -Target $rt | Out-Null
+  Write-Host "    已把 ~/.aceharness 链接到 $rt"
 }
+& node "$aceRoot\scripts\sync-missing-runtime-files.mjs" $aceRoot $rt
+if ($LASTEXITCODE -ne 0) { Write-Host "✗ 运行时文件补齐失败"; exit 1 }
 
 Write-Host "==> 4/5 改写 SDK 清单路径 -> $SdkRoot ..."
-$sdkConf = "$rt\configs\ohos-flutter-sdks.yaml"
+$sdkConf = Join-Path $rt 'configs\ohos-flutter-sdks.yaml'
 if (Test-Path $sdkConf) {
   Copy-Item $sdkConf "$sdkConf.ace-deploy-bak"
-  (Get-Content $sdkConf -Raw) -replace '/home/flutter/flutter-sdks', ($SdkRoot -replace '\\','/') | Set-Content $sdkConf -NoNewline
+  $sdkText = ($SdkRoot -replace '\\','/')
+  & node "$aceRoot\scripts\rewrite-sdk-root.mjs" $sdkConf '/home/flutter/flutter-sdks' $sdkText
+  if ($LASTEXITCODE -ne 0) { Write-Host "✗ SDK 路径改写失败"; exit 1 }
   Write-Host "    校验: $((Select-String -Path $sdkConf -Pattern 'sdkRoot').Line.Trim())（原文件备份 .ace-deploy-bak）"
 } else {
   Write-Host "    未找到 $sdkConf，跳过"
@@ -88,6 +98,6 @@ Write-Host @"
 
   3) 启动平台：ace start → http://localhost:3000
 
-  注意：agent 执行终端请使用 PowerShell 7+ 或 Git Bash（工作流配置中的 ~/.aceharness
-  路径依赖 shell 的 ~ 展开；cmd.exe 不展开 ~）。
+  注意：运行时目录在 %APPDATA%\ACEHarness。若它和 $HOME\.aceharness 不同，安装脚本会建目录联接，
+  PowerShell 里的 ~/.aceharness 因此能用。cmd.exe 不展开 ~，不要用它跑工作流命令。
 "@

@@ -15,8 +15,8 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { parse } from 'yaml';
+import { getWorkspaceConfigsDir } from '@/lib/core/app-paths';
 
 export type PrAutoMode = 'monitor_only' | 'suggest_fix' | 'manual_apply' | 'auto_fix_limited';
 export type BuildTrigger = 'always' | 'on_fix' | 'never';
@@ -55,7 +55,7 @@ export const DEFAULT_POLICY: PrReviewPolicy = {
 export function resolvePolicyPath(): string {
   const override = process.env.ACE_PR_POLICY_FILE?.trim();
   if (override) return override;
-  return join(homedir(), '.aceharness', 'configs', 'pr-review-policies.yaml');
+  return join(getWorkspaceConfigsDir(), 'pr-review-policies.yaml');
 }
 
 /** 内容哈希作为策略版本；空配置返回固定基线版本。 */
