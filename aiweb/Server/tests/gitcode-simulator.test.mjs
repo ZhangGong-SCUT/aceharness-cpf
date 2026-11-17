@@ -194,10 +194,15 @@ test('评论按 100 条分页，access_token 作者和提交列表保持正确',
   await sim('settings', { pushAckDelayMs: 1200 });
   await sim('push-ack', { owner: 'CPF-Flutter', repo: 'flutter_flutter', number: 100 });
 
+  // --since 的起点必须严格晚于上面 git-push 刚产生的即时确认（gitAckDelayMs=0）。
+  // 从 git-push 到这里只隔几次本地 HTTP 往返（常 <100ms），now-100ms 的回看窗口兜不住旧确认，
+  // 脚本会在首轮轮询直接 ack 在旧评论上并立刻发出 start build，pushAckDelayMs=1200 的新确认
+  // 反而落到 start build 之后，与末尾断言形成竞态（机器越快越容易失败）。
+  // 起点取 now+1ms 保证严格晚于已入列的旧确认：脚本必须等延迟的新确认，末尾断言才稳定。
   const posted = JSON.parse(await runScript(commentScript, [
     '--owner', 'CPF-Flutter', '--repo', 'flutter_flutter', '--number', '100',
     '--out', join(root, 'comment-output-105'), '--body', 'start build',
-    '--wait-push-ack', '--wait-timeout', '8', '--since', new Date(Date.now() - 100).toISOString(),
+    '--wait-push-ack', '--wait-timeout', '8', '--since', new Date(Date.now() + 1).toISOString(),
   ]));
   assert.equal(posted.wait_ack, 'acked', '最近 50 条评论必须包含新的 push 确认');
 
