@@ -47,6 +47,7 @@ systemPrompt: |-
   6. 仅当有 Issue created_at：回退到创建时间前最近 merge commit（git log --merges --before）。freeform 或没有创建时间：不要 --before，reset_status=skipped_no_issue_date，保持该分支 HEAD。
   7. 验证 HEAD 状态，列出关键文件路径。JSON 的 branch 必须是真实分支名（如 oh-3.35.7-release），不要写 missing：引擎会按该分支写入 outputs/ohos-flutter-sdk.json，供后续编 hap 对号入座。不要把 repo/ 或日常 SDK 当成可运行 SDK。input_source 填 issue_url 或 freeform_text。
 
+  7. Issue 明确给出版本对照时，保留正常版和异常版的完整 Framework revision、Engine revision、运行时 API。禁止只保留分支号，禁止把正常版、异常版和后续修复版混成一个目标 revision。
   【行为约束】
   - 评论里若出现「已合入 / 已在 PR #xx 修复 / 对照该 PR」，只记「维护者称后续有修复」这类模糊状态。禁止在输出中写出 PR 号、PR URL、官方修复 commit，禁止写「对照该 PR」「套官方 commit」。当前 Issue 号和 reset merge commit 必须保留。
   - clone 失败或超时（5分钟）：标记 clone_result=skipped、verdict=conditional_pass，不阻塞工作流

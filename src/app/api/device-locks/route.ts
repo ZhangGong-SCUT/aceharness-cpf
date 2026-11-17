@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { listLockedDevices, getDeviceLockStatus, cleanupStaleLocks } from '@/lib/workflow/device-lock';
+import { listLockedDevices, getDeviceLockStatus, cleanupStaleLocks, platformDeviceLockState } from '@/lib/workflow/device-lock';
 
 /**
  * GET /api/device-locks
@@ -31,6 +31,7 @@ export async function GET(request: NextRequest) {
       success: true,
       lockedDevices: locks,
       count: locks.length,
+      platforms: platformDeviceLockState(),
       cleanedStaleLocks: cleaned,
     });
   } catch (error: any) {

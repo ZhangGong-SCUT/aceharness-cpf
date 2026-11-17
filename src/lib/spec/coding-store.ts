@@ -169,7 +169,7 @@ function parseSpecCodingTasksFromMarkdown(
     for (const line of detailLines) {
       const match = line.match(/_需求[：:]\s*(.+?)_/);
       if (match) {
-        reqs.push(...match[1].split(/[,，]\s*/).map((s) => s.trim()).filter(Boolean));
+        reqs.push(...match[1].split(/[,，、]\s*/).map((s) => s.trim()).filter(Boolean));
       }
     }
     return reqs;

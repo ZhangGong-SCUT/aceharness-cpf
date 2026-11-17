@@ -4,17 +4,21 @@
  */
 
 import { EventEmitter } from 'events';
+import { extractLooseStructuredResult } from '@/lib/ai/result-channel';
+import { selectResumeStepKey } from '../../../aiweb/Server/issueAnalysis/failureTriage.js';
 import { executePrScript } from '@/lib/workflow/pr-script-step';
 import { resolvePrScript } from '@/lib/workflow/pr-identity-step';
 import { portableSummaryFileName } from '@/lib/core/portable-filename';
 import { ensurePrHeadCheckout, shouldCheckoutPrHead } from '@/lib/workflow/pr-checkout';
 import { resolveRunEngineDirectory } from '@/lib/workflow/run-engine-directory';
 import { executeDiagnosisScript } from '@/lib/workflow/diagnosis-script-step';
+import { acquireStepDeviceLock, beginStepDeviceSession, deviceLockMode, deviceLockPromptNote, releaseRunDeviceLocks, type StepDeviceLock } from '@/lib/workflow/device-lock';
+import { createSdkOverlay, removeSdkOverlaySnapshot } from '@/lib/workflow/sdk-overlay';
 import { randomUUID } from 'crypto';
 import { readFile, readdir, stat, mkdir, rm, writeFile, copyFile } from 'fs/promises';
 import { resolve, join, dirname, isAbsolute, relative } from 'path';
 import { shouldCopyWorkflowTemplateEntry } from '@/lib/workflow/template-isolation';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { createDirectoryLinkSync } from '@/lib/core/directory-links';
 import { cpus } from 'os';
 import { parse } from 'yaml';
@@ -67,7 +71,9 @@ import {
   parseWorkflowVerdict,
   pickCircuitBreakerEscape,
   enforceFixVerificationGoldenFlag,
+  isDiagnosisVerificationExitValid,
   isEngineLevelFailure,
+  summarizeEngineFailure,
   isFixVerificationStep,
   matchTransitionFieldConditions,
   hasTransitionFieldCondition,
@@ -131,12 +137,18 @@ import {
   OHOS_FLUTTER_SDK_PIN_FILE,
   buildOhosFlutterSdkPrompt,
   extractBaseBranch,
+  isPendingOhosFlutterSdkMatch,
+  shouldDeferOhosFlutterSdkPin,
   extractRepoBranch,
   loadOhosFlutterSdkPinFile,
   readRepoBranchFromDisk,
   resolveOhosFlutterSdk,
   type ResolvedOhosFlutterSdk,
 } from '@/lib/workflow/ohos-flutter-sdk';
+import { buildRevisionEvidence, extractIssueRevisionExpectation, readFlutterSdkRevisions, revisionEvidenceText } from '@/lib/workflow/revision-evidence';
+import { prepareIssueSdkOverlay, type IssueSdkAlignmentTarget } from '@/lib/workflow/align-issue-sdk';
+import { extractPreciseVersionTag, historicalCommitFromCollection } from '@/lib/workflow/version-align';
+
 import { appendMemoryEntries } from '@/lib/workflow/memory-store';
 import { upsertRelationshipSignal } from '@/lib/agent/relationship-store';
 import {
@@ -564,7 +576,7 @@ function hasHttpAuthStatus(message: string): boolean {
     || /\b(?:401|403)\s+(?:Unauthorized|Forbidden|Unauthenticated)\b/i.test(message);
 }
 
-function isTransientEngineFailure(message: string): boolean {
+export function isTransientEngineFailure(message: string): boolean {
   const normalized = String(message || '');
   if (!normalized.trim()) return false;
   if (/(?:unauthorized|invalid token|invalid api key|authentication failed)/i.test(normalized)) return false;
@@ -577,7 +589,8 @@ function isTransientEngineFailure(message: string): boolean {
     || /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE/i.test(normalized)
     || /(?:HTTP\s*)?(?:429|500|502|503|504)\b/i.test(normalized)
     || /engine (?:unavailable|connection .*failed|process .*failed|session .*failed)/i.test(normalized)
-    || /引擎(?:不可用|连接.*失败|连接.*断开)/.test(normalized);
+    || /引擎(?:不可用|连接.*失败|连接.*断开)/.test(normalized)
+    || /未产生任何输出/.test(normalized);
 }
 
 function isRecoverableStepExecutionError(message: string): boolean {
@@ -711,6 +724,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private currentRunSpecCoding: SpecCodingDocument | null = null;
   private currentWorkflowConfig: StateMachineWorkflowConfig | null = null;
   private lastFixVerificationVerdict: WorkflowVerdict | null = null;
+  private diagnosisReproductionStatus: string | null = null;
+  /** 最后一次修复验证对 Issue 原始黄金标志的判定；report 路径必须保留 false 的含义。 */
+  private lastFixVerificationGoldenFlag: boolean | null = null;
   /** F04：conditional_pass 的具体原因（来自验证步骤输出），用于准确描述"验证受限"与"验证失败" */
   private lastFixVerificationConditionalReason: string | null = null;
   /** F01：诊断收尾归档状态。run 可能 completed 但归档不完整，必须单独可见 */
@@ -1525,6 +1541,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.status = 'preparing';
       this.statusReason = null;
       this.lastFixVerificationVerdict = null;
+      this.lastFixVerificationGoldenFlag = null;
       this.lastFixVerificationConditionalReason = null;
       this.diagnosisArtifactStatus = null;
       this.diagnosisVerificationStatus = null;
@@ -2021,8 +2038,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
       currentConfigFile: this.currentConfigFile
     });
 
-    // Kill any running child processes immediately
+    // Kill any running child processes immediately, then drop this run's device locks
+    // so the next queued analysis can take the device without waiting out the lease.
     this.cancelCurrentProcesses();
+    this.releaseActiveDeviceLocks();
 
     await this.finalizeRun('stopped');
   }
@@ -2824,6 +2843,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.cancelCurrentProcesses();
     this.cleanupCurrentEngine();
     await this.cleanupWorkspaceSkills();
+    await this.cleanupRunSdkOverlay();
     await this.recordFinalGitSnapshot(status);
 
     // 持久化 spec 模式：运行完成后标记 delta 可人工合入 master
@@ -2952,23 +2972,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   private getResumeStepKeyForRun(runState: PersistedRunState, config: StateMachineWorkflowConfig): string | null {
-    const stateName = runState.currentState;
-    if (!stateName || stateName === '__human_approval__') return null;
-    const state = config.workflow.states.find((item) => item.name === stateName);
-    if (!state) return null;
-    const validStepKeys = new Set(state.steps.map((step) => this.getWorkflowStepKey(state.name, step)));
-    if (validStepKeys.size === 0) return null;
-
-    const failedLog = [...(runState.stepLogs || [])]
-      .reverse()
-      .find((log) => log.status === 'failed' && validStepKeys.has(log.stepName));
-    if (failedLog) return failedLog.stepName;
-
-    const activeStep = (runState.activeSteps || []).find((stepKey) => validStepKeys.has(stepKey));
-    if (activeStep) return activeStep;
-
-    const currentStep = runState.currentStep || '';
-    return validStepKeys.has(currentStep) ? currentStep : null;
+    const state = config.workflow.states.find((item) => item.name === runState.currentState);
+    return state ? selectResumeStepKey(runState, state) : null;
   }
 
   private collectSkippedStepOutput(step: WorkflowStep, stateName: string, stepOutputs: string[], issues: Issue[], useVerdict = true): 'pass' | 'conditional_pass' | 'fail' | null {
@@ -3971,6 +3976,34 @@ export class StateMachineWorkflowManager extends EventEmitter {
   /**
    * Initialize the AI engine based on workflow config first, then global config.
    */
+  public async reviewFailureAsSupervisor(prompt: string, config: StateMachineWorkflowConfig): Promise<string> {
+    const supervisor = config.roles?.find((role) => role.name === this.currentSupervisorAgent);
+    if (!supervisor && !this.agentConfigs.some((role) => role.name === this.currentSupervisorAgent)) {
+      throw new Error(`找不到 Supervisor 配置: ${this.currentSupervisorAgent}`);
+    }
+    return this.queryAgent(this.currentSupervisorAgent, prompt, config);
+  }
+
+  /** Read-only Supervisor review for failure recovery; it does not resume or mutate the run. */
+  public async reviewFailureForRun(runId: string, prompt: string): Promise<string> {
+    const reviewer = new StateMachineWorkflowManager();
+    return reviewer.reviewFailureAsSupervisorForRun(runId, prompt);
+  }
+
+  private async reviewFailureAsSupervisorForRun(runId: string, prompt: string): Promise<string> {
+    if (this.status === 'running') throw new Error('故障复核器正忙，请稍后重试');
+    const run = await loadRunState(runId);
+    if (!run || run.mode !== 'state-machine') throw new Error('运行证据不存在，无法进行 Supervisor 复核');
+    this.currentRunId = runId;
+    this.currentConfigFile = run.configFile;
+    this.currentSupervisorAgent = run.supervisorAgent || DEFAULT_SUPERVISOR_NAME;
+    this.currentProjectRoot = run.workingDirectory || null;
+    const config = parse(await this.readWorkflowConfigContent(run.configFile)) as StateMachineWorkflowConfig;
+    await this.loadAgentConfigs();
+    await this.initializeEngine(config.context?.engine);
+    return this.reviewFailureAsSupervisor(prompt, config);
+  }
+
   private async initializeEngine(workflowEngine?: string, deferCreation = false): Promise<void> {
     try {
       const requestedEngine = workflowEngine?.trim();
@@ -5134,7 +5167,7 @@ try {
         group === groupState ? { ...groupState } : group
       );
       await this.persistState();
-      throw new Error(`引擎异常，已停止工作流：${engineError.error}`);
+      throw new Error(`引擎异常，已停止工作流：${summarizeEngineFailure(engineError.error || '')}`);
     }
 
     const outputs = results.map((item) => item.status === 'fulfilled' ? (item.output || '') : `ERROR: ${item.error || '并发分支失败'}`);
@@ -5285,8 +5318,6 @@ try {
           message: `恢复运行：从失败步骤 ${resumeStepKey} 继续`,
         });
         skippingUntilResumeStep = false;
-        this.resumeStateName = null;
-        this.resumeStepKey = null;
       }
 
       // Delay between segments when using non-claude engines to avoid throttling
@@ -5347,7 +5378,7 @@ try {
         if (isEngineLevelFailure(errorMsg)) {
           // Engine-level failures are fatal for state-machine execution to avoid
           // uncontrolled fallback iterations and token burn.
-          throw new Error(`引擎异常，已停止工作流：${errorMsg}`);
+          throw new Error(`引擎异常，已停止工作流：${summarizeEngineFailure(errorMsg)}`);
         }
 
         verdict = 'fail';
@@ -6438,25 +6469,35 @@ try {
         hasIssueUrl: summarizeGlobalContext(context).hasIssueUrl,
       }, executionKind === 'model' && !context.includes('# 全局上下文') ? 'warn' : 'info');
 
+      const deviceLock = step.deviceLock && !scriptOnly && this.currentRunId
+        ? await this.acquireDeviceLockForStep(state.name, step.name, stepStartGeneration)
+        : null;
+      const stepContext = deviceLock ? `${context}\n\n${deviceLockPromptNote(deviceLock)}` : context;
       // Execute step (reuse existing process manager logic)
-      let stepResult = await this.runAgentStep(effectiveStep, context, config, stepId);
-      let output = stepResult.output;
-      if (!scriptOnly && this.shouldRequireFinalVerdict(step, state) && !this.hasRequiredVerdictJson(output)) {
-        const repairContext = this.buildMissingFinalVerdictPrompt(context, output, state, step);
+      const runStepWithVerdict = async () => {
+        const first = await this.runAgentStep(effectiveStep, stepContext, config, stepId);
+        if (scriptOnly || !this.shouldRequireFinalVerdict(step, state) || this.hasRequiredVerdictJson(first.output)) return first;
+        const repairContext = this.buildMissingFinalVerdictPrompt(stepContext, first.output, state, step);
         const repairResult = await this.runAgentStep(step, repairContext, config, stepId);
-        output = [output, repairResult.output].filter(Boolean).join('\n\n---\n\n');
-        stepResult = {
-          ...stepResult,
-          output,
+        return {
+          ...first,
+          output: [first.output, repairResult.output].filter(Boolean).join('\n\n---\n\n'),
           lastRoundOutput: repairResult.lastRoundOutput || repairResult.output,
-          costUsd: stepResult.costUsd + repairResult.costUsd,
-          durationMs: stepResult.durationMs + repairResult.durationMs,
-          sessionId: repairResult.sessionId || stepResult.sessionId,
-          tokenUsage: this.mergeTokenUsage(stepResult.tokenUsage, repairResult.tokenUsage),
+          costUsd: first.costUsd + repairResult.costUsd,
+          durationMs: first.durationMs + repairResult.durationMs,
+          sessionId: repairResult.sessionId || first.sessionId,
+          tokenUsage: this.mergeTokenUsage(first.tokenUsage, repairResult.tokenUsage),
         };
+      };
+      let stepResult: Awaited<ReturnType<typeof runStepWithVerdict>>;
+      try {
+        stepResult = await runStepWithVerdict();
+      } finally {
+        deviceLock?.release();
       }
+      const output = stepResult.output;
       if (isEngineLevelFailure(output)) {
-        throw new Error(output.trim() || '引擎返回致命错误输出');
+        throw new Error(summarizeEngineFailure(output));
       }
       this.assertStepOutputIsNotSupervisorReview(step, state, runtimeAgentName, output);
       const conclusion = compactStepConclusion(stepResult.lastRoundOutput || output);
@@ -6470,6 +6511,8 @@ try {
 
       try {
         await this.refreshOhosFlutterSdkPin(state.name, `${conclusion}\n${output}`);
+        this.updateDiagnosisReproductionEvidence(state.name, conclusion);
+        this.persistDiagnosisRevisionEvidence();
       } catch (error) {
         throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
           costUsd: stepResult.costUsd, durationMs: stepResult.durationMs, tokenUsage: stepResult.tokenUsage,
@@ -6938,6 +6981,18 @@ try {
       parts.push(`\n# 需求说明\n${requirements}`);
     }
 
+    // Breakpoint resume starts a fresh model process. Session memory is optional;
+    // make already completed results in this state explicit and bounded.
+    if (this.resumeStepKey === `${state.name}-${step.name}`) {
+      const completedOutputs = (this.stepLogs || [])
+        .filter(log => log.status === 'completed' && log.stepName.startsWith(`${state.name}-`)
+          && log.stepName !== this.resumeStepKey && (Boolean(log.outputRef) || Boolean(log.output?.trim())))
+        .map(log => `## ${log.stepName}\n${compactStepConclusion(this.readStepLogOutput(log)).slice(0, 6000)}`);
+      if (completedOutputs.length) {
+        parts.push(`\n# 断点恢复：已完成步骤结论（只读继承，不要重跑）\n${completedOutputs.join('\n\n').slice(0, 24000)}`);
+      }
+    }
+
     if (this.currentRunSpecCoding) {
       const relevantPhase = this.currentRunSpecCoding.phases.find((phase) => phase.title === state.name);
       const flattenTasksForPrompt = (
@@ -7080,14 +7135,28 @@ try {
     }
 
     try {
-      parts.push(`\n${buildOhosFlutterSdkPrompt(this.getOhosFlutterSdkPin() || resolveOhosFlutterSdk({
-        branch: extractRepoBranch(this.globalContext) || this.readWorkspaceRepoBranch(),
-        fallbackBranch: extractBaseBranch(this.globalContext),
-      }))}`);
+      const branch = extractRepoBranch(this.globalContext) || this.readWorkspaceRepoBranch();
+      const fallbackBranch = extractBaseBranch(this.globalContext);
+      const pin = this.getOhosFlutterSdkPin();
+      if (pin && !isPendingOhosFlutterSdkMatch(pin)) {
+        parts.push(`\n${buildOhosFlutterSdkPrompt(pin)}`);
+      } else if (!shouldDeferOhosFlutterSdkPin({ branch, fallbackBranch })) {
+        parts.push(`\n${buildOhosFlutterSdkPrompt(resolveOhosFlutterSdk({ branch, fallbackBranch }))}`);
+      }
     } catch {
       const pin = this.getOhosFlutterSdkPin();
-      if (pin) parts.push(`\n${buildOhosFlutterSdkPrompt(pin)}`);
+      if (pin && !isPendingOhosFlutterSdkMatch(pin)) parts.push(`\n${buildOhosFlutterSdkPrompt(pin)}`);
     }
+    for (const [file, label] of [
+      ['diagnosis-reproduction-evidence.json', '原始复现证据（机器提取，不得改写）'],
+      ['diagnosis-revision-evidence.json', 'Issue 指定版本证据（不等于替代环境已对齐）'],
+    ]) {
+      const root = this.getWorkingDirectory();
+      const path = root ? join(root, 'outputs', file) : null;
+      if (path && existsSync(path)) parts.push(`\n# ${label}\n${readFileSync(path, 'utf8')}`);
+    }
+    const workingDirectory = this.getWorkingDirectory();
+    if (workingDirectory) parts.push(revisionEvidenceText(workingDirectory));
 
     const conclusionScope = isLastStepInState
       ? `当前步骤是状态 "${state.name}" 的最后一个步骤。`
@@ -7443,6 +7512,69 @@ try {
     } while (true);
   }
 
+  private activeStepDeviceLock: StepDeviceLock | null = null;
+
+  /** 停掉分析时立刻放锁。步骤自己的 finally 还会再放一次，重复调用是空操作。 */
+  private releaseActiveDeviceLocks(): void {
+    const runId = this.currentRunId;
+    try { this.activeStepDeviceLock?.release(); } catch { /* 下面按锁文件再清一次 */ }
+    if (!runId) return;
+    try {
+      const result = releaseRunDeviceLocks(runId);
+      const released = [...(result?.releasedKeys || []), ...(result?.released || [])];
+      this.emit('log', {
+        level: 'info',
+        message: released.length
+          ? `已释放本分析占用的设备锁：${released.join('、')}`
+          : `已确认本分析没有占用设备锁：${runId}`,
+      });
+    } catch (error) {
+      this.emit('log', {
+        level: 'warning',
+        message: `释放设备锁失败：${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+
+  private trackStepDeviceLock(lock: StepDeviceLock): StepDeviceLock {
+    this.activeStepDeviceLock = lock;
+    const release = lock.release.bind(lock);
+    lock.release = () => {
+      if (this.activeStepDeviceLock === lock) this.activeStepDeviceLock = null;
+      release();
+    };
+    return lock;
+  }
+
+  private async acquireDeviceLockForStep(stateName: string, stepName: string, generation: number): Promise<StepDeviceLock> {
+    const label = `${stateName}/${stepName}`;
+    if (deviceLockMode() === 'platform') {
+      const session = this.trackStepDeviceLock(beginStepDeviceSession({ runId: this.currentRunId!, stepName: label }));
+      this.logRunDiagnostic('device.lock', { step: label, mode: 'platform', acquired: true, waitedMs: 0, holder: null }, 'info');
+      this.emit('log', { level: 'info', message: `设备锁按平台按需申请：${label}，步骤结束释放本 run 剩余的平台锁和排队` });
+      return session;
+    }
+    const lock = await acquireStepDeviceLock({
+      runId: this.currentRunId!,
+      stepName: label,
+      shouldAbort: () => this.shouldStop || this.runtimeGeneration !== generation,
+      onWait: (holder, waitedMs) => this.emit('log', {
+        level: 'info',
+        message: `等待设备锁：${label} 需要本机设备，当前被 ${holder?.runId || '其他分析'}（${holder?.stepName || '未知步骤'}）占用，已等 ${Math.round(waitedMs / 60000)} 分钟`,
+      }),
+    });
+    this.logRunDiagnostic('device.lock', {
+      step: label,
+      acquired: lock.acquired,
+      waitedMs: lock.waitedMs,
+      holder: lock.holder?.runId || null,
+    }, lock.acquired ? 'info' : 'warn');
+    this.emit('log', lock.acquired
+      ? { level: 'info', message: `已持有设备锁：${label}（等待 ${Math.round(lock.waitedMs / 1000)} 秒），步骤结束释放` }
+      : { level: 'warning', message: `设备锁等待超时：${label} 不做设备操作，按 needs_runtime_validation 降级` });
+    return this.trackStepDeviceLock(lock);
+  }
+
   private async runAgentStep(
     step: WorkflowStep,
     context: string,
@@ -7780,12 +7912,20 @@ try {
         if (isTransientEngineFailure(errorMsg) && transientEngineRetryAttempts < TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS) {
           transientEngineRetryAttempts += 1;
           const retryDelayMs = 1000 * transientEngineRetryAttempts;
+          const emptyOutput = /未产生任何输出/.test(errorMsg);
           this.emit('log', {
             agent: runtimeAgentName,
             level: 'warning',
-            message: `步骤 "${streamStepName}" 出现临时引擎异常，${retryDelayMs}ms 后重试 ${transientEngineRetryAttempts}/${TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS}: ${errorMsg}`,
+            message: emptyOutput
+              ? `步骤 "${streamStepName}" 没有产生新输出，放弃当前会话后重试 ${transientEngineRetryAttempts}/${TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS}`
+              : `步骤 "${streamStepName}" 出现临时引擎异常，${retryDelayMs}ms 后重试 ${transientEngineRetryAttempts}/${TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS}: ${errorMsg}`,
           });
           if (!await this.waitBeforeEngineRetry(retryDelayMs)) throw new Error('步骤重试等待已取消');
+          if (emptyOutput) {
+            currentSessionId = undefined;
+            currentPrompt = context;
+            streamHasMeaningfulOutput = false;
+          }
           currentProcessId = stepId || currentProcessId;
           currentProcessStreamLength = 0;
           lastStreamAt = Date.now();
@@ -7840,13 +7980,13 @@ try {
         continue;
       }
 
-      if (autoRecoveryAttempts > 0) {
+      const roundOutput = result.result || '';
+      if (autoRecoveryAttempts > 0 && hasMeaningfulAiOutput(roundOutput)) {
         autoRecoveryAttempts = 0;
       }
-      if (transientEngineRetryAttempts > 0) {
+      if (transientEngineRetryAttempts > 0 && hasMeaningfulAiOutput(roundOutput)) {
         transientEngineRetryAttempts = 0;
       }
-      const roundOutput = result.result || '';
       const humanHelpRequests = this.parseHumanHelpRequests(roundOutput, config);
       if (humanHelpRequests.length === 0) {
         accumulatedOutput += (accumulatedOutput ? '\n\n---\n\n' : '') + roundOutput;
@@ -7923,6 +8063,36 @@ try {
         continue;
       }
 
+      if (!hasMeaningfulAiOutput(roundOutput) && !streamHasMeaningfulOutput) {
+        if (transientEngineRetryAttempts < TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS) {
+          transientEngineRetryAttempts += 1;
+          const retryDelayMs = 1000 * transientEngineRetryAttempts;
+          this.emit('log', {
+            agent: runtimeAgentName,
+            level: 'warning',
+            message: `步骤 "${streamStepName}" 没有产生新输出，放弃当前会话后重试 ${transientEngineRetryAttempts}/${TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS}`,
+          });
+          if (!await this.waitBeforeEngineRetry(retryDelayMs)) throw new Error('步骤重试等待已取消');
+          currentSessionId = undefined;
+          currentPrompt = context;
+          streamHasMeaningfulOutput = false;
+          currentProcessId = stepId || currentProcessId;
+          currentProcessStreamLength = 0;
+          lastStreamAt = Date.now();
+          watchdogTriggeredForProcess = '';
+          this.upsertCurrentProcess({
+            pid: Date.now(),
+            id: currentProcessId,
+            agent: runtimeAgentName,
+            step: streamStepName,
+            stepId,
+            startTime: new Date().toISOString(),
+          });
+          continue;
+        }
+        throw new Error(`AI 服务中断：步骤 "${streamStepName}" 未产生任何输出`);
+      }
+
       break;
     }
     } catch (error) {
@@ -7973,6 +8143,16 @@ try {
       });
       return target;
     }
+
+    // 带字段条件的自环先于模型指定的下一状态。问题复现没拿到目标平台锁时留在本状态，不能被 next_state 送走。
+    const selfHold = [...transitions]
+      .sort((a, b) => a.priority - b.priority)
+      .find((transition) => (
+        transition.to === result.stateName
+        && hasAdvancedTransitionCondition(transition)
+        && this.matchCondition(transition.condition, result)
+      ));
+    if (selfHold) return result.stateName;
 
     // AI-suggested next_state is only accepted when it is one of the configured
     // fallback targets for the emitted verdict.
@@ -8168,9 +8348,14 @@ try {
     const verdict = enforceFixVerificationGoldenFlag(output, parseWorkflowVerdict(output), {
       ...context,
       sdkMatched: pin?.matched,
+      reproductionStatus: this.readDiagnosisReproductionStatus(),
+      revisionMatched: this.readDiagnosisRevisionStatus(),
     });
     if (isFixVerificationStep(context)) {
+      const verification = extractLooseStructuredResult(output);
       this.lastFixVerificationVerdict = verdict;
+      this.lastFixVerificationGoldenFlag = typeof verification.fields.issue_golden_flag_met === 'boolean'
+        ? verification.fields.issue_golden_flag_met : null;
       // F04/R02：verdict 与 conditional_reason 必须在同一次解析中同步替换；
       // 新一轮修复验证输出会覆盖旧值，避免继承上一轮的原因
       this.lastFixVerificationConditionalReason = extractConditionalReason(output);
@@ -8227,9 +8412,13 @@ try {
       lastFixVerificationVerdict: this.lastFixVerificationVerdict,
       finalStateName: this.currentState,
       fixVerificationReached,
+      diagnosisVerificationExitValid: isDiagnosisVerificationExitValid(this.stateHistory, fixVerificationReached),
       conditionalReason: this.lastFixVerificationConditionalReason,
       diagnosisArtifactStatus: this.diagnosisArtifactStatus?.status || null,
       diagnosisVerificationStatus: this.diagnosisVerificationStatus,
+      diagnosisReproductionStatus: this.readDiagnosisReproductionStatus(),
+      diagnosisRevisionMatched: this.readDiagnosisRevisionStatus(),
+      diagnosisVerificationGoldenFlag: this.lastFixVerificationGoldenFlag,
     });
     const runId = options?.runId || this.currentRunId;
     if (!gate.complete) {
@@ -8590,6 +8779,7 @@ try {
     this.activeConcurrencyGroups = [];
     this.stepLogs = runState.stepLogs || [];
     this.lastFixVerificationVerdict = null;
+    this.lastFixVerificationGoldenFlag = null;
     this.hydrateLastFixVerificationVerdict();
     this.diagnosisArtifactStatus = runState.diagnosisArtifactStatus || null;
     this.diagnosisVerificationStatus = runState.diagnosisVerificationStatus || null;
@@ -8732,15 +8922,63 @@ try {
   }
 
   private getOhosFlutterSdkPin(): ResolvedOhosFlutterSdk | null {
-    if (this.ohosFlutterSdk) return this.ohosFlutterSdk;
+    if (this.ohosFlutterSdk) return this.reviveSdkOverlay(this.ohosFlutterSdk);
     for (const filePath of this.getOhosFlutterSdkPinPaths()) {
       const pin = loadOhosFlutterSdkPinFile(filePath);
       if (pin) {
         this.ohosFlutterSdk = pin;
-        return pin;
+        return this.reviveSdkOverlay(pin);
       }
     }
     return null;
+  }
+
+  private runSdkOverlayDir(): string | null {
+    return this.currentRunId ? join(resolve(getWorkspaceRunsDir(), this.currentRunId), 'sdk-overlay') : null;
+  }
+
+  /** 同步恢复入口只能标记待重建，真正的 worktree+precache 在异步 pin 刷新中完成。 */
+  private reviveSdkOverlay(pin: ResolvedOhosFlutterSdk): ResolvedOhosFlutterSdk {
+    const overlayDir = this.runSdkOverlayDir();
+    if (!overlayDir || !pin.matched || !pin.flutterBin || !pin.sourceSdkRoot) return pin;
+    if (relative(overlayDir, resolve(pin.flutterBin)).startsWith('..')) return pin;
+    const align = pin.versionAlign;
+    if (align?.aligned && align.targetCommit && align.repositoryRoot && align.alignedSdkRoot
+      && !existsSync(align.alignedSdkRoot)) {
+      // 标记待重建；persistOhosFlutterSdkPin 异步执行，禁止将缺失副本视为已验证。
+      return { ...pin, versionAlign: { ...align, precacheOk: false, artifactVerified: false,
+        reason: '历史 worktree 已清理；必须按固定 commit 重新派生并 precache，不能退回共享 SDK' } };
+    }
+    if (existsSync(pin.flutterBin)) {
+      try {
+        const manifest = JSON.parse(readFileSync(join(overlayDir, 'overlay-manifest.json'), 'utf8'));
+        if (manifest.sdkRoot === realpathSync(pin.sourceSdkRoot)) return pin;
+      } catch { /* 缺少/损坏清单的残留链接不能冒充完整隔离副本。 */ }
+    }
+    try {
+      const overlay = createSdkOverlay(pin.sourceSdkRoot, overlayDir);
+      this.logRunDiagnostic('ohos.flutter.sdk.overlay.revived', { flutterBin: overlay.flutterBin, sdkRoot: pin.sourceSdkRoot });
+    } catch (error: any) {
+      // 对齐副本已随上次 run 结束清理时，sourceSdkRoot 不存在会导致此处失败。
+      // 给出明确提示：恢复诊断需经 persistOhosFlutterSdkPin 重新对齐重建，不静默退回共享 SDK。
+      const alignTag = pin.versionAlign?.targetTag;
+      this.logRunDiagnostic('ohos.flutter.sdk.overlay', {
+        error: String(error?.message || error).slice(0, 200),
+        sdkRoot: pin.sourceSdkRoot,
+        ...(alignTag ? { note: `精确版本对齐副本(${alignTag})已清理，需重新对齐重建` } : {}),
+      }, 'warn');
+    }
+    return pin;
+  }
+
+  private async cleanupRunSdkOverlay(): Promise<void> {
+    const overlayDir = this.runSdkOverlayDir();
+    if (!overlayDir || process.env.ACE_KEEP_SDK_OVERLAY === '1') return;
+    try {
+      if (await removeSdkOverlaySnapshot(overlayDir)) this.logRunDiagnostic('ohos.flutter.sdk.overlay.removed', { overlayDir });
+    } catch (error: any) {
+      this.logRunDiagnostic('ohos.flutter.sdk.overlay', { error: String(error?.message || error).slice(0, 200), overlayDir }, 'warn');
+    }
   }
 
   private readWorkspaceRepoBranch(): string | null {
@@ -8751,54 +8989,137 @@ try {
       || readRepoBranchFromDisk(join(workingDir, 'repo-engine'));
   }
 
-  private async persistOhosFlutterSdkPin(resolved: ResolvedOhosFlutterSdk): Promise<void> {
-    // 使用独立 SDK 副本；创建失败必须阻断，不能退回共享 SDK。
-    let effective = resolved;
-    if (resolved.matched && resolved.sdkRoot && this.currentRunId) {
-      try {
-        const { createSdkOverlay } = await import('@/lib/workflow/sdk-overlay');
-        const overlayDir = join(resolve(getWorkspaceRunsDir(), this.currentRunId), 'sdk-overlay');
-        const overlay = createSdkOverlay(resolved.sdkRoot, overlayDir);
-        if (!overlay.flutterBin) throw new Error('SDK 副本缺少 Flutter 入口');
-        if (overlay.flutterBin) {
-          effective = {
-            ...resolved,
-            sdkRoot: overlay.sdkLink,
-            flutterBin: overlay.flutterBin,
-            reason: `${resolved.reason}（本 run 使用独立 SDK 副本，源路径：${resolved.sdkRoot}）`,
-          } as ResolvedOhosFlutterSdk;
-        }
-      } catch (error: any) {
-        this.logRunDiagnostic('ohos.flutter.sdk.overlay', {
-          error: String(error?.message || error).slice(0, 200),
-          sdkRoot: resolved.sdkRoot,
-        }, 'warn');
-        throw new Error(`SDK 隔离失败，已阻止使用共享 SDK：${String(error?.message || error).slice(0, 200)}`);
-      }
-    }
+  /**
+   * 按 Issue 的 tag / 已回退 commit / 创建时间派生 SDK，而不是复用共享 HEAD。
+   * 此函数只在共享 SDK 中读 Git；precache 仅修改独立 worktree 的 bin/cache。
+   */
+  private async persistOhosFlutterSdkPin(resolved: ResolvedOhosFlutterSdk, target: IssueSdkAlignmentTarget = {}): Promise<void> {
+    const effective = this.currentRunId && this.runSdkOverlayDir()
+      ? await prepareIssueSdkOverlay({ resolved, overlayDir: this.runSdkOverlayDir()!, target })
+      : resolved;
     this.ohosFlutterSdk = effective;
     const payload = `${JSON.stringify(effective, null, 2)}\n`;
     for (const filePath of this.getOhosFlutterSdkPinPaths()) {
       await mkdir(dirname(filePath), { recursive: true });
       await writeFile(filePath, payload, 'utf-8');
     }
+    const pending = isPendingOhosFlutterSdkMatch(effective);
     this.logRunDiagnostic('ohos.flutter.sdk', {
       matched: effective.matched,
+      pending,
       branch: effective.branch,
       sdkId: effective.sdkId,
       flutterBin: effective.flutterBin,
       reason: effective.reason,
-    }, effective.matched ? 'info' : 'warn');
+    }, effective.matched || pending ? 'info' : 'warn');
+  }
+
+  private updateDiagnosisReproductionEvidence(stateName: string, output: string): void {
+    if (!/问题复现|复现验证/.test(stateName) || !this.currentRunId) return;
+    const fields = extractLooseStructuredResult(output).fields;
+    if (typeof fields.reproduction_status === 'string') {
+      this.diagnosisReproductionStatus = fields.reproduction_status;
+      return;
+    }
+    try {
+      const file = join(getWorkspaceRunsDir(), this.currentRunId, 'outputs', 'diagnosis-reproduction-evidence.json');
+      const saved = JSON.parse(readFileSync(file, 'utf8'));
+      if (typeof saved.reproduction_status === 'string') this.diagnosisReproductionStatus = saved.reproduction_status;
+    } catch { /* 旧 run 保持 unknown，收尾不猜测。 */ }
+  }
+
+  private readDiagnosisReproductionStatus(): string | null {
+    if (this.diagnosisReproductionStatus) return this.diagnosisReproductionStatus;
+    for (let i = this.stepLogs.length - 1; i >= 0; i -= 1) {
+      const log = this.stepLogs[i];
+      if (!/问题复现|复现验证/.test(log.stepName || '')) continue;
+      const value = extractLooseStructuredResult(this.readStepLogOutput(log)).fields.reproduction_status;
+      if (typeof value === 'string') return value;
+    }
+    return null;
+  }
+
+  private readDiagnosisRevisionStatus(): boolean | null {
+    if (!this.currentRunId) return null;
+    try {
+      const path = join(getWorkspaceRunsDir(), this.currentRunId, 'outputs', 'diagnosis-revision-evidence.json');
+      const value = JSON.parse(readFileSync(path, 'utf8'));
+      if (value.status === 'matched') return true;
+      if (value.status === 'mismatch') return false;
+    } catch { /* 无版本要求的旧 run 不阻断。 */ }
+    return null;
+  }
+
+  private persistDiagnosisRevisionEvidence(): void {
+    const base = this.currentRunId ? join(getWorkspaceRunsDir(), this.currentRunId) : null;
+    const pin = this.getOhosFlutterSdkPin();
+    if (!base || !pin) return;
+    const collect = [...this.stepLogs].reverse().find(log => /信息采集|Issue信息采集/.test(log.stepName || ''));
+    const expected = extractIssueRevisionExpectation(collect ? this.readStepLogOutput(collect) : this.globalContext);
+    const actual = readFlutterSdkRevisions(pin);
+    const evidence = buildRevisionEvidence({ expected, actual });
+    try {
+      writeFileSync(join(base, 'outputs', 'diagnosis-revision-evidence.json'), JSON.stringify(evidence, null, 2), 'utf8');
+      if (evidence.status === 'mismatch') {
+        this.logRunDiagnostic('ohos.issue.revision.mismatch', { mismatches: evidence.mismatches, requirement: evidence.expected?.requirement }, 'warn');
+      }
+    } catch (error: any) {
+      this.logRunDiagnostic('ohos.issue.revision.evidence_failed', { error: String(error?.message || error).slice(0, 160) }, 'warn');
+    }
+  }
+
+  private readIssueAlignmentInput(): { collectorCommit?: string | null; issueCreatedAt?: string | null } {
+    const workingDir = this.getWorkingDirectory();
+    if (!workingDir) {
+      const collect = [...this.stepLogs].reverse().find(log => /信息采集|Issue信息采集/.test(log.stepName || ''));
+      const text = collect ? this.readStepLogOutput(collect) : this.globalContext;
+      const fields = extractLooseStructuredResult(text).fields;
+      return { collectorCommit: historicalCommitFromCollection(fields),
+        issueCreatedAt: typeof fields.issue_created_at === 'string' ? fields.issue_created_at : undefined };
+    }
+    try {
+      const input = JSON.parse(readFileSync(join(workingDir, 'outputs', 'diagnosis-input.json'), 'utf8'));
+      return { ...input, issueCreatedAt: typeof input.issue_created_at === 'string' ? input.issue_created_at : undefined,
+        collectorCommit: historicalCommitFromCollection(input) };
+    } catch {
+      const collect = [...this.stepLogs].reverse().find(log => /信息采集|Issue信息采集/.test(log.stepName || ''));
+      const text = collect ? this.readStepLogOutput(collect) : this.globalContext;
+      const fields = extractLooseStructuredResult(text).fields;
+      return { collectorCommit: historicalCommitFromCollection(fields),
+        issueCreatedAt: typeof fields.issue_created_at === 'string' ? fields.issue_created_at
+          : text.match(/"issue_created_at"\s*:\s*"([^"]+)"/)?.[1] };
+    }
   }
 
   private async refreshOhosFlutterSdkPin(stateName: string, output: string): Promise<void> {
     const branch = extractRepoBranch(output) || this.readWorkspaceRepoBranch() || this.ohosFlutterSdk?.branch;
     const fallbackBranch = extractBaseBranch(output) || extractBaseBranch(this.globalContext);
+    if (shouldDeferOhosFlutterSdkPin({ branch, fallbackBranch })) {
+      // 克隆完成前没有分支。跳过写入 matched=false，等拿到分支再对号入座。
+      this.logRunDiagnostic('ohos.flutter.sdk', {
+        matched: false,
+        pending: true,
+        stateName,
+        reason: '等待仓库分支后再对号入座',
+      }, 'info');
+      return;
+    }
     const shouldRefresh = /信息采集|Issue信息采集/.test(stateName)
-      || Boolean(extractRepoBranch(output))
+      || (Boolean(extractRepoBranch(output)) && !this.ohosFlutterSdk?.matched)
       || Boolean(branch && !this.ohosFlutterSdk?.matched);
-    if (!shouldRefresh && this.ohosFlutterSdk) return;
-    await this.persistOhosFlutterSdkPin(resolveOhosFlutterSdk({ branch, fallbackBranch }));
+    if (!shouldRefresh) return;
+    // 已确认匹配后，后续报告/验证中的「分支 B」等弱证据不得把固定 SDK 降级。
+    // 版本变化必须由采集步骤明确提供，不能由任意阶段输出覆盖。
+    if (this.ohosFlutterSdk?.matched) {
+      const diskBranch = this.readWorkspaceRepoBranch();
+      if (!diskBranch || diskBranch === this.ohosFlutterSdk.branch) return;
+    }
+    const input = this.readIssueAlignmentInput();
+    const preciseTag = extractPreciseVersionTag(output) || extractPreciseVersionTag(this.globalContext);
+    const collectorCommit = historicalCommitFromCollection(extractLooseStructuredResult(output).fields)
+      || input.collectorCommit;
+    await this.persistOhosFlutterSdkPin(resolveOhosFlutterSdk({ branch, fallbackBranch }),
+      { ...input, preciseTag, collectorCommit, branch });
   }
 
   setQueuedApprovalAction(action: 'approve' | 'iterate'): void {

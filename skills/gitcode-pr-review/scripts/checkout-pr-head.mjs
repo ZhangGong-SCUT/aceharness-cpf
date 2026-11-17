@@ -73,12 +73,22 @@ export function matchSdkRepo(entries, baseRef) {
   return entries.find((entry) => [entry.id, ...(entry.aliases || [])].some((item) => normalize(item) === want)) || null;
 }
 
-function loadSdkRepo(baseRef, configFile) {
+function findSdkRepo(baseRef, configFile) {
   const file = configCandidates(configFile).find((item) => existsSync(item));
-  if (!file) throw new Error('找不到 ohos-flutter-sdks.yaml，无法按 base_ref 定位本机仓库');
+  if (!file) return null;
   const match = matchSdkRepo(readInventory(file), baseRef);
-  if (!match) throw new Error(`清单里没有 base_ref=${baseRef} 对应的本机仓库`);
+  if (!match) return null;
   return { config: file, path: resolve(match.path) };
+}
+
+/** 清单未命中时按 head_repo 缓存该仓库，不写入 Flutter SDK 目录。 */
+export function repoCachePath(headRepo, root = runtimeRoot()) {
+  const repo = String(headRepo || '').replace(/\.git$/i, '').replace(/^https?:\/\/[^/]+\//, '');
+  const parts = repo.split('/').filter(Boolean);
+  if (parts.length !== 2 || parts.some((part) => part === '.' || part === '..' || !/^[\w.-]+$/.test(part))) {
+    throw new Error('缺少 head_repo，无法确定 fork');
+  }
+  return join(root, 'repo-cache', 'gitcode.com', parts[0], parts[1]);
 }
 
 function forkUrl(headRepo) {
@@ -158,9 +168,12 @@ function ensureWorktree(source, dest, headRef, headSha) {
 export function checkoutPrHead(options) {
   const headRef = options.headRef;
   if (!headRef) throw new Error('缺少 head_ref');
+  // base_ref 能对上 ohos-flutter-sdks.yaml 时复用本机 Flutter SDK。
+  // 对不上说明这是插件或其它仓库自己的分支，按 head_repo 浅克隆到仓库缓存。
   const sdk = options.sourcePath
     ? { path: resolve(options.sourcePath) }
-    : loadSdkRepo(options.baseRef, options.configFile);
+    : (findSdkRepo(options.baseRef, options.configFile)
+      || { path: repoCachePath(options.headRepo, options.cacheRoot) });
   const dest = resolve(options.runDir, 'repo');
   const url = options.forkUrl || forkUrl(options.headRepo);
   let fetched = false;

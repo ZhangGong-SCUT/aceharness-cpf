@@ -153,6 +153,7 @@ export interface WorkflowStep {
   task: string;
   prScript?: 'identity' | 'gates' | 'route' | 'review' | 'park' | 'ready' | 'human' | 'finish' | 'push-audit' | 'approved-apply' | 'approved-apply-audit';
   diagnosisScript?: 'preflight' | 'restore' | 'finish' | 'abort';
+  deviceLock?: boolean;
   preCommands?: string[];
   type?: 'agent' | 'subworkflow';
   workflow?: string;
@@ -182,6 +183,8 @@ export const workflowStepSchema: z.ZodType<WorkflowStep> = z.object({
   // 不会中断整个步骤（即使命令本身返回非 0 退出码）。
   prScript: z.enum(['identity', 'gates', 'route', 'review', 'park', 'ready', 'human', 'finish', 'push-audit', 'approved-apply', 'approved-apply-audit']).optional(),
   diagnosisScript: z.enum(['preflight', 'restore', 'finish', 'abort']).optional(),
+  // 步骤执行期间由引擎独占本机全部真机/模拟器（其他 run 的同类步骤排队）
+  deviceLock: z.boolean().optional(),
   preCommands: z.array(z.string()).optional(),
   type: z.enum(['agent', 'subworkflow']).optional(),
   workflow: z.string().optional(),

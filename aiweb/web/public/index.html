@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CPF-ApplicationTPC 工作台</title>
-  <link rel="stylesheet" href="css/main.css?v=20260916e" />
+  <link rel="stylesheet" href="css/main.css?v=20261114port" />
 </head>
 
 <body>
@@ -62,6 +62,9 @@
         <div class="nav-section">PR 分析</div>
         <div class="nav-item" data-panel="p-prreview">
           <span class="method m-post">PR</span> PR 监控
+        </div>
+        <div class="nav-item" data-panel="p-prsubmit">
+          <span class="method m-post">NEW</span> PR 提交
         </div>
         <div class="nav-section" id="nav-admin-section" style="display:none">管理</div>
         <div class="nav-item" data-panel="p-admin" id="nav-admin-item" style="display:none">
@@ -125,7 +128,7 @@
           <!-- 使用说明（默认收起） -->
           <div id="ia-help-panel" class="pr-help-panel" style="display:none">
             <div class="pr-help-row">🔗 <b>粘贴 Issue URL</b>（GitCode / GitHub / Gitee），点「开始分析」——AI 自动完成问题定位、根因分析、修复建议。</div>
-            <div class="pr-help-row">📄 <b>产出六大章节报告</b>：问题概述、环境信息、复现步骤、根因结论、修复建议、验证建议；完成后卡片内直接阅读，可下载 Markdown。</div>
+            <div class="pr-help-row">📄 <b>产出六大章节报告</b>：问题概述、环境信息、复现步骤、根因结论、修复建议、验证建议；点击历史任务进入独立详情页阅读，可下载 Markdown。</div>
             <div class="pr-help-row">💬 <b>与 Agent 交互</b>：分析中可点「Issue分析详情」进 AceHarness 工作台——查看实时进度、补充信息给 Agent、处理人工审批。</div>
             <div class="pr-help-row">🔑 <b>私有 Issue</b>需在提交时填 Access Token；优先级/类型可不填（自动判断）。</div>
             <div class="pr-help-row">🔒 <b>身份隔离</b>：需登录后提交；分析历史按账号隔离，只能看到自己提交的任务。</div>
@@ -168,6 +171,7 @@
 
           <div id="ia-error" class="error-msg" style="display:none"></div>
 
+          <div class="ia-history-note">点击任务进入独立详情页，查看完整报告、诊断时间线、证据和修复补丁。</div>
           <div>
             <div class="history-label-row">
               <span class="text-label">分析历史</span>
@@ -178,6 +182,21 @@
                 暂无分析任务，提交 Issue URL 后将在此显示</div>
             </div>
             <div id="ia-pager"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="p-prsubmit" style="display:none">
+        <div class="panel-head">
+          <span class="method m-post">POST</span>
+          <h2>PR 提交</h2>
+          <span class="path">/api/pr-submit</span>
+        </div>
+        <div class="panel-body">
+          <div class="pr-help-row">在改完代码的仓库里运行 <b>ace pr</b>。命令只生成草稿并打开本页，确认后才会创建 Issue 和 PR；是否同时开启 PR 监控由你在确认时勾选。</div>
+          <div id="ps-error" class="error-msg" style="display:none"></div>
+          <div id="ps-body" style="margin-top:12px">
+            <div class="ps-card ps-muted">正在读取草稿…</div>
           </div>
         </div>
       </div>
@@ -366,7 +385,8 @@
   <script src="js/health.js?v=20260910a"></script>
   <script src="js/issueanalysis.js?v=20260928opt"></script>
   <script src="js/auth.js?v=20260910a"></script>
-  <script src="js/prreview.js?v=20260930live3"></script>
+  <script src="js/prreview.js?v=20261113repo"></script>
+  <script src="js/prsubmit.js?v=20261114skill"></script>
   <script src="js/admin.js?v=20260918a"></script>
   <script src="js/navigation.js?v=20260910a"></script>
 </body>

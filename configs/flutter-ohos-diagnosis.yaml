@@ -68,16 +68,15 @@ workflow:
             4. 识别代码仓库 URL 和分支（正文仓地址或默认 flutter_flutter；版本号推断分支，无法推断则用默认分支 dev）
             5. 代码仓准备（共享镜像缓存，多仓；禁止手写 git clone 全量拉取）：
                - 【仓库清单】按以下优先级确定要准备的仓（可多个）：
-                 a. Issue 正文/评论给出仓地址 → 用正文地址（可能是 engine fork 等）
-                 b. 版本低于 3.35（如 oh-3.27.4-dev/oh-3.22.0-dev）：framework 仓 + engine 仓都要准备（低版本部分功能代码在 engine）
-                 c. problem_type_preliminary 为渲染/稳定性/性能（引擎层高发）→ 建议一并准备 engine 仓
-                 d. 其余：framework 仓
+                 a. 版本不低于 3.35（如 oh-3.35.7-dev / oh-3.41.9-release / 3.41.10）：只准备 framework 仓。禁止 clone flutter_engine，禁止创建 repo-engine/。embedding 源码在 repo/engine/src/flutter/。功能、渲染、稳定性、性能都一样。
+                 b. Issue 正文/评论给出仓地址，且版本低于 3.35 → 用正文地址（可能是 engine fork 等）
+                 c. 版本低于 3.35（如 oh-3.27.4-dev/oh-3.22.0-dev）：framework 仓 + engine 仓都要准备（低版本部分功能代码在 engine）
                  - framework 仓：https://gitcode.com/CPF-Flutter/flutter_flutter（默认分支 dev）
-                 - engine 仓：https://gitcode.com/CPF-Flutter/flutter_engine（分支与 framework 同名，无同名分支用 dev）
+                 - engine 仓仅版本低于 3.35 时准备：https://gitcode.com/CPF-Flutter/flutter_engine（分支与 framework 同名，无同名分支用 dev）。版本以 Issue 标题、正文和影响分支为准，在克隆前决定。请求里没有低于 3.35 的版本号（只写 dev，或分支不低于 3.35）时，clone --repo flutter_engine 会被脚本拒绝，不会退到 dev。
                - 【目录约定】framework/正文主仓 → repo/；engine 仓 → repo-engine/
                - 【统一用缓存脚本】（本地镜像 hardlink clone，秒级；目录已存在自动 fetch 复用；脚本失败自动降级直连，无需人工干预）：
                  node .agents/skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs clone --repo <仓URL> --dest repo/ --branch <分支> --fallback-branch dev
-                 （engine 仓把 --dest 换成 repo-engine/；若提示找不到脚本，改用绝对路径 node ~/.aceharness/skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs）
+                 （仅版本低于 3.35 时，engine 仓把 --dest 换成 repo-engine/；3.35 及以上不要对 flutter_engine 调用本脚本。若提示找不到脚本，改用绝对路径 node ~/.aceharness/skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs）
                - 不要 --depth=1（回退 merge commit 需要完整历史），脚本已保证完整历史
             6. 有 Issue created_at 才回退到创建时间前的 merge commit；freeform 保持 HEAD，reset_status=skipped_no_issue_date
             7. 验证当前 HEAD，列出关键文件路径。branch 必须是真实分支名，引擎会据此写入 outputs/ohos-flutter-sdk.json。JSON 填 input_source=issue_url 或 freeform_text
@@ -103,8 +102,8 @@ workflow:
     - name: 问题复现
       description: |
         根据 Issue 描述和代码仓中的相关代码，按 flutter-issue-demo-reproduction Skill 构造最小复现 Demo。
-        Demo 必须包含目标平台工程，按需增加可运行的对照平台；有设备时实际运行验证复现效果。
-        如果是 OHOS 独有 bug，在 Android/iOS 上运行同样 scenario 验证 bug 不复现（跨平台对照验证）。
+        Demo 必须包含 OHOS、Android、iOS 工程。当前系统能启动的对照平台都要实际运行。
+        判断是不是 OHOS 独有 bug 时，Android 和 iOS 只要能跑都要跑同一 scenario。只做一端不能下独有结论。Windows 和 Linux 无法运行 iOS 模拟器时可以不做 iOS，必须写明原因。
         复现不了时给出明确说明（原因分析 + 理论复现路径 + 缺失条件），不阻塞工作流。
       requireHumanApproval: false
       isInitial: false
@@ -116,9 +115,10 @@ workflow:
           name: 问题复现
           agent: diagnosis-reproducer
           role: defender
+          deviceLock: true
           task: |
             根据 Issue 描述和代码仓中的相关代码，按 flutter-issue-demo-reproduction Skill 构造最小复现 Demo。
-            0. 先读 outputs/diagnosis-preflight.json；按实际可用平台生成最小工程。OHOS 为目标平台，Android/iOS 工程和编译仅在需要跨平台对照且环境可用时准备，未执行项明确标注。
+            0. 先读 outputs/diagnosis-preflight.json。OHOS、Android、iOS 工程都要生成。运行对照覆盖当前系统能够启动的全部平台：macOS 上 Android 和 iOS 都要跑；Windows 和 Linux 无法运行 iOS 模拟器时可以不做 iOS，必须写明原因。不能因为 Android 已经和 OHOS 表现不同就跳过 iOS。未执行项写明跑不了的原因。
             1. 从信息采集阶段的输出获取：Issue 正文、复现步骤、环境信息、截图描述、问题类型初判（problem_type_preliminary）、代码仓本地路径（repo/）
             2. 判断 Issue 中是否直接提供了 Demo 代码：
                - 检查 Issue body 和评论中是否有代码块（```dart、```typescript、```arkts 等）
@@ -131,9 +131,9 @@ workflow:
             4. 按问题类型为 Demo 配置观测手段：内存泄漏→内存插桩/泄漏观测点；性能→trace/耗时埋点；渲染→截图对比点；稳定性→崩溃日志捕获（hilog）；功能→断言/输出检查点
             5. 锁定 Issue 黄金标志（issue_golden_flag）：从 Issue 正文复现步骤/预期行为中选定唯一可观测判据（如「点击 X 后页面白屏」），写入 JSON。修复验证阶段必须沿用此判据，禁止修订/改写/放宽
             6. 按 Skill 的工程结构生成目标平台及必要对照工程，配置 OHOS 签名
-            7. 按实际平台执行 flutter analyze / build hap，Android 对照必要且可用时执行 build apk
+            7. 按实际平台执行 flutter analyze / build hap。Android 能够启动时必须 build apk。macOS 上 iOS 模拟器能够启动时必须 build ios。Windows 和 Linux 不做 iOS 编译运行。
             8. 检测是否有连接的鸿蒙设备（hdc list targets），有设备时实际运行 Demo 验证复现效果
-            9. 如果是 OHOS 独有 bug，在 Android/iOS 上运行同样 scenario 验证 bug 不复现（跨平台对照验证）
+            9. 判断是否 OHOS 独有时，在当前系统能运行的 Android 和 iOS 上都跑同一 scenario。一端正常、另一端还能跑却没跑，不能写成 OHOS 独有。Windows 和 Linux 无法运行 iOS 模拟器时跳过 iOS，并在 missing_evidence 写明原因。
             10. 记录复现稳定性（verified/stable/intermittent/unstable/not_reproducible/theoretical）
             11. 如果复现不了，必须给出明确说明：
                - 原因分析（为什么复现不了：缺设备/缺环境/触发条件不对/Demo 代码有误）
@@ -179,7 +179,7 @@ workflow:
             2. 验证 Demo 质量：Demo 是否最小化？是否包含目标平台工程，所需对照平台是否有证据或明确缺失原因？是否遵循 flutter-issue-demo-reproduction Skill 的工程结构规范？
             3. 验证场景覆盖完整性：Issue 中描述的所有场景/现象/复现步骤是否都有对应的 scenario？是否有遗漏？
             4. 验证复现条件充分性：触发条件是否完整？边界条件是否考虑？环境信息是否匹配？
-            5. 验证跨平台对照：如果是 OHOS 独有 bug，是否在 Android/iOS 上验证了 bug 不复现？对照证据是否充分？
+            5. 验证跨平台对照：macOS 上 Android 和 iOS 是否都跑了同一 scenario？只做了 Android、而本机可以启动 iOS 模拟器，对照不充分，verdict 不能是 pass。Windows 或 Linux 因为无法运行 iOS 模拟器而跳过 iOS，且写明了原因，可以接受。一端正常不能代替另一端没跑。
             6. 验证运行结果可信度：有设备时实际运行的日志/截图是否支持复现结论？无设备时理论分析是否合理？
             效率要求：问题复现阶段已提供 Demo 代码和运行结果，优先引用已有结论；缺证据再读，同一文件不要反复通读，不要扫全仓。不要写死可读文件个数。
             如果验证未达 pass（verdict=conditional_pass 或 fail），必须在 feedback_to_reproducer 字段中说明回到问题复现时需要补充的方向。
@@ -237,7 +237,7 @@ workflow:
             6. 如果置信度<0.3 且已迭代 3 轮仍无法收敛，直接在输出中包含兜底排查思路（可疑方向、验证步骤、缺失信息清单），verdict=fail
             7. 必须区分 confirmed（已由 Issue/API/日志/代码直接证明）、inferred（基于代码和平台差异推断）、unverified（待运行时验证）；不得把未验证的症状解释写成事实。
             8. 【硬约束】不要搜索 Issue 所在仓库的其他 PR 和 Issue（如列出仓库所有 PR、搜索相关 PR/Issue 等）。但允许获取当前 Issue 本身的信息（标题、body、评论、创建时间等），可通过 GitCode/GitHub API 的 issues/{number} 端点获取。所有代码分析只在本地代码仓（repo/ 目录，及其它信息采集已准备的仓如 repo-engine/）中进行。
-            9. 【engine 仓可用】版本低于 3.35 或问题疑似引擎层（渲染/稳定性/性能）时，优先读 repo-engine/（信息采集已按同名分支准备好的 flutter_engine 仓）；engine 层根因要引用 engine 源码文件:行号作为 confirmed 证据，不得只凭 framework 侧推断。
+            9. 【engine 源码位置】版本低于 3.35 时，优先读 repo-engine/（信息采集已按同名分支准备好的 flutter_engine 仓）。3.35 及以上禁止读 repo-engine/，embedding 与引擎源码在 repo/engine/src/flutter/。engine 层根因要引用该路径下的文件:行号作为 confirmed 证据，不得只凭 framework Dart 侧推断。
             10. 如果根因分析需要参考上游信息，必须以 upstream_status="unknown" + upstream_search_keywords（供用户手动搜索的关键词）形式输出，不得给出确定的 PR/Issue 链接，不得自行推断上游仓库地址。
             参考 cpf-ohos-issue-analysis Skill 的 issue-types/*.md 和 references/log-interpretation.md。
             输出 JSON 或 Markdown+JSON 均可，但结尾必须包含 verdict、summary、artifact_path、key_findings、problem_type、layer、priority、problem_ownership（framework_library|business_code|mixed）、confidence、confirmed_evidence、inferred_evidence、missing_evidence、next_iteration_focus（conditional_pass 时必填）、upstream_status（只能为 "unknown"）、upstream_search_keywords。
@@ -376,7 +376,7 @@ workflow:
     # ========== 状态3.5：代码修复（实际修改代码+编译验证+生成patch）==========
     - name: 代码修复
       description: |
-        根据方案设计阶段的方案，实际修改 repo/（框架层）或 repo-engine/（引擎层）中的代码文件，执行编译验证，生成 patch 文件。
+        根据方案设计阶段的方案，实际修改代码并生成 patch。版本不低于 3.35 时，embedding 与引擎修改都在 repo/engine/src/flutter/，禁止改 repo-engine/。版本低于 3.35 且信息采集准备了 repo-engine/ 时，引擎层修改 repo-engine/。
         编译失败时回退到方案设计重新设计方案；编译通过后进入修复验证。
       requireHumanApproval: false
       isInitial: false
@@ -391,9 +391,9 @@ workflow:
             根据方案设计阶段（diagnosis-fix-advisor）输出的修复方案，实际修改代码仓中的文件，执行编译验证，生成 patch 文件：
             1. 读取方案设计阶段的输出（root_cause_fix.file / line / code_before / code_after）
             2. 读取目标源码，理解代码上下文
-            3. 【实际修改代码】使用 Write/Edit 工具修改代码文件使修复落地：框架层修复改 repo/，引擎层修复改 repo-engine/（信息采集未准备 repo-engine/ 时回退 repo/ 并在 key_findings 说明）
+            3. 【实际修改代码】版本不低于 3.35：所有修改（含 embedding / 引擎）只改 repo/，路径在 repo/engine/src/flutter/，禁止改 repo-engine/。版本低于 3.35：框架层改 repo/，引擎层改 repo-engine/（信息采集未准备 repo-engine/ 时回退 repo/ 并在 key_findings 说明）
             4. 【编译验证】执行 flutter analyze 或 flutter build 验证代码能编译通过，编译失败时修正代码重试（最多 3 次）
-            5. 【生成 patch】执行 git -C repo/ diff > outputs/fix.patch 生成 patch 文件；引擎层修复追加 git -C repo-engine/ diff > outputs/fix-engine.patch，并在 modification_result 标注 patch 来源仓（framework|engine）
+            5. 【生成 patch】执行 git -C repo/ diff > outputs/fix.patch。仅当版本低于 3.35 且 repo-engine/ 有改动时，再执行 git -C repo-engine/ diff > outputs/fix-engine.patch，并在 modification_result 标注 patch 来源仓（framework|engine）。3.35 及以上禁止生成 fix-engine.patch。
             6. 【回滚准备】记录修改前的 HEAD commit，如需回滚可 git reset --hard
             7. 自检修改正确性（语法、完整性、上下文一致性、导入完整性）
             8. 禁止 git apply / cherry-pick 官方修复 PR 或官方 commit，必须按方案自己改 repo/
@@ -430,6 +430,7 @@ workflow:
           name: 修复方案对抗验证
           agent: diagnosis-fix-verifier-advisor
           role: defender
+          deviceLock: true
           task: |
             以攻击者视角验证修复方案的有效性，并在真机或模拟器上实际运行验证修复后 bug 消失（效率约束：缺证据再读，不要写死文件个数；输出不超过 2000 字）：
             1. 验证修复方案能否解决 Issue 中反馈的问题：修复后 Issue 描述的现象是否消失？Issue 中的复现步骤是否还能触发问题
@@ -440,7 +441,7 @@ workflow:
                - 用代码修复阶段修改后的 repo/ 代码重新构建（flutter build hap/apk/ios）
                - 【embedding HAR】修复落在 embedding / flutter_embedding / ArkTS 平台层时：先读 Demo 的 oh-package.json5 和 ohos/oh_modules/.ohpm/lock.json5，确认 @ohos/flutter_ohos 实际指向哪个 HAR，把新 HAR 盖到该文件（常见 flutter_embedding_${mode}.har）。flutter build hap 默认吃 release 的 flutter_embedding_release.har，只盖 debug 无效。禁止默认盖 flutter.har；换完删 ohos/oh_modules 后重新解析本 run 的依赖再编；禁止清理共享 ~/.ohpm/cache；以 oh_modules 里是否出现新代码为准。口径见 cpf-ohos-issue-analysis/references/fix-strategy.md 与 flutter-issue-demo-reproduction/references/verification-depth-checklist.md §J。允许阅读已挂载 Skill 的 SKILL.md。
                - 安装到设备并运行问题复现阶段提供的 Demo 复现步骤
-               - 检查黄金标志：必须沿用问题复现阶段 JSON 中锁定的 issue_golden_flag（从 Issue 正文选定的唯一可观测判据），本阶段禁止修订/改写/放宽。不能用本机碰巧复现的更重症状代替。修不了则 issue_golden_flag_met=false，verdict 最高 conditional_pass。引擎会把「修订黄金标志」或缺少 issue_golden_flag_met=true 的 pass 降为 conditional_pass，不会进入报告沉淀。JSON 须填 sdk_version、repo_commit、engine_aligned、har_path、issue_golden_flag_met。
+               - 检查黄金标志：必须沿用问题复现阶段 JSON 中锁定的 issue_golden_flag（从 Issue 正文选定的唯一可观测判据），本阶段禁止修订/改写/放宽。不能用本机碰巧复现的更重症状代替。修不了则 issue_golden_flag_met=false，verdict 最高 conditional_pass。引擎会把「修订黄金标志」或缺少 issue_golden_flag_met=true 的 pass 降为 conditional_pass，不会进入报告沉淀。JSON 须填 sdk_version、repo_commit、engine_aligned、har_path、issue_golden_flag_met。正文写成「黄金标志通过」或「黄金标志 OK」时，issue_golden_flag_met 仍然必填。
             3. 验证修复方案与根因的对应性：修复是否针对确认的根因，而非表面症状
             4. 构造绕过场景：基于 Issue 的复现步骤和触发条件，构造修复未覆盖的场景
             5. 副作用分析：修复是否会破坏现有功能？是否引入新的风险

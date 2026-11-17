@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -113,5 +113,89 @@ describe('checkout-pr-head', () => {
     expect(result.fetched).toBe(true);
     expect(result.head).toBe(sha);
     expect(result.repo).toBe(join(run, 'repo'));
+  });
+
+  it('清单没有该分支时浅克隆 head 仓库到缓存，不写入 SDK 目录', () => {
+    const root = tempDir();
+    const upstream = join(root, 'plugin');
+    const run = join(root, 'run');
+    const cacheRoot = join(root, 'ace-home');
+    execFileSync('mkdir', ['-p', upstream, run]);
+    const sha = initRepo(upstream);
+    const config = join(root, 'sdks.yaml');
+    writeFileSync(config, [
+      'sdks:',
+      '  - id: 3.27.4-ohos',
+      `    path: ${join(root, 'missing-sdk')}`,
+      '    aliases:',
+      '      - br_3.27.4-ohos',
+      '',
+    ].join('\n'));
+    const source = join(cacheRoot, 'repo-cache', 'gitcode.com', 'z2036709353', 'fluttertpc_flutter_exit_app');
+    const result = checkoutPrHead({
+      runDir: run,
+      baseRef: 'br_3.27_dev',
+      headRef: 'feat/widget-tap-path-text',
+      headSha: sha,
+      headRepo: 'z2036709353/fluttertpc_flutter_exit_app',
+      forkUrl: upstream,
+      configFile: config,
+      cacheRoot,
+    });
+    expect(result.cloned).toBe(true);
+    expect(result.source).toBe(source);
+    expect(result.head).toBe(sha);
+    expect(['worktree', 'detached']).toContain(result.mode);
+    expect(existsSync(join(root, 'missing-sdk'))).toBe(false);
+
+    const run2 = join(root, 'run2');
+    execFileSync('mkdir', ['-p', run2]);
+    const again = checkoutPrHead({
+      runDir: run2,
+      baseRef: 'br_3.27_dev',
+      headRef: 'feat/widget-tap-path-text',
+      headSha: sha,
+      headRepo: 'z2036709353/fluttertpc_flutter_exit_app',
+      forkUrl: upstream,
+      configFile: config,
+      cacheRoot,
+    });
+    expect(again.cloned).toBe(false);
+    expect(again.fetched).toBe(false);
+    expect(again.head).toBe(sha);
+  });
+
+  it('清单命中时仍用本机 SDK，不创建仓库缓存', () => {
+    const root = tempDir();
+    const source = join(root, 'sdk');
+    const run = join(root, 'run');
+    const cacheRoot = join(root, 'ace-home');
+    execFileSync('mkdir', ['-p', source, run]);
+    const sha = initRepo(source);
+    git(source, ['checkout', 'oh-3.35.7-release']);
+    const config = join(root, 'sdks.yaml');
+    writeFileSync(config, [
+      'sdks:',
+      '  - id: 3.35.7-ohos',
+      `    path: ${source}`,
+      '    aliases:',
+      '      - oh-3.35.7-release',
+      '',
+    ].join('\n'));
+    const result = checkoutPrHead({
+      runDir: run,
+      baseRef: 'oh-3.35.7-release',
+      headRef: 'feat/widget-tap-path-text',
+      headSha: sha,
+      headRepo: 'z2036709353/flutter_flutter',
+      forkUrl: 'https://invalid.example/no-fetch.git',
+      configFile: config,
+      cacheRoot,
+    });
+    expect(result.source).toBe(source);
+    expect(result.cloned).toBe(false);
+    expect(result.fetched).toBe(false);
+    expect(result.head).toBe(sha);
+    expect(existsSync(cacheRoot)).toBe(false);
   });
 });

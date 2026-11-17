@@ -1,17 +1,18 @@
 import { aceDataDir, aceRunsDir, aceRuntimeRoot } from '../library/aceRuntime.js';
+import { isIsolatedRunDir, readWorkingDirectory } from '../library/runPath.js';
 import { readFileSync, statSync } from 'fs';
 import { homedir } from 'os';
-import { join, basename } from 'path';
+import { join } from 'path';
 
 /** Read only this execution's files. Prefer the freshest copy in its isolated workspace. */
 export function readExecutionEvidence(runId, workingDirectory = '') {
     if (!/^run-[A-Za-z0-9_-]+$/.test(String(runId || ''))) return {};
     const dir = join(aceRunsDir(), runId);
     if (!workingDirectory) {
-        try { workingDirectory = /^workingDirectory:\s*["']?([^\n"']+)/m.exec(readFileSync(join(dir, 'state.yaml'), 'utf8'))?.[1]?.trim() || ''; } catch {}
+        try { workingDirectory = readWorkingDirectory(readFileSync(join(dir, 'state.yaml'), 'utf8')); } catch {}
     }
     const roots = [join(dir, 'outputs')];
-    if (workingDirectory && basename(workingDirectory) === runId) roots.unshift(join(workingDirectory, 'outputs'));
+    if (isIsolatedRunDir(workingDirectory, runId)) roots.unshift(join(workingDirectory, 'outputs'));
     const read = name => roots.map(root => {
         try { const path = join(root, name); return { value: JSON.parse(readFileSync(path, 'utf8')), at: statSync(path).mtimeMs }; } catch { return null; }
     }).filter(Boolean).sort((a,b) => b.at-a.at)[0];

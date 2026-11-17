@@ -556,6 +556,30 @@ function ciMentionsTests(comments) {
 }
 
 /**
+ * 本轮门禁报告里没有编译这一项。
+ * 只看最新一条「门禁构建开始」之后的 CI 评论：其中要有「代码门禁通过」，
+ * 且这份通过报告正文没有编译结果。文档 PR 的报告只有静态检查。
+ * 代码 PR 的通过报告带「编译测试」，或部分重跑报告用英文表头 build result，
+ * 这两种都仍要等编译标签。
+ * 上一轮的通过报告出现在新的「门禁构建开始」之前，不参与本轮判断。
+ */
+export function compileNotInThisGate(comments) {
+  const sorted = [...comments].sort((a, b) => compareCommentTime(a, b));
+  const startComments = sorted.filter((item) => (
+    isCiBotComment(item)
+    && /门禁构建开始|开始构建|已触发构建/.test(commentBodyText(item))
+  ));
+  const latestStart = startComments[startComments.length - 1];
+  if (!latestStart) return false;
+  const after = sorted.slice(sorted.indexOf(latestStart) + 1);
+  const pass = [...after].reverse().find((item) => (
+    isCiBotComment(item) && /代码门禁通过/.test(commentBodyText(item))
+  ));
+  if (!pass) return false;
+  return !/编译测试|build result/i.test(commentBodyText(pass));
+}
+
+/**
  * 优先级：DCO → 静态检查 → 编译 → AI 检视 → 测试（人工）
  * 静态检查失败且编译仍 pending 时，phase=static_failed，不能当成编译失败。
  */
@@ -589,7 +613,9 @@ export function classifyOhosPrGates(input = {}) {
   const staticFail = hasLabel(labels, LABEL_ALIASES.static_fail);
   const staticOk = hasLabel(labels, LABEL_ALIASES.static_ok) && !staticFail;
   const compileFail = hasLabel(labels, LABEL_ALIASES.compile_fail);
-  const compileOk = hasLabel(labels, LABEL_ALIASES.compile_ok) && !compileFail;
+  const compileOk = !compileFail && (
+    hasLabel(labels, LABEL_ALIASES.compile_ok) || compileNotInThisGate(comments)
+  );
   const testFail = hasLabel(labels, LABEL_ALIASES.test_fail);
   const testOk = hasLabel(labels, LABEL_ALIASES.test_ok) && !testFail;
   const flakyTestFail = testFail && isFlakyTestFailure(comments);

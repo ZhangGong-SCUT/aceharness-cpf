@@ -3,8 +3,9 @@
  * These functions have no side effects and no heavy dependencies.
  */
 
-import { extractLooseStructuredResult } from '@/lib/ai/result-channel';
+import { extractLooseStructuredResult, extractSpokenGoldenFlagMet } from '@/lib/ai/result-channel';
 import type { WorkflowStep } from '@/lib/core/schemas';
+import { getVisionLookScriptPath } from '@/lib/mcp/registry';
 
 export function stripNonAiStreamArtifacts(text: string): string {
   return text
@@ -228,6 +229,9 @@ export type FixVerificationContext = {
   stepName?: string;
   /** 清单未对上 repo 分支时，即使 Agent 写 engine_aligned=true 也不能 pass */
   sdkMatched?: boolean;
+  /** 理论复现或版本不匹配都不能通过原始 Issue 的修复验收。 */
+  reproductionStatus?: string | null;
+  revisionMatched?: boolean | null;
 };
 
 const FIX_VERIFY_STATE = /修复验证/;
@@ -251,12 +255,9 @@ export function extractIssueGoldenFlagMet(output: string): boolean | null {
     if (typeof top === 'boolean') found = top;
   });
   if (found !== null) return found;
-  // JSON 缺字段时的散文兜底：step-conclusion 常把结论写成
-  // 「issue_golden_flag_met=true」等号形式。取**最后一次**匹配——
-  // prompt/规则回显在前、最终结论在后（#2646 教训：验证明明通过，
-  // 仅因未输出 JSON 块被门禁降级为 conditional_pass）。
-  const matches = [...String(output || '').matchAll(/issue_golden_flag_met\**\s*[=:：]\s*\**\s*(true|false)\b/gi)];
-  return matches.length ? matches[matches.length - 1][1].toLowerCase() === 'true' : null;
+  // JSON 缺字段时认结论里的明确说法。取最后一次：规则回显在前，最终结论在后
+  // （#2646：验证明明通过，只因没写出字段名被降级）。
+  return extractSpokenGoldenFlagMet(output);
 }
 
 export function extractEngineAligned(output: string): boolean | null {
@@ -288,6 +289,8 @@ export function enforceFixVerificationGoldenFlag(
   if (REVISED_GOLDEN_FLAG.test(String(output || ''))) return 'conditional_pass';
   if (extractIssueGoldenFlagMet(output) !== true) return 'conditional_pass';
   if (context?.sdkMatched === false) return 'conditional_pass';
+  if (['theoretical', 'not_reproducible'].includes(String(context?.reproductionStatus || ''))) return 'conditional_pass';
+  if (context?.revisionMatched === false) return 'conditional_pass';
   if (extractEngineAligned(output) !== true) return 'conditional_pass';
   return 'pass';
 }
@@ -436,15 +439,26 @@ export function modelHasNativeVision(model?: string | null): boolean | 'unknown'
   return 'unknown';
 }
 
+function visionFallbackLines(): string[] {
+  const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(getVisionLookScriptPath())} --image <图片路径> --question "<具体问题>"`;
+  return [
+    `工具列表里没有 look_at_image 时，禁止写「工具不可用」后跳过。改用 Bash：${command}`,
+    `或把图片路径和问题交给子代理 vision-inspector。`,
+    `截图前先点亮屏幕并确认应用在前台。看图结果是黑屏、锁屏或只有底部横杠时，这张图不能写入证据，点亮后重拍。look_at_image 退出码 2 或输出 evidence=invalid 时，这张图作废。`,
+  ];
+}
+
 export function buildVisionCapabilityPrompt(model?: string | null): string {
   const capability = modelHasNativeVision(model);
   const modelLabel = String(model || '').trim() || 'unknown';
+  const tail = visionFallbackLines();
   if (capability === true) {
     return [
       `# 看图策略`,
       `当前模型: ${modelLabel}`,
       `本模型可以直接看图。截图请先用 Read 打开原图自己看，根据像素作答。`,
       `只有 Read 看不到图、或看不清像素时，才调用 look_at_image（Qwen 子模型）。不要一上来就调 Qwen。`,
+      ...tail,
     ].join('\n');
   }
   if (capability === false) {
@@ -452,6 +466,7 @@ export function buildVisionCapabilityPrompt(model?: string | null): string {
       `# 看图策略`,
       `当前模型: ${modelLabel}`,
       `本模型不能看像素。只要结论依赖截图长什么样，就必须调用 look_at_image（Qwen），禁止只靠正文猜图。`,
+      ...tail,
     ].join('\n');
   }
   return [
@@ -459,6 +474,7 @@ export function buildVisionCapabilityPrompt(model?: string | null): string {
     `当前模型: ${modelLabel}`,
     `先用 Read 打开截图。如果能看到像素并描述细节，就自己看，不要调用 look_at_image。`,
     `如果看不到图（空白、报错、明确说无法查看图片），再调用 look_at_image（Qwen）。`,
+    ...tail,
   ].join('\n');
 }
 
@@ -525,7 +541,9 @@ export function isEngineLevelFailure(message: string): boolean {
   if (!normalized) return false;
   if (isStepToolFailure(normalized)) return false;
 
-  return /acp\s+connection\s+closed/i.test(normalized)
+  // 硬错误签名：协议断开、认证失败、上下文超限、网络错误等，是引擎/传输层的真实故障。
+  // 即使输出里碰巧带有 verdict（例如模型在正文里引用了错误文案），也必须判为引擎故障。
+  const hardFailure = /acp\s+connection\s+closed/i.test(normalized)
     || /apierror/i.test(normalized)
     || /模型调用失败(?:\s*\(\s*\d{3}\s*\))?\s*:/i.test(normalized)
     || /(?:unauthorized|invalid token|invalid api key|authentication failed|permission denied)/i.test(normalized)
@@ -537,18 +555,68 @@ export function isEngineLevelFailure(message: string): boolean {
     || /prompt is too long/i.test(normalized)
     || /SDK API retry limit/i.test(normalized)
     || /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE/i.test(normalized)
-    || /engine (?:not initialized|unavailable|connection .*failed|process .*failed|session .*failed)/i.test(normalized)
     || /failed to create .*process streams/i.test(normalized)
-    || /引擎(?:未初始化|初始化失败|不可用|连接.*失败|连接.*断开|连续失败)/.test(normalized)
     || /ACP session\/load timeout/i.test(normalized)
     || /ACP newSession timeout/i.test(normalized)
-    || /Model\s+"[^"]+"\s+not found/i.test(normalized)
+    || /未产生任何输出/.test(normalized)
+    || /Model\s+"[^"]+"\s+not found/i.test(normalized);
+  if (hardFailure) return true;
+
+  const softFailure = /engine (?:not initialized|unavailable|connection .*failed|process .*failed|session .*failed)/i.test(normalized)
+    || /引擎(?:未初始化|初始化失败|不可用|连接.*失败|连接.*断开|连续失败)/.test(normalized)
     || /模型不可用/.test(normalized);
+  if (!softFailure) return false;
+
+  // 软错误词（"引擎不可用""引擎连接失败""模型不可用"）也可能出现在模型正常交卷的
+  // 结论正文里——例如「Gboard zh-CN 引擎不可用」说的是输入法引擎，不是 ACE 引擎。
+  // 能提取到可信 verdict 的输出是模型正常完成，不能再被这些词误判成引擎崩溃。
+  const verdict = extractLooseStructuredResult(normalized).fields.verdict;
+  if (typeof verdict === 'string' && /^(pass|fail|conditional_pass)$/i.test(verdict.trim())) return false;
+
+  return true;
+}
+
+/**
+ * 引擎级失败时，给 statusReason 用的可读摘要。
+ * 不要把整段 output（含 <ace-process> 工具流、模型正文）原样塞进状态字段：
+ * 先剥掉工具流，取第一段非空正文，再截断。工具流原文仍完整留在 diagnostics.log。
+ */
+export function summarizeEngineFailure(message: string, maxLength = 300): string {
+  const stripped = stripAceProcessEnvelopes(String(message || '')).trim();
+  // 优先取匹配到的那条错误签名所在的行，避免把无关正文放在最前。
+  const lines = stripped.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const errorLine = lines.find((line) =>
+    /acp\s+connection\s+closed|apierror|模型调用失败|context window limit|maximum context length|prompt is too long|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|引擎(?:未初始化|初始化失败|不可用|连接.*失败|连接.*断开|连续失败)|模型不可用|未产生任何输出|ACP (session\/load|newSession) timeout/i.test(line));
+  const picked = (errorLine || lines[0] || '引擎返回致命错误输出').trim();
+  if (picked.length <= maxLength) return picked;
+  return picked.slice(0, maxLength - 1).trimEnd() + '…';
+}
+
+export function isDiagnosisVerificationExitValid(
+  history: Array<{ from?: string | null; to?: string | null }>,
+  fixVerificationReached: boolean,
+): boolean {
+  if (!fixVerificationReached) return true;
+  // 最后一次进入修复验证之后，必须由该状态亲自出口；后续方案 fail 不能绕过验证直达报告。
+  let enteredAt = -1;
+  for (let index = 0; index < history.length; index += 1) {
+    if (history[index].to === '修复验证') enteredAt = index;
+  }
+  if (enteredAt < 0) return false;
+  const exit = history.slice(enteredAt + 1).find((transition) => transition.to === '报告沉淀');
+  return exit?.from === '修复验证';
 }
 
 export function shouldFinalizeDiagnosisAsCompleted(input: {
   hasFixVerificationState: boolean;
   lastFixVerificationVerdict: WorkflowVerdict | null;
+  /** 最后一次修复验证对 Issue 原始黄金标志的判定；report 路径必须保留 false 的含义。 */
+  diagnosisVerificationGoldenFlag?: boolean | null;
+  diagnosisReproductionStatus?: string | null;
+  /** Issue 指定 revision 与实际运行环境不一致时，只能交付待验证报告。 */
+  diagnosisRevisionMatched?: boolean | null;
+  /** 最后一次修复验证是否由自身出口进入报告，而非后续失败旁路 */
+  diagnosisVerificationExitValid?: boolean;
   finalStateName?: string | null;
   /** 修复验证状态是否真正执行过（false = 走的是设计内兜底/建议出口，未进入修复环节） */
   fixVerificationReached?: boolean;
@@ -565,8 +633,22 @@ export function shouldFinalizeDiagnosisAsCompleted(input: {
     return { complete: false, reason: '诊断产物归档失败（artifact_status=failed），可只重试归档，不得呈现为全部成功' };
   }
   if (!input.hasFixVerificationState) return { complete: true, reason: '' };
+  if (input.fixVerificationReached && input.diagnosisVerificationExitValid === false) {
+
+    return { complete: false, reason: '最后一次修复验证未通过自身出口进入报告，后续方案失败不能替代验证；请恢复后重新执行修复验证' };
+  }
+  if (input.fixVerificationReached && input.diagnosisRevisionMatched === false) {
+    return { complete: false, reason: '实际 SDK 与 Issue 指定 revision 不一致，替代环境验证不能证明原始缺陷已修复；只能交付待运行验证报告' };
+  }
+  if (input.fixVerificationReached && ['theoretical', 'not_reproducible'].includes(String(input.diagnosisReproductionStatus || ''))) {
+    return { complete: false, reason: `原始 Issue 复现状态为 ${input.diagnosisReproductionStatus}，替代版本或理论分析不能证明原始缺陷已修复；只能交付待运行验证报告` };
+  }
   if (input.fixVerificationReached !== false && input.diagnosisVerificationStatus
-    && input.diagnosisVerificationStatus !== 'verified') return { complete: false, reason: `验证证据尚未完整闭环（${input.diagnosisVerificationStatus}），不能标完成` };
+    && (input.diagnosisVerificationStatus !== 'verified' || input.diagnosisVerificationGoldenFlag === false)) {
+    return { complete: false, reason: input.diagnosisVerificationGoldenFlag === false
+      ? 'Issue 原始黄金标志的修复效果尚未确认，只能交付待运行验证报告，不能标完成'
+      : `验证证据尚未完整闭环（${input.diagnosisVerificationStatus}），不能标完成` };
+  }
   if (input.finalStateName && input.finalStateName !== '完成') {
     return { complete: true, reason: '' };
   }

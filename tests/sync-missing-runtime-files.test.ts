@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, test } from 'vitest';
-import { syncMissingTree, syncRuntimeTrees } from '../scripts/sync-missing-runtime-files.mjs';
+import { ensureRuntimeHelpers, syncMissingTree, syncRuntimeTrees } from '../scripts/sync-missing-runtime-files.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const temps: string[] = [];
@@ -83,6 +83,20 @@ describe('运行时缺失文件补齐', () => {
     expect(readFileSync(join(dst, 'flutter-issue-demo-reproduction', 'SKILL.md'), 'utf8')).toContain('flutter-issue-demo-reproduction');
     expect(readFileSync(join(dst, 'flutter-issue-demo-reproduction', 'references', 'device-emulator-setup.md'), 'utf8')).toBe('local\n');
     expect(syncMissingTree(join(src, 'flutter-issue-demo-reproduction'), join(dst, 'flutter-issue-demo-reproduction'))).toBe(0);
+  });
+
+  test('运行时脚本依赖如果是符号链接，改成安装包里的真实文件', () => {
+    const install = tempDir();
+    const runtime = tempDir();
+    mkdirSync(join(install, 'scripts'), { recursive: true });
+    writeFileSync(join(install, 'scripts', 'file-lock.mjs'), 'export const lock = 1;\n');
+    writeFileSync(join(install, 'scripts', 'runtime-root.mjs'), 'export const root = 1;\n');
+    mkdirSync(join(runtime, 'scripts'), { recursive: true });
+    symlinkSync('/tmp/missing-file-lock', join(runtime, 'scripts', 'file-lock.mjs'));
+    expect(ensureRuntimeHelpers(install, runtime)).toBe(2);
+    expect(readFileSync(join(runtime, 'scripts', 'file-lock.mjs'), 'utf8')).toContain('lock');
+    expect(readFileSync(join(runtime, 'scripts', 'runtime-root.mjs'), 'utf8')).toContain('root');
+    expect(ensureRuntimeHelpers(install, runtime)).toBe(0);
   });
 
   test('运行时目录已经链接到安装目录时不再复制', () => {

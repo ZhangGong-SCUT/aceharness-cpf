@@ -8,7 +8,7 @@
  *  - 任何一步失败都不安装：HAR 缺失/无法解析/模式不符 → 退出码非 0 并写记录。
  *
  * 用法：
- *  node scripts/ohos-har-install.mjs --har app.har --expected-mode release --hap app.hap --build-manifest build.json [--device 6HK...] [--record install-record.json] [--check-only]
+ *  node scripts/ohos-har-install.mjs --har app.har --expected-mode release --hap app.hap --build-manifest build.json [--device 6HK...] [--run run-xxx] [--record install-record.json] [--check-only]
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -27,6 +27,7 @@ function parseArgs(argv) {
     else if (a === '--expected-target') out.expectedTarget = argv[++i];
     else if (a === '--expect-path-prefix') out.expectPathPrefix = argv[++i];
     else if (a === '--device') out.device = argv[++i];
+    else if (a === '--run') out.run = argv[++i];
     else if (a === '--record') out.record = argv[++i];
     else if (a === '--check-only') out.checkOnly = true;
     else throw new Error(`未知参数: ${a}`);
@@ -51,6 +52,25 @@ export function sha256File(file) {
   const fd = openSync(file, 'r'), hash = createHash('sha256'), buffer = Buffer.alloc(1024 * 1024);
   try { let count; while ((count = readSync(fd, buffer)) > 0) hash.update(buffer.subarray(0, count)); return hash.digest('hex'); }
   finally { closeSync(fd); }
+}
+
+/**
+ * 挡住本次安装的设备锁：其他 run 持有的 host-ohos / host-devices / 同序列号锁。
+ * 本 run 从 --run、HAP 路径或当前目录推断，推断不出时任何有效的鸿蒙锁都挡。
+ * 本 run 处于按平台申请的设备步骤（有设备会话）却没持有 host-ohos 时，missingOwn=true。
+ */
+export async function foreignDeviceLock(args, cwd = process.cwd()) {
+  const core = await import('./device-lock-core.mjs');
+  const runId = args.run || core.inferRunId([args.hap, cwd, args.expectPathPrefix]);
+  const { lockDir, runsDir } = core.defaultLockPaths();
+  const options = { runsDir };
+  const ohosKey = core.platformLockKey('ohos');
+  const keys = args.device ? [ohosKey, args.device] : [ohosKey];
+  const blockers = keys.flatMap(key => core.blockingLocks(lockDir, key, runId, options));
+  const own = runId ? core.listLiveLocks(lockDir, options).some(({ key, lock }) => lock.runId === runId
+    && (key === ohosKey || key === core.HOST_DEVICES_KEY)) : false;
+  const missingOwn = !blockers.length && !own && Boolean(runId) && core.isSessionLive(lockDir, runId, options);
+  return { runId, holder: blockers[0]?.lock || null, missingOwn };
 }
 
 async function main() {
@@ -115,6 +135,15 @@ async function main() {
     }
     record.gate = 'passed';
     if (!args.checkOnly) {
+      const { runId, holder, missingOwn } = await foreignDeviceLock(args);
+      record.run_id = runId || null;
+      if (holder) {
+        const hint = runId ? '' : '（未识别本 run，可传 --run <runId>）';
+        throw new Error(`设备锁被 ${holder.runId}（${holder.stepName || '未知步骤'}）持有，拒绝安装${hint}；等其释放或按 needs_runtime_validation 降级`);
+      }
+      if (missingOwn) {
+        throw new Error(`本 run 还没拿到鸿蒙设备锁，拒绝安装；先执行 device-lock.mjs acquire --platforms ohos --run ${runId}`);
+      }
       const hdcArgs = args.device ? ['-t', args.device, 'install', args.hap] : ['install', args.hap];
       const output = execFileSync('hdc', hdcArgs, { timeout: 120000, encoding: 'utf-8' });
       if (!/success(?:ful(?:ly)?)?/i.test(output) || /\[Fail\]|install(?:ation)? failed/i.test(output)) throw new Error('hdc 未确认安装成功');

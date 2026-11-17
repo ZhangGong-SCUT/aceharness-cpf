@@ -17,7 +17,7 @@ description: "Write Flutter OHOS regression demos that REPRODUCE bugs on device.
 4. **三平台可编译**：包含完整的 ohos/android/ios 原生工程，`flutter build hap/apk/ios` 能编译通过，`flutter run` 能在设备上启动
 5. **真机/模拟器运行验证（MANDATORY）**：编译出包后必须在真机或模拟器上实际运行，确认 app 能正常启动、首页能渲染、scenario 可操作。**有真机连接时优先在真机上运行**；无真机时使用模拟器。不能仅编译通过就交付——编译通过 ≠ 能跑起来。
 6. **复现效果验证与持续迭代（MANDATORY）**：app 运行起来后，必须逐个 scenario 验证**实际效果是否符合复现预期**（bug 行为是否出现 / 计数是否正确 / 异常是否触发）。如果不符合预期，必须分析原因并迭代修改代码，重新编译→运行→验证，直到每个 scenario 的实际效果都与预期一致才能交付。**跑起来 ≠ 复现成功**。
-7. **跨平台对照验证（MANDATORY）**：OHOS 独有 bug 必须在 Android 和/或 iOS 上运行同样 scenario，验证 bug **不复现**，形成"OHOS 有 bug / Android·iOS 正常"的对照证据。**能复现 ≠ 一定是 OHOS 独有问题**——如果 demo 代码自身有错误，三平台都会出现异常行为。
+7. **跨平台对照验证（MANDATORY）**：OHOS 独有 bug 必须在当前系统能够运行的 Android 和 iOS 上都运行同样 scenario，验证 bug **不复现**。能跑的对照平台都要做，不能只做一端。Windows 和 Linux 无法运行 iOS 模拟器时可以不做 iOS，并写明原因，形成"OHOS 有 bug / Android·iOS 正常"的对照证据。**能复现 ≠ 一定是 OHOS 独有问题**——如果 demo 代码自身有错误，三平台都会出现异常行为。
 
 这个 SKILL 总结的是**实战血泪经验**——不是为了教你写 demo，而是帮你避免下面 §6 列出的每个浪费 1 小时+的坑。
 
@@ -72,7 +72,7 @@ OHOS Flutter 回归 demo → 本 Skill
    - **部分覆盖**：如果某个场景暂时无法复现，必须在 README 中明确标注“未覆盖场景 + 原因 + 后续计划”，不能默默省略
 
 6. **这个 bug 是 OHOS 独有的吗？是否需要跨平台对照验证？**
-   - **OHOS 独有 bug**（根因在 `if (defaultTargetPlatform == TargetPlatform.ohos)` 分支内，或涉及 OHOS 独有的 MethodChannel / 平台组件）：**必须**在 Android 和/或 iOS 上运行同样 scenario，验证 bug **不复现**（详见 §3.6）
+   - **OHOS 独有 bug**（根因在 `if (defaultTargetPlatform == TargetPlatform.ohos)` 分支内，或涉及 OHOS 独有的 MethodChannel / 平台组件）：**必须**在当前系统能够运行的 Android 和 iOS 上都运行同样 scenario，验证 bug **不复现**。能跑的都要做，不能只做一端。Windows 和 Linux 无法运行 iOS 模拟器时可以不做 iOS，并写明原因（详见 §3.6）
    - **跨平台 bug**（三平台都有相同行为）：不需要跨平台对照验证，但需在 README 中说明
    - **不确定**：先按 OHOS 独有 bug 处理，做跨平台对照验证，如果 Android/iOS 上也复现则说明是 demo 代码错误或跨平台 bug
 
@@ -219,7 +219,7 @@ OHOS 应用必须签名才能构建 hap 包。调试签名绑定 bundleName，�
 
 ### 3.6 跨平台对照验证（MANDATORY — OHOS 独有 bug 必须在 Android/iOS 上验证"不复现"）
 
-§3.5 确认了"OHOS 上 bug 能复现"，但 **能复现 ≠ 一定是 OHOS 独有 bug**。如果 demo 代码本身有逻辑错误，Android/iOS 上也会出现同样的异常行为，reviewer 会怀疑 bug 是 demo 自身引入的而非 framework 问题。因此必须在 Android 和/或 iOS 上运行同样的 scenario，验证 bug **不复现**，形成跨平台对照证据。
+§3.5 确认了"OHOS 上 bug 能复现"，但 **能复现 ≠ 一定是 OHOS 独有 bug**。如果 demo 代码本身有逻辑错误，Android/iOS 上也会出现同样的异常行为，reviewer 会怀疑 bug 是 demo 自身引入的而非 framework 问题。因此必须在当前系统能够运行的 Android 和 iOS 上都运行同样的 scenario，验证 bug **不复现**，形成跨平台对照证据。能跑的对照平台都要做，不能只做一端。Windows 和 Linux 无法运行 iOS 模拟器时可以不做 iOS，并写明原因。
 
 **为什么要跨平台对照验证**：
 
@@ -229,10 +229,12 @@ OHOS 应用必须签名才能构建 hap 包。调试签名绑定 bundleName，�
 | demo 代码错误 | bug 行为出现 | bug 行为也出现 | ❌ 是 demo 自身 bug，不是 framework 问题 |
 | 跨平台 bug | bug 行为出现 | bug 行为也出现 | ⚠️ 需重新评估 issue 范围 |
 
+「OHOS 独有」只在当前系统能跑的对照平台全部表现正常时成立。只跑了 Android、而 iOS 还能跑却没跑，不能下这个结论。
+
 **验证要求**：
 
 1. **识别 OHOS 独有 bug**：如果 bug 根因在 `if (defaultTargetPlatform == TargetPlatform.ohos)` 分支内，或涉及 OHOS 独有的 MethodChannel / 平台组件，则属于 OHOS 独有 bug，**必须**进行跨平台对照验证
-2. **至少在一个非 OHOS 平台上运行**：优先 Android。有安卓真机用真机；没有真机必须启动 Android 模拟器后再跑同样 scenario。Windows 上没有 iOS 模拟器时，Android 对照仍必须做。
+2. **能运行的对照平台都要跑**：Android 和 iOS 只要当前系统能启动，都要跑与 OHOS 相同的 scenario。不能只做一端。鸿蒙和 iOS 可能同时有问题、只有 Android 正常，只看 Android 会漏掉平台差异。macOS 上没有 iOS 真机时必须先启动 iOS 模拟器再跑。Windows 和 Linux 无法运行 iOS 模拟器，可以不做 iOS，并写明「本机系统无法运行 iOS 模拟器」。Android 在这三个系统上都能启动模拟器，不能因为已经做了鸿蒙或 iOS 就跳过。
 3. **验证 bug 不复现**：在 Android/iOS 上，bug 场景应显示正常行为（如计数 = 1、无异常、后台不响应），基线场景也正常
 4. **README 中记录跨平台预期差异**：在场景覆盖矩阵中明确标注每个 scenario 在三平台上的预期行为差异
 
@@ -265,7 +267,9 @@ Demo 代码中如果用了 `Platform.isOhos` 或 `OhosView`（OHOS Flutter SDK �
 **验证失败时的处理**：
 - 如果 Android/iOS 上 bug 也复现 → 说明可能是 demo 代码自身的问题（而非 framework OHOS 独有 bug），需要排查 demo 逻辑
 - 如果 Android/iOS 上 app 无法启动 → 检查平台特定配置（如 Android 权限、iOS Info.plist），修复后重新运行
-- 如果没有安卓真机 → **先按 [`references/device-emulator-setup.md`](references/device-emulator-setup.md) 启动 AVD**，启动成功则必须完成对照；只有 SDK/AVD 不存在或启动失败，才允许在 README 标注「跨平台对照验证未执行 + 原因」，不能因为没真机就直接跳过
+- 如果没有安卓真机 → **先按 [`references/device-emulator-setup.md`](references/device-emulator-setup.md) 启动 AVD**，启动成功则必须完成对照；只有 SDK/AVD 不存在或启动失败，才允许在 README 标注「Android 对照未执行 + 原因」
+- 如果本机是 macOS 且没有已启动的 iOS 模拟器 → 先启动 iOS 模拟器并跑同一 scenario。只有模拟器不存在或启动失败，才允许标注原因后跳过
+- 如果本机是 Windows 或 Linux → 无法运行 iOS 模拟器，不做 iOS 实机对照，README 必须写明「本机系统无法运行 iOS 模拟器」
 
 ---
 

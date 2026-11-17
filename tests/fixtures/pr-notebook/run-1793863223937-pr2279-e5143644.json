@@ -1,0 +1,117 @@
+{
+  "id": "run-1793863223937-pr2279-e5143644",
+  "pr": "CPF-Flutter/flutter_flutter#2279",
+  "note": "当时的门禁结论是 blocked_no_issue。",
+  "recorded": {
+    "phase": "blocked_no_issue",
+    "verdict": "pass"
+  },
+  "input": {
+    "labels": [
+      "AI已检视",
+      "dco检查成功"
+    ],
+    "comments": [
+      {
+        "user": {
+          "login": "openharmony_ci"
+        },
+        "body": "<p>感谢提交 Pull Requests ！此PR未通过DCO校验。<br>校验失败可能原因：</br><br>1. 未签署“DCO协议”（开发者原创声明协议），<a href=\"https://dco.openharmony.cn/sign/Z2l0ZWUlMkZvcGVuX2hhcm1vbnk=\">在线签署、查看签署状态</a>。</br><br>2. Commits 中未包含 Signed-off-by信息，<a href=\"https://gitcode.com/openharmony/docs/blob/master/zh-cn/contribute/FAQ.md\">参考FAQ处理</a>。</br><br>修复上述问题后，在PR的评论框输入“check dco” ，单击”评论”，系统将再次进行DCO校验。</br><br>当前检测到如下Commits 未包含Signed-off-by信息：</br><ul><li><a href=\"https://gitcode.com/CPF-Flutter/flutter_flutter/commits/detail/b33a1fb6d8cef7e4fc06a599261890af4acf1443?ref=oh-3.35.7-release&prId=2279\">b33a1fb</a></li></ul><hr></hr><p>Thanks for submitting a pull request. This pull request has not passed the DCO check.<br>Possible causes:</br><br>1. You have not signed the Developer Certificate of Origin (DCO). <a href=\"https://dco.openharmony.cn/sign/Z2l0ZWUlMkZvcGVuX2hhcm1vbnk=\">Sign the DCO and check DCO status</a>.</br><br>2. The commits do not contain the Signed-off-by information. To resolve this issue, <a href=\"https://gitcode.com/openharmony/docs/blob/master/en/contribute/faqs.md\">see FAQs</a>.</br><br>After resolving the preceding issues, enter check dco in the comment box of this pull request and click Comment. The system will check DCO status again.</br><br>The following commits do not contain the Signed-off-by information:</br><ul><li><a href=\"https://gitcode.com/CPF-Flutter/flutter_flutter/commits/detail/b33a1fb6d8cef7e4fc06a599261890af4acf1443?ref=oh-3.35.7-release&prId=2279\">b33a1fb</a></li></ul>",
+        "created_at": "2026-10-18T10:46:58+08:00",
+        "comment_type": "pr_comment"
+      },
+      {
+        "user": {
+          "login": "openharmony_ci"
+        },
+        "body": "<p>感谢提交 Pull Requests！<br>Thanks for submitting a pull request.</br>",
+        "created_at": "2026-10-18T10:50:42+08:00",
+        "comment_type": "pr_comment"
+      },
+      {
+        "user": {
+          "login": "z2036709353"
+        },
+        "body": "check dco",
+        "created_at": "2026-10-18T10:51:41+08:00",
+        "comment_type": "pr_comment"
+      },
+      {
+        "user": {
+          "login": "openharmony_ci"
+        },
+        "body": "<p>感谢提交 Pull Requests！<br>Thanks for submitting a pull request.</br>",
+        "created_at": "2026-10-18T10:52:17+08:00",
+        "comment_type": "pr_comment"
+      },
+      {
+        "user": {
+          "login": "cpf-manager"
+        },
+        "body": "【AI-Review】【建议】【基础代码问题】【日志输出问题】\n● 问题: `packages/flutter/lib/src/widgets/element_path.dart:360` 的 `WidgetTapPath._emit` 中直接调用 `print` 输出 `[WidgetPath] ...` 日志（包含 widget 路径与被点控件的可见文字），未使用 `kDebugMode` 或 `assert` 包裹。触发路径：用户点击可交互控件 → `TapGestureRecognizer._handleTapUp` 调用 `invokeCallback('onTapUp'/'onTap', ...)`（packages/flutter/lib/src/gestures/tap.dart:755、758）→ `GestureRecognizer.invokeCallback` 在 packages/flutter/lib/src/gestures/recognizer.dart:369 调用 `GestureBinding.instance.recognizerCallbackInvoked(this, name)` → `WidgetsBinding.recognizerCallbackInvoked`（packages/flutter/lib/src/widgets/binding.dart:667-669）→ `WidgetTapPath.emitFromRecognizer` 调度 microtask → `_emit` 执行 `print('[WidgetPath] ${element.widget.runtimeType} -> $path ... text=\"$text\"')`。该 `print` 在 release 模式下同样会执行（无 `kDebugMode`/`assert` 守卫）。\n\n● 影响: 违反 `references/CPF-Flutter/flutter_flutter/performance-review-guide.md` 中\"release 版本应减少日志输出\"和 `security-review-guide.md` 中\"日志不应输出敏感信息 / 不应通过日志泄露内部实现细节\"。每次控件点击都会在 release 产物中输出包含 widget 路径与可见文字的日志（在 OHOS 上 print 经由 hilog 落盘），高频触发且暴露界面结构（如按钮文字、控件树路径）。\n\n● 建议: 使用 `if (kDebugMode) print(...)` 或 `assert(() { print(...); return true; }())` 包裹，使该调试日志仅在 debug 构建中输出；若需要在 release 真机上做端到端验证，应改为通过受配置开关控制的日志通道，而不是默认在 release 产物中无条件输出。注意：现有测试（`packages/flutter/test/widgets/element_path_test.dart:30-43`）通过 `ZoneSpecification(print: ...)` 拦截 print 输出，改为 `kDebugMode` 守卫后测试在 debug 模式下仍可正常运行。",
+        "created_at": "2026-10-18T11:07:04+08:00",
+        "comment_type": "diff_comment"
+      },
+      {
+        "user": {
+          "login": "cpf-manager"
+        },
+        "body": "【AI-Review】【建议】【基础代码问题】【日志输出问题】\n● 问题: `engine/src/flutter/shell/platform/ohos/ohos_xcomponent_adapter.cpp:619` 的 `XComponentBase::ReportInnerPath` 中使用 `LOGI` 输出 `path` 与 `text`，并用 `%{public}s` 绕过 hilog 隐私过滤。触发路径：Dart 侧 `WidgetTapPath._emit` 调用 `reportChannel.send`（packages/flutter/lib/src/widgets/element_path.dart:367）→ `PlatformMessageHandlerOHOS::HandlePlatformMessage` 处理 `flutter/widget_tap_path` 通道（engine/src/flutter/shell/platform/ohos/platform_message_handler_ohos.cpp:32）→ `platform_task_runner_->PostTask` 调度 lambda（platform_message_handler_ohos.cpp:58-62）→ `XComponentAdapter::ReportInnerPath`（ohos_xcomponent_adapter.cpp:152）→ `target->ReportInnerPath(path, text)`（ohos_xcomponent_adapter.cpp:171）→ `XComponentBase::ReportInnerPath` 在调用 `OH_NativeXComponent_ReportInnerPath_` 之前执行 `LOGI(\"... path=%{public}s text=%{public}s\", path, ...)`。`LOGI` 属 info 级别，在 release 产物中默认输出。\n\n● 影响: 违反 `references/CPF-Flutter/flutter_flutter/performance-review-guide.md` 中\"release 版本应减少日志输出\"和 `security-review-guide.md` 中\"日志不应输出敏感信息 / 不应通过日志泄露内部实现细节\"。每次控件点击都会在 release 产物中通过 hilog 输出 widget 路径与可见文字，且 `%{public}s` 不受隐私过滤，既影响性能，也暴露界面结构（如按钮文字、控件树路径）。\n\n● 建议: 将 `LOGI` 改为 `LOGD`（debug 级别，release 默认不输出），与同文件中其他调试日志保持一致（如 ohos_xcomponent_adapter.cpp:52、65、217、318、340、514、531、659、678、710、737 等均使用 LOGD，仅 SurfaceCreated/destroyed 等关键生命周期事件用 LOGI）。如需在 release 真机端到端验证，应通过受配置开关控制的日志通道，而不是默认在 release 产物中以 `%{public}s` 输出用户可见文字。",
+        "created_at": "2026-10-18T11:07:15+08:00",
+        "comment_type": "diff_comment"
+      },
+      {
+        "user": {
+          "login": "openharmony_ci"
+        },
+        "body": "<p>感谢提交 Pull Requests！<br>Thanks for submitting a pull request.</br>",
+        "created_at": "2026-11-05T15:23:32+08:00",
+        "comment_type": "pr_comment"
+      },
+      {
+        "user": {
+          "login": "z2036709353"
+        },
+        "body": "start build",
+        "created_at": "2026-11-05T15:23:35+08:00",
+        "comment_type": "pr_comment"
+      },
+      {
+        "user": {
+          "login": "openharmony_ci"
+        },
+        "body": "<p>该提交没有关联任何Issue,请先关联一个Issue后再触发构建<br>The PR is not associated with any Issue, Please associate the PR with one Issue before trigger build.</br>",
+        "created_at": "2026-11-05T15:23:58+08:00",
+        "comment_type": "pr_comment"
+      }
+    ],
+    "pull": {
+      "title": "feat(ohos): report tapped widget's visible text to XComponent",
+      "body": "穿刺：为控件点击上报增加 text 字段（被点控件的可见文本），系统接口 OH_NativeXComponent_ReportInnerPath 升级为 3 参 (component, path, text)。\n\n- Dart：ElementPath.visibleTextOf 提取组件子树可见文本（跳过输入框防泄露、超长截断），_emit 改发 JSON payload\n- 引擎：rapidjson 解析 path/text，调用 3 参接口\n- 测试：新增 widget 单测 + 真机端到端验证（[WidgetPath] ... text=... ）",
+      "state": "open",
+      "user": {
+        "login": "z2036709353"
+      },
+      "labels": [
+        "AI已检视",
+        "dco检查成功"
+      ]
+    },
+    "state": "open",
+    "own_pr": true,
+    "dcp_defect_count": 0
+  },
+  "expected": {
+    "phase": "blocked_no_issue",
+    "verdict": "pass",
+    "welcome": true,
+    "start_build_posted": false,
+    "dco_ok": true,
+    "static_ok": false,
+    "compile_ok": false,
+    "test_fail": false,
+    "build_passed": false,
+    "failure_cause": "none",
+    "trigger_rejected": false
+  }
+}

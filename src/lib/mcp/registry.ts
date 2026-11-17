@@ -13,13 +13,15 @@ export function getVisionLookScriptPath(repoRoot = getRepoRoot()): string {
   return join(repoRoot, 'skills', 'cpf-ohos-issue-analysis', 'scripts', 'look-at-image.mjs');
 }
 
-export function getBuiltinMcpServers(repoRoot = getRepoRoot()): ManagedMcpServer[] {
+export function getBuiltinMcpServers(repoRoot = getRepoRoot(), nodePath = process.execPath): ManagedMcpServer[] {
   const scriptPath = getVisionLookScriptPath(repoRoot);
   if (!existsSync(scriptPath)) return [];
+  // OpenCode 子进程的 PATH 里经常没有 node。用拉起 ACE 的那个 node，避免进程起不来、连接空等 30 秒。
+  const nodeBin = String(nodePath || process.execPath || 'node').trim() || 'node';
   return [{
     name: VISION_LOOK_MCP_NAME,
     type: 'stdio',
-    command: `node ${JSON.stringify(scriptPath)} mcp`,
+    command: `${JSON.stringify(nodeBin)} ${JSON.stringify(scriptPath)} mcp`,
   }];
 }
 
@@ -282,17 +284,63 @@ export function toCodexMcpServers(servers: ManagedMcpServer[]): Record<string, {
  * 旧逻辑每次引擎 execute 都重连 → 每步白烧 30~60s（mcp-ensured 打点实证）。
  * serve 重启后 client 是新对象，会自然重试一次。
  */
-const mcpConnectAttemptedByClient = new WeakMap<object, Set<string>>();
+const mcpConnectAttemptsByClient = new WeakMap<object, Map<string, number>>();
 
-function markMcpConnectAttempted(client: object, serverName: string): boolean {
-  let attempted = mcpConnectAttemptedByClient.get(client);
-  if (!attempted) {
-    attempted = new Set<string>();
-    mcpConnectAttemptedByClient.set(client, attempted);
+/** 同一 serve 客户端最多连两次。第一次失败后，实例重建或状态仍是 failed 时再试一次，避免每步空等 30 秒。 */
+export function allowMcpConnectAttempt(client: object, serverName: string, status?: string): boolean {
+  if (status === 'connected') return false;
+  let attempts = mcpConnectAttemptsByClient.get(client);
+  if (!attempts) {
+    attempts = new Map<string, number>();
+    mcpConnectAttemptsByClient.set(client, attempts);
   }
-  if (attempted.has(serverName)) return false;
-  attempted.add(serverName);
+  const used = attempts.get(serverName) || 0;
+  if (used >= 2) return false;
+  attempts.set(serverName, used + 1);
   return true;
+}
+
+/**
+ * 将 SDK 错误转成可持久化/展示的文本。
+ * SDK 的 error 常是自定义对象，JSON.stringify 后只剩 {}；必须显式取 message/code。
+ */
+export function describeMcpError(value: unknown): string {
+  if (typeof value === 'string') return value.trim() || '未知错误';
+  if (value instanceof Error) return value.message || value.name;
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const data = record.data && typeof record.data === 'object'
+      ? record.data as Record<string, unknown>
+      : record;
+    const message = [data.message, record.message].find((item) => typeof item === 'string' && item.trim());
+    if (typeof message === 'string') return message.trim();
+    const code = data.code ?? record.code;
+    const serialized = (() => {
+      try { return JSON.stringify(value); } catch { return ''; }
+    })();
+    if (serialized && serialized !== '{}') return serialized;
+    return typeof code === 'string' || typeof code === 'number' ? `MCP 错误（code=${code}）` : '未知 MCP 错误（空错误对象）';
+  }
+  return String(value ?? '未知 MCP 错误');
+}
+
+async function readMcpStatusWithRetry(client: any, query: Record<string, string>): Promise<any> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await client.mcp.status({ query });
+      if (response?.error) {
+        lastError = response.error;
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+        continue;
+      }
+      return (response?.data ?? {}) as Record<string, any>;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+    }
+  }
+  throw new Error(`读取 MCP 状态失败: ${describeMcpError(lastError)}`);
 }
 
 export async function ensureOpenCodeCompatibleMcpServers(
@@ -303,18 +351,12 @@ export async function ensureOpenCodeCompatibleMcpServers(
   if (!client?.mcp || !workingDirectory || !servers || servers.length === 0) return;
 
   const query = { directory: workingDirectory };
-  const statusResponse = await client.mcp.status({ query });
-  if (statusResponse?.error) {
-    throw new Error(`读取 MCP 状态失败: ${JSON.stringify(statusResponse.error)}`);
-  }
-  const statusMap = (statusResponse?.data && typeof statusResponse.data === 'object')
-    ? statusResponse.data as Record<string, { status?: string }>
-    : {};
+  // 状态接口瞬时失败不能直接终止整个 Issue：同一 server 重试两次，并保留结构化错误。
+  const statusMap = await readMcpStatusWithRetry(client, query);
 
   for (const server of servers) {
-    // 已连接 → 跳过；本 serve 已尝试过（含失败——重试只会再烧 30s 超时）→ 跳过
-    if (statusMap[server.name]?.status === 'connected') continue;
-    if (!markMcpConnectAttempted(client, server.name)) continue;
+    const status = statusMap[server.name]?.status;
+    if (!allowMcpConnectAttempt(client, server.name, status)) continue;
 
     if (!statusMap[server.name]) {
       const config = toOpenCodeMcpConfig(server);
@@ -327,7 +369,7 @@ export async function ensureOpenCodeCompatibleMcpServers(
         },
       });
       if (addResponse?.error) {
-        throw new Error(`添加 MCP "${server.name}" 失败: ${JSON.stringify(addResponse.error)}`);
+        throw new Error(`添加 MCP "${server.name}" 失败: ${describeMcpError(addResponse.error)}`);
       }
     }
 
@@ -336,7 +378,7 @@ export async function ensureOpenCodeCompatibleMcpServers(
       path: { name: server.name },
     });
     if (connectResponse?.error) {
-      throw new Error(`连接 MCP "${server.name}" 失败: ${JSON.stringify(connectResponse.error)}`);
+      throw new Error(`连接 MCP "${server.name}" 失败: ${describeMcpError(connectResponse.error)}`);
     }
   }
 }

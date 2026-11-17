@@ -775,7 +775,7 @@ async function writeRunStateNow(state: PersistedRunState): Promise<void> {
     await mkdir(dir, { recursive: true });
   }
   const persistedState = await compactStateForYaml(state);
-  const yamlContent = '# Auto-generated run state\n' + stringify(persistedState);
+  const yamlContent = '# Auto-generated run state\n' + stringify(persistedState, { lineWidth: 0 });
   const target = stateFilePath(state.runId);
   const temp = resolve(dir, `state.yaml.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await writeFile(temp, yamlContent, 'utf-8');
@@ -868,6 +868,37 @@ export async function saveProcessOutput(
  * Returns a map of stepName → output content.
  */
 export async function loadStepOutputs(runId: string): Promise<Record<string, string>> {
+  // 同名兼容输出可能来自上一轮。优先使用 stepLogs 里每一次尝试的独立归档，
+  // 否则验证 Agent 会在下一轮继续读旧证据，重复同一个退回意见直至 maxVisits 熔断。
+  try {
+    const state = await loadRunState(runId, { hydrateLargeOutputs: false });
+    if (state && Array.isArray(state.stepLogs) && state.stepLogs.length > 0) {
+      const latest = new Map<string, PersistedStepLog>();
+      for (const log of state.stepLogs) {
+        if (log?.status === 'completed' && log.stepName) latest.set(log.stepName, log);
+      }
+      const results: Record<string, string> = {};
+      for (const [stepName, log] of latest) {
+        let content = '';
+        if (typeof log.outputRef === 'string' && log.outputRef) {
+          const path = resolve(runDir(runId), log.outputRef);
+          if (path.startsWith(runDir(runId) + '/')) {
+            content = await readFile(path, 'utf-8').catch(() => '');
+          }
+        }
+        content ||= typeof log.output === 'string' ? log.output : '';
+        if (!content) continue;
+        results[stepName] = content;
+        // 旧阶段式工作流按文件名保存完成步骤；没有歧义时保留这个兼容别名。
+        const legacyName = safeStepFileName(stepName);
+        if (legacyName !== stepName && !results[legacyName]) results[legacyName] = content;
+      }
+      return results;
+    }
+  } catch {
+    // 无状态文件或读取失败时回退到旧版 flat outputs；不能因此让步骤启动失败。
+  }
+
   const dir = outputsDir(runId);
   if (!existsSync(dir)) return {};
   const files = await readdir(dir);
@@ -876,7 +907,6 @@ export async function loadStepOutputs(runId: string): Promise<Record<string, str
     if (file.endsWith('.md') || file.endsWith('.txt')) {
       try {
         const content = await readFile(resolve(dir, file), 'utf-8');
-        // Strip extension to get step name
         const stepName = file.replace(/\.(md|txt)$/, '');
         results[stepName] = content;
       } catch { /* skip unreadable */ }

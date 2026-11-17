@@ -24,7 +24,8 @@ import { join } from 'path';
 
 const logger = createLogger('PrReviewCapabilities');
 
-const GITCODE_API_BASE = 'https://gitcode.com/api/v5';
+// 测试钩子：GITCODE_API_ROOT 可指向本地 GitCode 模拟器（默认线上地址，行为不变）。
+const GITCODE_API_BASE = process.env.GITCODE_API_ROOT || 'https://gitcode.com/api/v5';
 const CAPABILITIES_FILE = join(aceDataDir(), 'aiweb-gitcode-capabilities.json');
 
 export const CAPABILITY_UNKNOWN = 'unknown';

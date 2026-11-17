@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { _buildCommentChangePairs } from '../prReview/client.js';
+import { _buildCommentChangePairs, commitMessagePatch } from '../prReview/client.js';
 
 function patchOf(files) {
     return Object.entries(files).map(([name, added]) => [
@@ -81,4 +81,49 @@ test('门禁文件不挂到检视意见，也不进附加修改', () => {
     assert.equal(pairs[0].gateRelated, true);
     assert.equal(pairs.some((pair) => pair.isExtra), false);
     assert.equal(pairs.some((pair) => pair.isGate && pair.diffFile === file), true);
+});
+
+test('commit 标题建议生成可展示的 diff，文件补丁仍单独保留', () => {
+    const text = commitMessagePatch({
+        mode: 'suggestion',
+        suggestions: [{
+            target: 'commit-message',
+            current: 'docs: 为 flutter_exit_app 文档补充 Android/iOS 平台支持列（2 文件）',
+            suggested_title: 'docs: add Android/iOS platform support columns to flutter_exit_app OpenHarmony READMEs (2 files)',
+            suggested_body: 'Signed-off-by: zhanggong <2036709353@qq.com>',
+        }],
+    });
+    assert.match(text, /diff --git a\/COMMIT_EDITMSG b\/COMMIT_EDITMSG/);
+    assert.match(text, /^-docs: 为 flutter_exit_app/m);
+    assert.match(text, /^\+docs: add Android\/iOS/m);
+    assert.equal(commitMessagePatch({ suggestions: [] }), '');
+});
+
+test('新一轮建议字段 current_commit_title 也能展示标题变化', () => {
+    const text = commitMessagePatch({
+        mode: 'suggestion',
+        suggestions: [{
+            type: 'commit_message',
+            current_commit_title: 'docs: 为 flutter_exit_app 文档补充 Android/iOS 平台支持列（2 文件）',
+            proposed_commit_title: 'docs: add Android/iOS platform support columns to flutter_exit_app OpenHarmony READMEs (2 files)',
+            keep_trailer: 'Signed-off-by: zhanggong <2036709353@qq.com>（保留，DCO 已通过）',
+        }],
+    });
+    assert.match(text, /^-docs: 为 flutter_exit_app/m);
+    assert.match(text, /^\+docs: add Android\/iOS/m);
+    assert.equal((text.match(/^\+Signed-off-by:/gm) || []).length, 1);
+    assert.equal((text.match(/^-Signed-off-by:/gm) || []).length, 1);
+});
+
+test('建议字段 current_value 与 suggested_value 也能展示标题变化', () => {
+    const text = commitMessagePatch({
+        mode: 'suggestion',
+        suggestions: [{
+            target: 'commit_message',
+            current_value: 'docs: 为 flutter_exit_app 文档补充 Android/iOS 平台支持列（2 文件）',
+            suggested_value: 'docs: add Android/iOS platform support columns to flutter_exit_app OpenHarmony READMEs (2 files)',
+        }],
+    });
+    assert.match(text, /^-docs: 为 flutter_exit_app/m);
+    assert.match(text, /^\+docs: add Android\/iOS/m);
 });

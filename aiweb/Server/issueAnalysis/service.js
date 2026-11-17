@@ -11,10 +11,13 @@
  */
 
 import { aceDataDir, aceRunsDir, aceRuntimeRoot } from '../library/aceRuntime.js';
+import { isIsolatedRunDir, readWorkingDirectory } from '../library/runPath.js';
 import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { singleFlight } from './singleFlight.js';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, basename } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { HybridTaskStore } from '../library/HybridTaskStore.js';
 import { STAGE, TERMINAL_STAGES } from '../orchestrator/stages.js';
@@ -26,6 +29,7 @@ import {
     isValidIssueUrl,
     startWorkflow,
     resumeWorkflow,
+    stopWorkflow,
     getWorkflowStatusCompact,
     getWorkflowStatusFull,
     getStepOutput,
@@ -36,10 +40,14 @@ import {
     getServiceToken,
 } from './aceHarnessClient.js';
 import { getPersistedIssueRun } from './runRecovery.js';
+import { createTerminalStatusCache } from './statusSnapshots.js';
+import { listArtifactsCached, invalidateArtifactSummary } from './artifactSummaryCache.js';
 import { listRunArtifacts, readRunArtifact } from './artifacts.js';
 import { resolveTerminalTimes } from './terminalTimes.js';
 import { EVALUATION_MODES, writeIssueSnapshot } from './snapshotInput.js';
 import { computeChainMetrics } from './chainMetrics.js';
+
+import { createFailureRecoveryService } from './failureRecoveryService.js';
 
 const logger = createLogger('IssueAnalysisService');
 
@@ -52,6 +60,16 @@ function getStore() {
         _store.initialize();
     }
     return _store;
+}
+
+function getFailureRecovery() {
+    if (!getFailureRecovery.service) {
+        getFailureRecovery.service = createFailureRecoveryService({
+            store: getStore(), aceConfigFile: config.aceharness.configFile,
+            resumeWorkflow, singleFlight, stageAnalyzing: STAGE.ISSUEANALYSIS_ANALYZING, logger,
+        });
+    }
+    return getFailureRecovery.service;
 }
 
 // ─── AceHarness 状态 → 本地 stage 映射 ────────────────────────────────────────
@@ -341,8 +359,8 @@ export async function submitFeedback(parentTaskId, feedback) {
     let parentRunDir = join(homedir(), parentRunId);
     try {
         const state = readFileSync(join(aceRunsDir(), parentRunId, 'state.yaml'), 'utf8');
-        const recorded = /^workingDirectory:\s*["']?([^\n"']+)/m.exec(state)?.[1]?.trim();
-        if (recorded && basename(recorded) === parentRunId) parentRunDir = recorded;
+        const recorded = readWorkingDirectory(state);
+        if (isIsolatedRunDir(recorded, parentRunId)) parentRunDir = recorded;
     } catch { /* old runs retain the original home/runId layout */ }
     const requestKey = _requestKey([parent.ownerUsername || '', parentTaskId, text, ITERATE_CONFIG_FILE]);
     return singleFlight(requestKey, async () => {
@@ -519,10 +537,63 @@ function _interruptDetail(reason) {
 }
 
 /**
- * 服务重启把分析进程打断后，从原来的 run 接着跑。
- * 已完成步骤由工作流恢复逻辑跳过，中断的那一步会重新执行。
+ * 从已定位的失败步骤恢复，保留之前成功的步骤并注入定向恢复指令。
+ * 支持普通基础设施失败；真实 Issue 验证失败不可被当作平台故障绕过。
  */
-export async function continueIssueAnalysis(taskId) {
+export async function continueIssueAnalysis(taskId, options = {}) {
+    // 先失效终态快照，防止恢复期间上游短暂超时又展示旧的失败/完成详情。
+    terminalStatusSnapshots.invalidate(taskId);
+    invalidateArtifactSummary(runId);
+    return getFailureRecovery().continueTask(taskId, options);
+}
+
+export async function diagnoseIssueAnalysisFailure(taskId, options = {}) {
+    return getFailureRecovery().diagnose(taskId, options);
+}
+
+export async function listIssuePlatformDefects() {
+    return getFailureRecovery().listDefects();
+}
+
+const DEVICE_LOCK_SCRIPT = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '../../../skills/cpf-ohos-issue-analysis/scripts/device-lock.mjs',
+);
+
+/** 停掉分析之后再按 runId 放锁。引擎停止路径也会放一次，这里兜住引擎没走到 finally 的情况。 */
+function releaseIssueDeviceLocks(runId) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [DEVICE_LOCK_SCRIPT, 'release', '--all', '--run', runId], {
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        const timer = setTimeout(() => {
+            child.kill('SIGTERM');
+            reject(new Error('释放设备锁超时'));
+        }, 20000);
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (chunk) => { stdout += chunk; });
+        child.stderr.on('data', (chunk) => { stderr += chunk; });
+        child.on('error', (error) => { clearTimeout(timer); reject(error); });
+        child.on('close', (code) => {
+            clearTimeout(timer);
+            const line = String(stdout).trim().split('\n').filter(Boolean).pop() || '';
+            let parsed = null;
+            try { parsed = JSON.parse(line); } catch { /* 按退出码处理 */ }
+            if (code) {
+                reject(new Error(parsed?.error || stderr.trim().slice(0, 300) || `释放设备锁失败（退出码 ${code}）`));
+                return;
+            }
+            resolve(parsed || { released: true });
+        });
+    });
+}
+
+/**
+ * 停止一条分析，并释放它占用的设备锁和排队。
+ * 已经结束的任务不会被改回运行中，但仍会清掉残留的锁。
+ */
+export async function stopIssueAnalysis(taskId) {
     const store = getStore();
     const task = store.get(taskId);
     if (!task) {
@@ -532,39 +603,56 @@ export async function continueIssueAnalysis(taskId) {
     }
     const metadata = _metadata(task);
     const runId = metadata.runId || task.analysisSessionId;
-    const configFile = metadata.configFile || (task.parentTaskId ? ITERATE_CONFIG_FILE : config.aceharness.configFile);
+    terminalStatusSnapshots.invalidate(taskId);
+    invalidateArtifactSummary(runId);
     if (!runId) {
-        const error = new Error('这个任务没有可继续的运行记录');
-        error.status = 400;
-        throw error;
+        if (!TERMINAL_STAGES.has(task.stage)) {
+            store.patch(taskId, {
+                stage: STAGE.CANCELLED,
+                error: null,
+                finishedAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+            });
+        }
+        return { taskId, runId: null, locks: null, message: '已停止' };
     }
-    let status = await getWorkflowStatusCompact(runId, configFile);
-    if (!status?.status || (status.status === 'idle' && status.runId !== runId)) {
-        const persisted = await getPersistedIssueRun(runId, configFile);
-        if (persisted) status = persisted;
+
+    let stopError = null;
+    try {
+        await stopWorkflow(runId);
+    } catch (error) {
+        stopError = error;
     }
-    const reason = status?.statusReason || status?.error || task.error || '';
-    const detail = _interruptDetail(reason);
-    if (status?.status !== 'crashed' || !detail) {
-        const error = new Error('这条任务不是服务重启造成的中断，不能从原进度继续');
-        error.status = 409;
-        throw error;
+    let locks = null;
+    try {
+        locks = await releaseIssueDeviceLocks(runId);
+    } catch (error) {
+        const message = stopError
+            ? `${stopError.message}；设备锁也没有释放：${error.message}`
+            : `分析已停止，但设备锁没有释放：${error.message}`;
+        const wrapped = new Error(message);
+        wrapped.status = 502;
+        throw wrapped;
     }
-    await resumeWorkflow(runId);
-    const where = detail.step || detail.phase || '中断的步骤';
-    const kept = detail.completed ? `已完成的 ${detail.completed} 步会保留。` : '已完成的步骤会保留。';
-    store.patch(taskId, {
-        stage: STAGE.ISSUEANALYSIS_ANALYZING,
-        error: null,
-        finishedAt: null,
-        updatedAt: new Date().toISOString(),
-    });
+    if (stopError) {
+        const wrapped = new Error(`设备锁已释放，但分析没有停下来：${stopError.message}`);
+        wrapped.status = stopError.status || 502;
+        throw wrapped;
+    }
+    if (!TERMINAL_STAGES.has(task.stage)) {
+        store.patch(taskId, {
+            stage: STAGE.CANCELLED,
+            error: null,
+            finishedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+        });
+    }
+    const released = [...(locks?.releasedKeys || []), ...(locks?.platforms || []), ...(locks?.released || [])];
     return {
         taskId,
         runId,
-        phase: detail.phase || status.currentPhase || status.currentState || null,
-        step: detail.step || null,
-        message: `已从「${where}」继续。${kept}`,
+        locks,
+        message: released.length ? `已停止，并释放设备锁：${released.join('、')}` : '已停止，这轮分析没有占用设备锁',
     };
 }
 
@@ -582,6 +670,14 @@ export async function getIssueChainHealth() {
 }
 
 const statusRequests = new Map();
+const terminalStatusSnapshots = createTerminalStatusCache();
+// 测试可替换传输与快照实现，但生产服务始终沿用同一鉴权和状态协调入口。
+export function setIssueStatusTestDependencies({ readStatus, snapshots, store } = {}) {
+    if (process.env.NODE_ENV !== 'test') throw new Error('仅测试环境允许替换状态读取依赖');
+    queryTaskStatus.readStatus = readStatus || null;
+    queryTaskStatus.snapshots = snapshots || null;
+    if (store) _store = store;
+}
 function queryTaskStatus(taskId, full) {
     const key = `${taskId}:${full ? 'full' : 'compact'}`;
     const pending = statusRequests.get(key);
@@ -601,13 +697,26 @@ async function _queryTaskStatus(taskId, full) {
     const runId = metadata.runId || task.analysisSessionId;
     const configFile = metadata.configFile || (task.parentTaskId ? ITERATE_CONFIG_FILE : config.aceharness.configFile);
     if (!runId) return { ...task, aceharnessStatus: null };
+    const snapshots = queryTaskStatus.snapshots || terminalStatusSnapshots;
+    // 已成功读取过的历史状态是不可变展示快照，刷新详情不再重复加载 ACE 大型状态。
+    // 恢复/停止同 run 前必须显式失效；没有缓存的终态仍向引擎核实。
+    const terminal = snapshots.get(task, runId);
+    if (terminal) {
+        const latest = store.get(taskId);
+        return { ...latest, failureDiagnosis: _metadata(latest).failureRecovery?.diagnosis || null,
+            aceharnessStatus: terminal, queryUnavailable: false, aceharnessError: null, lastQueryError: null,
+            statusAsOf: latest.updatedAt || null };
+    }
     const previousAsOf = _readQueryHealth(task)?.lastSuccessAt || task.updatedAt || null;
     let ahStatus = null;
     let ahError = null;
+    let usedTerminalSnapshot = false;
     try {
         let timer;
         const lookup = async () => {
-            let found = await (full ? getWorkflowStatusFull : getWorkflowStatusCompact)(runId, configFile);
+            let found = queryTaskStatus.readStatus
+                ? await queryTaskStatus.readStatus(runId, configFile, full)
+                : await (full ? getWorkflowStatusFull : getWorkflowStatusCompact)(runId, configFile);
             if (!found?.status || (found.status === 'idle' && !found.runId)) {
                 const persisted = await getPersistedIssueRun(runId, configFile);
                 if (persisted) found = persisted;
@@ -624,13 +733,26 @@ async function _queryTaskStatus(taskId, full) {
             }
             return found;
         };
+        // 首次状态读取失败后还可能走持久化对账，给底层请求与恢复查询留出完整窗口。
+        // 前端的 30 秒详情读取超时仍是最终边界。
+        const queryDeadlineMs = 20000;
         try {
             ahStatus = await Promise.race([lookup(), new Promise((_, reject) => {
-                timer = setTimeout(() => reject(new Error('状态查询超时，保留最近进度')), 10000);
+                timer = setTimeout(() => reject(new Error('状态查询超时，保留最近进度')), queryDeadlineMs);
             })]);
         } finally { clearTimeout(timer); }
-        if (ahStatus?.preserveLocal) return { ...task, aceharnessStatus: null, statusAsOf: previousAsOf };
+        if (ahStatus.preserveLocal) return { ...task, aceharnessStatus: snapshots.get(store.get(taskId), runId), statusAsOf: previousAsOf };
         if (ahStatus.status === 'idle') throw new Error('运行状态尚未恢复，保留最近状态');
+        snapshots.put(task, runId, ahStatus);
+        if (metadata.failureRecovery?.lastResumeAt && ['failed', 'crashed'].includes(ahStatus.status)) {
+            const failureTimes = [ahStatus.endTime, ahStatus.runEndTime, ...(ahStatus.stepLogs || []).map(log => log.timestamp)]
+                .filter(Boolean).map(value => new Date(value).getTime()).filter(Number.isFinite);
+            const latestFailureMs = Math.max(0, ...failureTimes);
+            if (latestFailureMs < new Date(metadata.failureRecovery.lastResumeAt).getTime()) {
+                return { ...store.get(taskId), aceharnessStatus: ahStatus, statusAsOf: previousAsOf,
+                    recoveryPending: true };
+            }
+        }
         const stage = mapAceHarnessStatus(ahStatus);
         const patch = { stage, updatedAt: new Date().toISOString(),
             error: stage === STAGE.FAILED ? ahStatus.error || ahStatus.statusReason || task.error || '工作流执行失败' : null };
@@ -657,14 +779,25 @@ async function _queryTaskStatus(taskId, full) {
         _patchQueryHealth(store, store.get(taskId), null);
     } catch (err) {
         ahError = err.message;
+        if (_isTransientQueryError(err)) {
+            const cached = snapshots.get(store.get(taskId), runId);
+            if (cached) {
+                ahStatus = cached;
+                usedTerminalSnapshot = true;
+            }
+        }
         _patchQueryHealth(store, store.get(taskId), { error: ahError, reason: _isTransientQueryError(err) ? 'transient' : 'query_failed',
             lastSuccessAt: previousAsOf, lastStage: task.stage });
-        logger.warn('查询运行状态失败，保留最近状态', { taskId, runId, error: ahError });
+        logger.warn('查询运行状态失败，保留最近状态', { taskId, runId, error: ahError, usedTerminalSnapshot });
     }
     const fresh = store.get(taskId);
-    return { ...fresh, aceharnessStatus: ahStatus, aceharnessError: ahError,
+    const freshMetadata = _metadata(fresh);
+    const failureDiagnosis = freshMetadata.failureRecovery?.diagnosis || null;
+    // 浏览历史不得触发监督模型审查或自动恢复；完整分诊仅在用户主动继续时执行。
+    // 已有分诊随状态直接展示，避免与报告、截图争抢上游连接。
+    return { ...store.get(taskId), failureDiagnosis, aceharnessStatus: ahStatus, aceharnessError: ahError,
         queryUnavailable: !!ahError, lastQueryError: ahError,
-        statusAsOf: _readQueryHealth(fresh)?.lastSuccessAt || previousAsOf };
+        statusAsOf: _readQueryHealth(store.get(taskId))?.lastSuccessAt || previousAsOf };
 }
 
 // ─── 报告/输出读取（代理到 AceHarness） ───────────────────────────────────────
@@ -748,13 +881,14 @@ export async function getOutputRef(taskId, outputRef) {
  * @param {string} taskId
  * @returns {{ runId: string, artifacts: object } | null} 任务不存在返回 null
  */
-export function listTaskArtifacts(taskId) {
+export async function listTaskArtifacts(taskId) {
     const task = getStore().get(taskId);
     if (!task) return null;
     const metadata = _metadata(task);
     const runId = metadata.runId || task.analysisSessionId;
     if (!runId) return { runId: null, artifacts: { images: [], logs: [], files: [], steps: [] } };
-    return { runId, artifacts: listRunArtifacts(runId) };
+    const artifacts = await listArtifactsCached(runId, TERMINAL_STAGES.has(task.stage), listRunArtifacts);
+    return { runId, artifacts };
 }
 
 /**

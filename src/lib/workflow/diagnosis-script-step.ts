@@ -1,17 +1,20 @@
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, writeFile, rename, cp, realpath, rm, readdir, stat, lstat } from 'node:fs/promises';
-import { existsSync, createReadStream, realpathSync } from 'node:fs';
+import { existsSync, createReadStream, readdirSync, realpathSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { parse } from 'yaml';
 import { getInstallPath, getWorkspaceRoot } from '@/lib/core/app-paths';
 import { buildConfiguredProcessEnv } from '@/lib/core/configured-env';
+import { prepareIssueSdkOverlay, restoreIssueSdkOverlay, type IssueSdkAlignmentTarget } from '@/lib/workflow/align-issue-sdk';
 import { extractLooseStructuredResult, type LooseExtractionSource } from '@/lib/ai/result-channel';
 import { createSdkOverlay } from '@/lib/workflow/sdk-overlay';
 import { validateStepResultRecord } from '@/lib/workflow/step-result-record';
 import { redactOfficialFixLeak } from '@/lib/workflow/official-fix-redact';
 import { isUsableOhosFlutterSdk, listInventoryEntries, loadOhosFlutterSdkInventory, resolveOhosFlutterSdk } from '@/lib/workflow/ohos-flutter-sdk';
+import { buildRevisionEvidence, extractIssueRevisionExpectation, readFlutterSdkRevisions, revisionEvidenceText } from '@/lib/workflow/revision-evidence';
+import { compactOutputLogs, pruneDiagnosisScratch } from '../../../scripts/diagnosis-artifact-size.mjs';
 
 export type DiagnosisScript = 'preflight' | 'restore' | 'finish' | 'abort';
 type Input = { operation: DiagnosisScript; workingDirectory: string; runDirectory: string;
@@ -254,16 +257,65 @@ export async function listSharedSdkHars(sdkRoot: string): Promise<string[]> {
   return out.sort();
 }
 
+function sharedSdkRoots(): string[] {
+  return listInventoryEntries(loadOhosFlutterSdkInventory()).filter((s) => isUsableOhosFlutterSdk(s.path)).map((s) => s.path);
+}
+
 /** 共享 SDK HAR 指纹清单（preflight 记录、finish 复核） */
 export async function fingerprintSharedSdkHars(): Promise<Array<{ path: string; sha256: string | null }>> {
-  const sdks = listInventoryEntries(loadOhosFlutterSdkInventory()).filter((s) => isUsableOhosFlutterSdk(s.path));
   const out: Array<{ path: string; sha256: string | null }> = [];
-  for (const sdk of sdks) {
-    for (const har of await listSharedSdkHars(sdk.path)) {
+  for (const sdk of sharedSdkRoots()) {
+    for (const har of await listSharedSdkHars(sdk)) {
       out.push({ path: har, sha256: await sha256File(har) });
     }
   }
   return out;
+}
+
+export type SdkWorktreeSnapshot = {
+  sdk: string;
+  entries: Array<{ path: string; status: string; sha256: string | null }> | null;
+  error?: string;
+};
+
+/** git status 的每一项连同内容哈希。共享 SDK 可能本来就有改动，所以只和 preflight 基线比，不要求干净。 */
+export async function snapshotSdkWorktree(sdk: string): Promise<SdkWorktreeSnapshot> {
+  try {
+    const { stdout } = await execute('git', ['-C', sdk, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames'],
+      { maxBuffer: 64 * 1024 * 1024, timeout: 180_000, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } });
+    const entries: NonNullable<SdkWorktreeSnapshot['entries']> = [];
+    for (const record of String(stdout).split('\0')) {
+      if (record.length < 4) continue;
+      const path = record.slice(3);
+      const file = join(sdk, path);
+      const info = await lstat(file).catch(() => null);
+      entries.push({ path, status: record.slice(0, 2), sha256: info?.isFile() ? await sha256File(file) : null });
+    }
+    return { sdk, entries };
+  } catch (error: any) {
+    return { sdk, entries: null, error: String(error?.message || error).slice(0, 200) };
+  }
+}
+
+export async function snapshotSharedSdkWorktrees(sdks: string[] = sharedSdkRoots()): Promise<SdkWorktreeSnapshot[]> {
+  return Promise.all(sdks.map((sdk) => snapshotSdkWorktree(sdk)));
+}
+
+/** 返回运行期间状态或内容变化的共享 SDK 文件（绝对路径），以及没能比对的 SDK。 */
+export function diffSdkWorktrees(before: SdkWorktreeSnapshot[], after: SdkWorktreeSnapshot[]): { changed: string[]; unchecked: string[] } {
+  const changed: string[] = [];
+  const unchecked: string[] = [];
+  for (const base of before) {
+    const now = after.find((s) => s.sdk === base.sdk);
+    if (!base.entries || !now?.entries) { unchecked.push(base.sdk); continue; }
+    const key = (e: { status: string; sha256: string | null }) => `${e.status}:${e.sha256}`;
+    const was = new Map(base.entries.map((e) => [e.path, key(e)]));
+    const is = new Map(now.entries.map((e) => [e.path, key(e)]));
+    for (const path of new Set([...was.keys(), ...is.keys()])) {
+      if (was.get(path) !== is.get(path)) changed.push(join(base.sdk, path));
+    }
+  }
+  return { changed: changed.sort(), unchecked };
 }
 
 /** F11：比对前后指纹，返回被改动/新增/消失的 HAR 路径 */
@@ -474,8 +526,183 @@ export function classifyEvidencePresence(flags: { work: boolean; archive: boolea
   return 'broken';
 }
 
-export function extractOutputRefs(text: string): string[] {
-  return [...new Set([...String(text || '').matchAll(/outputs\/([^\s`<>"'，；。！？、()（）\[\]{}]+\.[A-Za-z0-9_-]+)/g)].map((match) => match[1]))];
+const OUTPUT_REF_TOKEN = /[^\s`<>"'，；。！？、()（）\[\]]+/g;
+const OUTPUT_REF_TAIL = /^outputs\/([^\s`<>"'，；。！？、()（）\[\]]+\.[A-Za-z0-9_-]+)/;
+const OUTPUT_REF_EXT = /\.[A-Za-z0-9_-]+$/;
+const OUTPUT_RANGE_SPAN = 12;
+
+function numberedRange(startText: string, endText: string): string[] | null {
+  if (!/^\d+$/.test(startText) || !/^\d+$/.test(endText)) return null;
+  const start = Number(startText);
+  const end = Number(endText);
+  if (end <= start || end - start > OUTPUT_RANGE_SPAN) return null;
+  const width = startText.length === endText.length && startText.startsWith('0') ? startText.length : 0;
+  const numbers: string[] = [];
+  for (let value = start; value <= end; value += 1) numbers.push(width ? String(value).padStart(width, '0') : String(value));
+  return numbers;
+}
+
+function cleanOutputRefName(name: string): string {
+  return name.trim().replace(/^\.\//, '').replace(/^[：:，,；;、]+/, '').replace(/^outputs\//, '');
+}
+
+/** `stem-raw/r2/r3.txt` 是三个同前缀文件，不是一条目录。至少三段后缀，避免把普通路径拆开。 */
+function slashSuffixList(name: string): string[] | null {
+  const match = /^(.*-)([A-Za-z0-9]{1,12}(?:\/[A-Za-z0-9]{1,12}){2,3})(\.[A-Za-z0-9_-]+)$/.exec(name);
+  if (!match) return null;
+  const suffixes = match[2].split('/');
+  if (new Set(suffixes).size !== suffixes.length) return null;
+  return suffixes.map((suffix) => `${match[1]}${suffix}${match[3]}`);
+}
+
+/**
+ * 报告里的简写不是文件名。run1~4、run1~run4、{1..4}、{1,3}、{debug,release}、
+ * 逗号并列、`raw/r2/r3.txt` 和贴在文件名前的冒号都展开成逐个文件。
+ * 跨度只收到 12，避免把偶然的数字串展开成一大串缺失证据。
+ */
+export function expandOutputRefShorthand(name: string): string[] {
+  const trimmed = cleanOutputRefName(name);
+  if (!trimmed || trimmed.split('/').includes('..')) return [trimmed];
+  if (trimmed.includes(',')) {
+    const parts = trimmed.split(',').map((part) => cleanOutputRefName(part));
+    if (parts.length > 1 && parts.every((part) => OUTPUT_REF_EXT.test(part) && !part.split('/').includes('..'))) {
+      return parts.flatMap((part) => expandOutputRefShorthand(part));
+    }
+  }
+  const braceRange = /^(.*)\{(\d+)\.\.(\d+)\}(.*)$/.exec(trimmed);
+  if (braceRange && OUTPUT_REF_EXT.test(braceRange[4])) {
+    const numbers = numberedRange(braceRange[2], braceRange[3]);
+    if (numbers) return numbers.map((value) => `${braceRange[1]}${value}${braceRange[4]}`);
+  }
+  const braceList = /^(.*)\{([A-Za-z0-9_-]+(?:,[A-Za-z0-9_-]+)+)\}(.*)$/.exec(trimmed);
+  if (braceList && OUTPUT_REF_EXT.test(braceList[3])) {
+    const values = braceList[2].split(',').filter(Boolean);
+    if (values.length > 1 && values.length <= OUTPUT_RANGE_SPAN + 1) {
+      return values.map((value) => `${braceList[1]}${value}${braceList[3]}`);
+    }
+  }
+  const range = /^(.*?)(\d+)(~|～|\.\.)(.*?)(\d+)(.*)$/.exec(trimmed);
+  if (range && OUTPUT_REF_EXT.test(range[6]) && (range[4] === '' || range[4] === range[1])) {
+    const numbers = numberedRange(range[2], range[5]);
+    if (numbers) return numbers.map((value) => `${range[1]}${value}${range[6]}`);
+  }
+  const slashed = slashSuffixList(trimmed);
+  if (slashed) return slashed;
+  return [trimmed];
+}
+
+function outputFilesUnder(root: string): string[] {
+  const base = join(root, 'outputs');
+  if (!existsSync(base)) return [];
+  const found: string[] = [];
+  const walk = (prefix: string) => {
+    let entries;
+    try { entries = readdirSync(join(base, prefix), { withFileTypes: true }); }
+    catch { return; }
+    for (const entry of entries) {
+      if (entry.name === '.' || entry.name === '..' || entry.isSymbolicLink()) continue;
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(rel);
+      else if (entry.isFile()) found.push(rel);
+    }
+  };
+  walk('');
+  return found;
+}
+
+function globToRegExp(pattern: string): RegExp | null {
+  if (!/[*?]/.test(pattern) || pattern.includes('..') || pattern.includes('\\')) return null;
+  const source = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]');
+  return new RegExp(`^${source}$`);
+}
+
+/** 报告会把标点粘在文件名上。只剥两端，不改中间的名字。 */
+function loosenCitation(name: string): string {
+  let current = name;
+  for (let i = 0; i < 3; i += 1) {
+    const next = current.replace(/^[{\[【（(：:，,；;、'"「]+/u, '').replace(/[}\]】）)，,；;、'"」]+$/u, '');
+    if (next === current) break;
+    current = next;
+  }
+  return current;
+}
+
+function outputFileExists(name: string, roots: string[]): boolean {
+  return roots.some((root) => existsSync(join(root, 'outputs', name)) || existsSync(join(root, name)));
+}
+
+function filesMatchingGlob(pattern: string, roots: string[]): string[] {
+  const regex = globToRegExp(pattern);
+  if (!regex) return [];
+  const hits = new Set<string>();
+  for (const root of roots) {
+    for (const file of outputFilesUnder(root)) {
+      if (regex.test(file)) hits.add(file);
+    }
+  }
+  return [...hits].sort().slice(0, 64);
+}
+
+/**
+ * 报告里的 outputs/ 引用不是契约。先对上磁盘上的真实文件：
+ * 通配符对上几个就收这几个；对不上的通配不当成缺失文件。
+ * 粘在两端的标点剥掉后能对上真实文件，就收那个文件。
+ * 普通文件名对不上时仍然保留，真缺失继续阻断完成。
+ */
+function bindCitedOutput(name: string, roots: string[]): string[] {
+  if (!name || name.split('/').includes('..')) return [];
+  if (outputFileExists(name, roots)) return [name];
+  if (/[*?]/.test(name)) {
+    const hits = filesMatchingGlob(name, roots);
+    if (hits.length) return hits;
+    const loosened = loosenCitation(name);
+    if (loosened !== name) {
+      const again = filesMatchingGlob(loosened, roots);
+      if (again.length) return again;
+    }
+    return [];
+  }
+  const loosened = loosenCitation(name);
+  if (loosened && loosened !== name) {
+    if (outputFileExists(loosened, roots)) return [loosened];
+    if (/[*?]/.test(loosened)) return filesMatchingGlob(loosened, roots);
+    return [loosened];
+  }
+  return [name];
+}
+
+function concreteOutputRefs(name: string, roots: string[]): string[] {
+  const cleaned = name.trim().replace(/^\.\//, '').replace(/^outputs\//, '');
+  if (outputFileExists(cleaned, roots)) return [cleaned];
+  const resolved = expandOutputRefShorthand(name).flatMap((item) => bindCitedOutput(item, roots));
+  return [...new Set(resolved)];
+}
+
+/**
+ * 只认任务自己的 outputs/。构建目录里的 build/.../outputs/ 和别的名字里带 outputs 的路径
+ * 不是证据目录；绝对路径只有落在 roots 之一的 outputs/ 下才算。
+ */
+export function extractOutputRefs(text: string, roots: string[] = []): string[] {
+  const owned = new Set(roots.filter(Boolean).map((root) => resolve(root)));
+  const home = process.env.HOME || '';
+  const refs = new Set<string>();
+  for (const [token] of String(text || '').matchAll(OUTPUT_REF_TOKEN)) {
+    for (let at = token.indexOf('outputs/'); at >= 0; at = token.indexOf('outputs/', at + 1)) {
+      const tail = OUTPUT_REF_TAIL.exec(token.slice(at));
+      if (!tail) continue;
+      const prefix = token.slice(0, at);
+      if (/[\w-]$/.test(prefix)) continue;
+      const pathStart = prefix.search(/(?:^\.?\/)|[/~]/);
+      const dir = pathStart < 0 ? '' : prefix.slice(pathStart);
+      const expanded = dir.startsWith('~/') && home ? home + dir.slice(1) : dir;
+      if (dir && dir !== './' && dir !== '.' && !(isAbsolute(expanded) && owned.has(resolve(expanded)))) continue;
+      const relativeName = tail[1].split('/').filter((part) => part && part !== '.').join('/');
+      if (!relativeName) continue;
+      if (relativeName.split('/').includes('..')) { refs.add(relativeName); continue; }
+      for (const name of concreteOutputRefs(relativeName, roots)) refs.add(name);
+    }
+  }
+  return [...refs];
 }
 
 export function deviceSnapshotTransition(preflight: any, snapshot: any): {
@@ -527,11 +754,19 @@ export function checkReportConsistency(input: {
   const ABSOLUTE_CLAIM = /(未执行|未进行|未运行|未实施|未做|没有执行|没有进行|没有运行|未覆盖|无[^。!?\n]{0,12}(?:证据|日志|记录)|缺少[^。!?\n]{0,12}(?:证据|日志))/i;
   const ANDROID_NEAR = /android|安卓|logcat/i;
   const SCOPE_QUALIFIER = /(已覆盖|已留存|已有|复现阶段|复用|此前|先前|上一轮|仅复核|旧证据|历史日志|本轮)/;
+  // P10：「未做 android/ios AOT 实测」这类——「未做」的宾语是带构建/技术模式限定（AOT/JIT/release/profile/debug）
+  // 的特定对照动作，并非「绝对否认有任何 Android 证据」。归档里的 android 运行日志（JIT 等）与之不矛盾。
+  // 仅在句中出现该限定时豁免；#1941「未执行 Android/iOS 对照构建」无模式限定，仍判为矛盾。
+  const BUILD_MODE_QUALIFIER = /(AOT|JIT|release|profile|debug)/i;
+  // P10 续：渲染后端、版本、API 等限定的「特定对照未覆盖」也不否认存在其他 Android 证据。
+  // 例如 #2925「Android 关闭 Impeller 对照未覆盖」。无限定的「未执行 Android 对照」仍报矛盾。
+  const TECHNICAL_SCOPE_QUALIFIER = /(impeller|vulkan|opengl|skia|har\b|hap\b|api\s*\d+|sdk\s*\d+|\d+\.\d+(?:\.\d+)?|开启|关闭|启用|禁用)/i;
   const androidEvidence = archiveNames.some((n) => /logcat|android/i.test(n));
   if (androidEvidence) {
     const sentences = reportText.split(/(?<=[。！？!?])|[\r\n]+/);
     const contradicted = sentences.some((sentence) =>
-      ANDROID_NEAR.test(sentence) && ABSOLUTE_CLAIM.test(sentence) && !SCOPE_QUALIFIER.test(sentence));
+      ANDROID_NEAR.test(sentence) && ABSOLUTE_CLAIM.test(sentence)
+      && !SCOPE_QUALIFIER.test(sentence) && !BUILD_MODE_QUALIFIER.test(sentence) && !TECHNICAL_SCOPE_QUALIFIER.test(sentence));
     if (contradicted) {
       warnings.push({ code: 'android_evidence_contradiction',
         detail: '报告绝对性地声称 Android 对照/证据未执行，但归档中存在 Android 证据文件（logcat 等），二者矛盾' });
@@ -571,6 +806,26 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
     collect: collectC.sources, reproduction: reproductionC.sources,
     root_cause: rootC.sources, fix_verification: verificationC.sources,
   };
+  const reproductionStatus = typeof reproduction.reproduction_status === 'string'
+    ? reproduction.reproduction_status
+    : (await optionalJson(join(input.runDirectory, 'outputs/diagnosis-reproduction-evidence.json')))?.reproduction_status
+      || (await optionalJson(join(input.workingDirectory, 'outputs/diagnosis-reproduction-evidence.json')))?.reproduction_status
+      || null;
+  if (['theoretical', 'not_reproducible'].includes(String(reproductionStatus))) {
+    await save(input, 'diagnosis-reproduction-evidence.json', {
+      reproduction_status: reproductionStatus,
+      source_step: '问题复现-问题复现',
+      source: reproductionC.sources.reproduction_status || 'unknown',
+      terminal_verification: 'needs_runtime_validation',
+    });
+  }
+  const revisionEvidence = buildRevisionEvidence({
+    expected: extractIssueRevisionExpectation(collectC.text),
+    actual: readFlutterSdkRevisions(await optionalJson(join(input.workingDirectory, 'outputs/ohos-flutter-sdk.json'))
+      || await optionalJson(join(input.runDirectory, 'outputs/ohos-flutter-sdk.json')) || {}),
+    verification: { framework: verification.framework_revision, engine: verification.engine_revision },
+  });
+  await save(input, 'diagnosis-revision-evidence.json', revisionEvidence);
   const archiveEntries: ArchiveEntry[] = [];
   const recordEntry = (entry: ArchiveEntry) => { archiveEntries.push(entry); };
 
@@ -671,11 +926,27 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
   }
   const reportText = reportParts.join('\n');
   const archiveOnlyEvidence: string[] = [];
+  // 发布产物/配置已经修复、无需再改源码的场景，交付物是升级与清缓存说明，而不是伪造 diff。
+  // 必须有本轮明确的空 patch 结论及通过验证，不能仅凭仓库干净就放行缺失 patch。
+  const noPatchTexts = await Promise.all([input.workingDirectory, input.runDirectory].map(async (root) => {
+    const dir = join(root, 'outputs');
+    const names = existsSync(dir) ? (await readdir(dir)).filter((name) => /空\s*patch.*结论.*\.md$/i.test(name)) : [];
+    return (await Promise.all(names.map((name) => optionalText(join(dir, name))))).join('\n').replace(/\s+/g, ' ');
+  }));
+  const explicitNoPatch = noPatchTexts.some((text) => /(?:0\s*字节空文件|空\s*patch).{0,80}(?:预期交付物|不是生成失败)|(?:无需|不需)修改.{0,20}源码/.test(text))
+    && verification.verdict === 'pass' && verificationFlags.bug_fixed === 'true'
+    && reproduction.reproduction_status !== 'theoretical';
+  if (explicitNoPatch) {
+    for (const entry of archiveEntries) {
+    if ((entry.name === 'fix.patch' || entry.name === 'fix-engine.patch') && entry.status === 'missing') entry.status = 'not_applicable';
+    }
+  }
 
   // Archive the complete outputs tree, with no extension whitelist. Explicit refs are required.
   if (persist) {
     const workOutputs = join(input.workingDirectory, 'outputs');
     const archiveOutputs = join(input.runDirectory, 'outputs');
+    await compactOutputLogs(workOutputs).catch(() => []);
     const generated = new Set(['diagnosis-context.json', 'diagnosis-archive-manifest.json']);
     const safeName = (name: string) => !!name && !isAbsolute(name) && !name.includes('\\')
       && !name.split('/').some(part => part === '..' || part === '.' || !part);
@@ -685,6 +956,7 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
       if (!actual.startsWith(actualRoot + sep)) throw new Error('证据路径越出 outputs 目录');
     };
     const archiveFile = async (name: string, role: string) => {
+      if (explicitNoPatch && (name === 'fix.patch' || name === 'fix-engine.patch')) return;
       if (archiveEntries.some(e => e.name === name)) return;
       const src = join(workOutputs, name), dst = join(archiveOutputs, name);
       try {
@@ -758,12 +1030,22 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
         const refs = conclusion.fields.evidenceRefs;
         if (Array.isArray(refs)) for (const ref of refs) {
           const path = typeof ref === 'string' ? ref : ref?.path;
-          if (typeof path === 'string') referencedNames.add(path.replace(/^outputs\//, ''));
+          if (typeof path !== 'string' || !path.trim()) continue;
+          const owned = extractOutputRefs(path.trim(), [input.workingDirectory, input.runDirectory]);
+          if (owned.length) owned.forEach((name) => referencedNames.add(name));
+          else if (!isAbsolute(path.trim()) && !path.includes('outputs/')
+            && !(existsSync(join(input.workingDirectory, path.trim())) && !existsSync(join(workOutputs, path.trim())))) {
+            for (const name of concreteOutputRefs(path.trim(), [input.workingDirectory, input.runDirectory])) referencedNames.add(name);
+          }
         }
       }
       // Legacy textual references supplement structured refs; preserve nested paths and any suffix.
       for (const text of [reportText, verificationC.text]) {
-        for (const match of text.matchAll(/outputs\/([^\s`<>"'，；。！？、()（）\[\]{}]+\.[A-Za-z0-9_-]+)/g)) referencedNames.add(match[1]);
+        for (const name of extractOutputRefs(text, [input.workingDirectory, input.runDirectory])) {
+          // 空 patch 说明中的「outputs/fix.patch 0 字节」是事实陈述，不是要求交付源码 diff。
+          if (explicitNoPatch && (name === 'fix.patch' || name === 'fix-engine.patch')) continue;
+          referencedNames.add(name);
+        }
       }
       for (const name of referencedNames) await archiveFile(name, 'referenced');
     } catch (error: any) {
@@ -775,7 +1057,28 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
     join(input.workingDirectory, 'outputs'), join(input.runDirectory, 'outputs')]);
   const localeJudgments = assessLocaleGoldenLog(localeLog);
   let verificationFlagBasis: 'model' | 'measured' | 'unsupported' = 'model';
-  if (verificationFlags.issue_golden_flag_met === 'true' && localeJudgments.saw_judgment
+  const consistencyWarnings: ConsistencyWarning[] = [];
+  // 理论复现可以交付分析报告，不能冒充原始 Issue 的修复效果已实测。
+  if (['theoretical', 'not_reproducible'].includes(String(reproductionStatus))
+    && verificationFlags.issue_golden_flag_met !== 'false') {
+    verificationFlags.issue_golden_flag_met = 'unknown';
+    verificationFlags.bug_fixed = 'unknown';
+    verificationFlagBasis = 'unsupported';
+    consistencyWarnings.push({ code: 'theoretical_reproduction_runtime_required',
+      detail: '原始 Issue 仅理论复现；保留分析和报告，修复效果必须标记待目标环境运行验证' });
+  }
+  if (verification.verdict === 'pass') {
+    if (revisionEvidence.status === 'mismatch' && revisionEvidence.expected?.requirement === 'strict') {
+      verificationC.conflicts.push(`实际 SDK 与 Issue 指定版本不一致：${revisionEvidence.mismatches.join(', ')}`);
+    }
+    if (revisionEvidence.status === 'matched' && (revisionEvidence.declaredMismatches || []).length) {
+      verificationC.conflicts.push(`修复验证声明的 revision 与 Issue 不一致：${(revisionEvidence.declaredMismatches || []).join(', ')}`);
+    }
+    verificationStatus = verificationStatusFrom(verificationC.conflicts, verification.verdict, verificationFlags);
+  }
+  // 修复验证自身的显式 false 优先；报告阶段概述全局环境缺口时不能覆盖该判定。
+  if (verificationFlags.issue_golden_flag_met !== 'false'
+    && verificationFlags.issue_golden_flag_met === 'true' && localeJudgments.saw_judgment
     && localeJudgments.valid_ok.L1 + localeJudgments.valid_ok.L2 === 0) {
     verificationFlags.issue_golden_flag_met = 'unknown';
     verificationFlagBasis = 'unsupported';
@@ -783,6 +1086,11 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
     verificationFlagBasis = 'measured';
   }
   verificationStatus = verificationStatusFrom(verificationC.conflicts, verification.verdict, verificationFlags);
+  if (['theoretical', 'not_reproducible'].includes(String(reproductionStatus))) {
+    verificationStatus = 'needs_runtime_validation';
+  }
+  // 报告可以因环境受限结束，但不能把修复验证显式判定的 false 改成已验证。
+  if (verificationFlags.issue_golden_flag_met === 'false') verificationStatus = 'needs_runtime_validation';
 
   const parentId = typeof inherited?.parent_run_id === 'string' ? inherited.parent_run_id : '';
   const ownSummary = String(root.root_cause_summary || root.summary || '');
@@ -805,7 +1113,8 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
   const deviceSnapshot = await optionalJson(join(input.workingDirectory, 'outputs', 'device-snapshot.json'))
     || await optionalJson(join(input.runDirectory, 'outputs', 'device-snapshot.json'));
   const environment = deviceSnapshotTransition(preflightData, deviceSnapshot);
-  const evidenceItems = extractOutputRefs(`${verificationC.text}\n${resolvedSummary.text}`).map((path) => ({
+  const evidenceItems = extractOutputRefs(`${verificationC.text}\n${resolvedSummary.text}`,
+    [input.workingDirectory, input.runDirectory]).map((path) => ({
     path,
     presence: classifyEvidencePresence({
       work: existsSync(join(input.workingDirectory, 'outputs', path)),
@@ -818,7 +1127,9 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
     && hilogRefs.every((item) => item.presence === 'inherited' || item.presence === 'broken')) {
     verificationFlags.issue_golden_flag_met = 'unknown';
     verificationFlagBasis = 'unsupported';
-    verificationStatus = verificationStatusFrom(verificationC.conflicts, verification.verdict, verificationFlags);
+    const originalVerificationStatus = verificationStatusFrom(verificationC.conflicts, verification.verdict, verificationFlags);
+    verificationStatus = ['theoretical', 'not_reproducible'].includes(String(reproductionStatus))
+      && originalVerificationStatus === 'verified' ? 'needs_runtime_validation' : originalVerificationStatus;
   }
   const evidenceLocality = {
     value: !evidenceItems.length ? 'unknown'
@@ -831,14 +1142,14 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
   };
 
   // F06：报告与证据的一致性交叉检查（非阻断，记录告警）
-  const consistencyWarnings = [...checkReportConsistency({
+  consistencyWarnings.push(...checkReportConsistency({
     reportText,
     archiveNames: archiveEntries.filter((e) => e.status !== 'missing').map((e) => e.name),
     verificationStatus,
     preflightBlocked: environment.blocked,
     environmentTransitions: environment.transitions,
     measurementText: `${reportText}\n${resolvedSummary.text}`,
-  })];
+  }));
   if (localeJudgments.false_ok.L1 + localeJudgments.false_ok.L2 > 0) {
     const claimed = claimedOkMultiplier(`${reportText}\n${verificationC.text}`, 'L1');
     consistencyWarnings.push({ code: 'false_ok_in_log',
@@ -858,15 +1169,28 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
   let sharedSdkIntegrity: any = { checked: false };
   if (Array.isArray(preflightData?.shared_sdk_fingerprints)) {
     const diff = diffSharedSdkFingerprints(preflightData.shared_sdk_fingerprints, await fingerprintSharedSdkHars());
-    const clean = !diff.modified.length && !diff.added.length && !diff.removed.length;
+    const harClean = !diff.modified.length && !diff.added.length && !diff.removed.length;
+    // SDK 副本里 .git 和 engine/ 链接回共享 SDK，越界写入要靠工作区比对发现。
+    const baseline: SdkWorktreeSnapshot[] | null = Array.isArray(preflightData.shared_sdk_worktrees) ? preflightData.shared_sdk_worktrees : null;
+    const worktree = baseline
+      ? diffSdkWorktrees(baseline, await snapshotSharedSdkWorktrees(baseline.map((s) => s.sdk)))
+      : null;
+    const clean = harClean && !worktree?.changed.length;
     sharedSdkIntegrity = {
       checked: true, clean,
       modified: diff.modified, added: diff.added, removed: diff.removed,
+      worktree_checked: Boolean(worktree),
+      worktree_changes: worktree?.changed || [],
+      worktree_unchecked: worktree?.unchecked || [],
       overlay_dir: preflightData.sdk_overlay || null,
     };
-    if (!clean) {
+    if (!harClean) {
       consistencyWarnings.push({ code: 'shared_sdk_modified',
         detail: `共享 SDK 缓存在运行期间被改动（modified=${diff.modified.length}, added=${diff.added.length}, removed=${diff.removed.length}）：${[...diff.modified, ...diff.added, ...diff.removed].slice(0, 3).join('；')}` });
+    }
+    if (worktree?.changed.length) {
+      consistencyWarnings.push({ code: 'shared_sdk_worktree_modified',
+        detail: `共享 SDK 工作区在运行期间有 ${worktree.changed.length} 个文件变化：${worktree.changed.slice(0, 3).join('；')}` });
     }
   }
 
@@ -886,6 +1210,9 @@ async function captureContext(input: Input, env: NodeJS.ProcessEnv, persist = tr
     locale_judgments: localeJudgments.saw_judgment ? localeJudgments : null,
     evidence_locality: evidenceLocality,
     environment_transitions: environment.transitions,
+    reproduction_status: reproductionStatus,
+    revision_status: revisionEvidence.status,
+    revision_evidence: revisionEvidence,
     repo_state: repoState,
     evaluation_mode: field(input.globalContext, 'evaluation-mode') || 'guided_replay',
     evaluation_integrity: 'not_independent',
@@ -1017,10 +1344,10 @@ async function restore(input: Input, env: NodeJS.ProcessEnv) {
     } finally { await rm(staging, { recursive: true, force: true }); }
   }
   let pin = resolveOhosFlutterSdk({ branch: repositories.find(r => r.name === 'repo')?.branch || repositories[0].branch });
-  if (pin.matched && pin.sdkRoot) {
-    const overlay = createSdkOverlay(pin.sdkRoot, runSdkOverlayDir(input.runDirectory));
-    if (!overlay.flutterBin) throw new Error('恢复 SDK 隔离失败');
-    pin = { ...pin, sdkRoot: overlay.sdkLink, flutterBin: overlay.flutterBin };
+  const originalPin = await optionalJson(join(archive, 'outputs/ohos-flutter-sdk.json'));
+  const branch = repositories.find(r => r.name === 'repo')?.branch || repositories[0].branch;
+  if (pin.matched) {
+    pin = await restoreIssueSdkOverlay({ resolved: pin, overlayDir: runSdkOverlayDir(input.runDirectory), originalPin, branch });
   }
   await save(input, 'ohos-flutter-sdk.json', pin);
   const result = { ...context, run_id: basename(input.runDirectory), parent_run_id: parentId, repositories,
@@ -1042,10 +1369,12 @@ export async function executeDiagnosisScript(input: Input): Promise<string> {
       await mkdir(join(overlayDir, 'har-cache'), { recursive: true });
       await mkdir(join(overlayDir, 'package-config'), { recursive: true });
       await mkdir(join(overlayDir, 'test-workspace'), { recursive: true });
-      const sharedSdkFingerprints = await fingerprintSharedSdkHars();
+      const revisionEvidence = revisionEvidenceText(input.workingDirectory);
+      if (revisionEvidence) await save(input, 'diagnosis-sdk-revision-hint.md', revisionEvidence);
+      const [sharedSdkFingerprints, sharedSdkWorktrees] = await Promise.all([fingerprintSharedSdkHars(), snapshotSharedSdkWorktrees()]);
       await save(input, 'diagnosis-input.json', issue);
       await save(input, 'diagnosis-preflight.json', { ...checks,
-        sdk_overlay: overlayDir, shared_sdk_fingerprints: sharedSdkFingerprints });
+        sdk_overlay: overlayDir, shared_sdk_fingerprints: sharedSdkFingerprints, shared_sdk_worktrees: sharedSdkWorktrees });
       result = { verdict: issue.issue_content_complete && checks.git_available ? 'pass' : 'fail',
         summary: '问题正文和环境预检已归档；缺设备时先做静态分析并保留待运行验证标记',
         input_source: issue.input_source, issue_comments_count: issue.issue_comments_count,
@@ -1059,6 +1388,7 @@ export async function executeDiagnosisScript(input: Input): Promise<string> {
       // R06：步骤级 verdict 只用统一三值枚举；归档完整度走 artifact_status 字段单独呈现。
       // 缺失必需证据或存在结论冲突均不能标通过。
       const artifactStatus = (context as any).artifact_status?.overall || 'complete';
+      await pruneDiagnosisScratch(input.workingDirectory).catch(() => ({ removed: [] }));
       result = { verdict: artifactStatus !== 'complete' || context.verification_status === 'evidence_conflict' ? 'fail' : 'pass',
         summary: artifactStatus === 'complete'
           ? '诊断产物和可确认的继承信息已归档；缺失项保留待核对'
@@ -1070,7 +1400,10 @@ export async function executeDiagnosisScript(input: Input): Promise<string> {
         artifact_failures: (context as any).artifact_status?.failed || [],
         consistency_warnings: (context as any).consistency_warnings || [],
         evaluation_mode: (context as any).evaluation_mode || null };
-    } else result = { verdict: 'fail', summary: '诊断已终止，已保留阶段产物和错误记录，可查看预检及步骤详情' };
+    } else {
+      await pruneDiagnosisScratch(input.workingDirectory).catch(() => ({ removed: [] }));
+      result = { verdict: 'fail', summary: '诊断已终止，已保留阶段产物和错误记录，可查看预检及步骤详情' };
+    }
   } catch (error: any) {
     if (input.signal?.aborted) throw new Error('诊断已停止');
     // Child process diagnostics may contain credentials; expose only bounded first-party errors.

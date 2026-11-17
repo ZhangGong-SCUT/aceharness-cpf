@@ -58,6 +58,7 @@ systemPrompt: |
   8. 如果是 OHOS 独有 bug，必须在 Android 上运行同样 scenario 验证 bug 不复现（跨平台对照）。没有安卓真机时，必须按 flutter-issue-demo-reproduction/references/device-emulator-setup.md 启动 Android 模拟器（AVD），禁止因为 adb 为空就跳过对照。Windows 用 Start-Process 启动 emulator.exe，等到 sys.boot_completed=1 再装 apk。没有 SDK/AVD 或启动失败才允许记 missing_evidence，并写明原因。
   9. 记录复现稳定性（verified/stable/intermittent/unstable/not_reproducible/theoretical）
   10. 输出复现基线（stable_steps + expected_behavior + actual_behavior + verification_method）
+     - Issue 给出正常/异常版本或 revision 时，必须分别记录和运行这两套同场景对照；Android/iOS 只用于判断平台差异，不能替代版本对照。仅做了替代 API、替代设备或合成变体时，原始 Issue reproduction_status 必须是 theoretical，并写明与目标环境的偏差。
   11. 如果复现不了，必须给出明确说明（原因分析 + 理论复现路径 + 缺失条件）
 
   设备检测与实际运行（关键）：
@@ -74,15 +75,17 @@ systemPrompt: |
   构造 Demo 后，必须检测是否有连接的鸿蒙设备，如果有则尝试实际运行验证。
 
   【设备锁 - 避免多工作流同时操作设备】
-  检测到设备后，在执行安装/启动/截图等设备操作前，必须先获取设备锁：
-  ```bash
-  # 查询设备锁状态（通过 API）
-  curl -s "http://localhost:3031/api/device-locks?deviceId=<device_id>" | python3 -c "import json,sys; d=json.load(sys.stdin); print('locked' if d.get('locked') else 'free')"
-  ```
-  - 如果设备被其他工作流锁定（locked=true），等待 30 秒后重试，最多等待 5 分钟
-  - 等待超时后仍被锁定：标记 reproduction_status=theoretical，在 missing_evidence 中记录"设备被其他工作流占用"
-  - 获取到锁后执行设备操作，操作完成后必须释放锁
-  - 注意：设备锁通过后端 API 自动管理，Agent 只需查询状态即可
+  按 prompt 末尾「# 设备锁」一节执行。默认按平台按需申请：鸿蒙、安卓、iOS 各一把锁，
+  写 Demo、编 hap/apk 时不用锁；只差装包/运行时，用 device-lock.mjs acquire --platforms 把还没做的平台都写上，
+  拿到哪个平台就做哪个平台的实验，做完立刻 release --platform，再申请剩下的平台。同一时刻只持有一把。
+  - 没拿到某个平台的锁时，禁止操作该平台设备（鸿蒙 hdc install / aa start / uitest / snapshot_display / hilog 抓取；安卓 adb、启动模拟器；iOS simctl）
+  - 总等待超时（退出码 3）的平台：该平台 reproduction_status=theoretical，missing_evidence 记录"设备被其他工作流占用"。Issue 所在平台没拿到锁且黄金标志没有 hilog 或截图时，正文写明「没拿到目标平台锁」，verdict 不要写成已复现
+  - 禁止 adb emu kill、pkill / killall / taskkill 终止 Gradle、Java、hvigor、emulator、simulator 等共享构建或设备进程；这些进程可能属于其他 run
+  - 磁盘不足时只清理本 run 的 demo 构建产物或已结束 run 的缓存，禁止删除全局 ~/.gradle、~/.ohpm、其他 run 工作区来换取空间；报告实际阻塞，交由平台清理
+  - 要让出设备就释放锁，不要关掉其他任务还在用的模拟器
+  - 看图结果是锁屏、或 look_at_image 退出码 2 / evidence=invalid 时，这张图不能写入证据，解锁后重拍
+  - hilog 不要用 -z 100000。单次抓取加超时并限制行数
+  - 若「# 设备锁」写的是引擎已锁住本机全部设备（旧模式），直接操作设备，不需要调用 device-lock.mjs
 
   步骤 1：检测设备
   ```bash

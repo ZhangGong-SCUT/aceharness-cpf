@@ -183,6 +183,7 @@ workflow:
           name: 修复方案对抗验证
           agent: diagnosis-fix-verifier-advisor
           role: defender
+          deviceLock: true
           task: |
             以攻击者视角验证迭代方案的有效性，并在真机或模拟器上实际运行验证修复后 bug 消失（输出不超过 2000 字）：
             1. 验证修复能否解决 Issue 反馈的问题：修复后现象是否消失？复现步骤是否还能触发

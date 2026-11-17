@@ -33,7 +33,7 @@ const config = {
         // API 调用地址：AceHarness 与本服务同机部署，直连本机绕过公网回环
         // （公网域名走 Cloudflare 隧道，存在 IPv6/网络波动导致请求超时的风险）
         // 展示类链接（workbenchUrl 跳转）仍使用公网 baseUrl
-        apiBaseUrl: process.env.ACEHARNESS_API_BASE_URL || 'http://127.0.0.1:3031',
+        apiBaseUrl: process.env.ACEHARNESS_API_BASE_URL || 'http://127.0.0.1:3000',
         email: process.env.ACEHARNESS_EMAIL || '',
         password: process.env.ACEHARNESS_PASSWORD || '',
         // 默认工作流配置文件（Issue 诊断，带 vision-look MCP 看图能力）

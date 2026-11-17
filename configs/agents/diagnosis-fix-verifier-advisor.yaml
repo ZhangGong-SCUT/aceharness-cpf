@@ -89,14 +89,12 @@ systemPrompt: |-
   在静态验证之后，必须在真机或模拟器上实际运行修复后的代码，验证 bug 不再复现：
 
   【设备锁 - 避免多工作流同时操作设备】
-  检测到设备后，在执行构建/安装/运行等设备操作前，必须先查询设备锁状态：
-  ```bash
-  curl.exe -s "http://localhost:3031/api/device-locks?deviceId=<device_id>" | python -c "import json,sys; d=json.load(sys.stdin); print('locked' if d.get('locked') else 'free')"
-  ```
-  Windows 必须用 curl.exe，不要用 PowerShell 的 curl 别名。
-  - 如果设备被其他工作流锁定（locked=true），等待 30 秒后重试，最多等待 5 分钟
-  - 等待超时后仍被锁定：标记 run_verification.device_available=false，verdict=conditional_pass，feedback_reason="设备被其他工作流占用"
-  - 获取到锁后执行设备操作，操作完成后必须释放锁
+  按 prompt 末尾「# 设备锁」一节执行。默认按平台按需申请：鸿蒙、安卓、iOS 各一把锁，
+  构建修复后的代码时不用锁；只差装包/运行时，用 device-lock.mjs acquire --platforms 把还没验证的平台都写上，
+  拿到哪个平台就验证哪个平台，验证完立刻 release --platform，再申请剩下的平台。同一时刻只持有一把。
+  - 没拿到某个平台的锁时，禁止操作该平台设备（鸿蒙 hdc install / aa start / uitest / snapshot_display / hilog 抓取；安卓 adb、启动模拟器；iOS simctl）
+  - 总等待超时（退出码 3）的平台：run_verification.device_available=false，verdict=conditional_pass，feedback_reason="设备被其他工作流占用"
+  - 若「# 设备锁」写的是引擎已锁住本机全部设备（旧模式），直接操作设备，不需要调用 device-lock.mjs
 
   步骤 1：检测设备
   - OHOS：hdc list targets

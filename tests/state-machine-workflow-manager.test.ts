@@ -26,6 +26,7 @@ vi.mock('@/lib/run/state-persistence', () => ({
   appendFeedbackToStream: vi.fn().mockResolvedValue(undefined),
   loadRunState: vi.fn().mockResolvedValue(null),
   loadStepOutputs: vi.fn().mockResolvedValue({}),
+  externalizeStepLogOutput: vi.fn(async (_runId: string, log: unknown) => log),
 }));
 
 vi.mock('@/lib/workflow/registry', () => ({
@@ -127,6 +128,7 @@ vi.mock('@/lib/core/app-paths', () => ({
   getRepoRoot: vi.fn().mockReturnValue('/tmp/install'),
   getWorkspaceCacheFile: vi.fn((...segments: string[]) => ['/tmp/workspace/cache', ...segments].join('/')),
   getWorkspaceConfigFile: vi.fn((...segments: string[]) => ['/tmp/workspace/config', ...segments].join('/')),
+  getWorkspaceConfigsDir: vi.fn().mockReturnValue('/tmp/workspace/configs'),
   getWorkspaceDataFile: vi.fn((...segments: string[]) => ['/tmp/workspace/data', ...segments].join('/')),
   getWorkspaceLogFile: vi.fn((...segments: string[]) => ['/tmp/workspace/logs', ...segments].join('/')),
   getWorkspaceSkillPath: vi.fn((...segments: string[]) => ['/tmp/workspace/skills', ...segments].join('/')),
@@ -1184,11 +1186,70 @@ describe('engine-level failure detection', () => {
     expect(isEngineLevelFailure('模型调用失败 (401): 无效的令牌 (request id: abc)')).toBe(true);
   });
 
+  test('treats an empty model reply as an engine-level failure', async () => {
+    const { isEngineLevelFailure } = await import('@/lib/state-machine/workflow-manager');
+    expect(isEngineLevelFailure('AI 服务中断：步骤 "方案设计-修复方案设计" 未产生任何输出')).toBe(true);
+    expect(isEngineLevelFailure('verdict=fail，方案被驳回')).toBe(false);
+  });
+
+  test('retries an empty model reply before treating it as a hard engine stop', async () => {
+    const { isTransientEngineFailure } = await import('@/lib/state-machine/workflow-manager');
+    expect(isTransientEngineFailure('AI 服务中断：步骤 "方案设计-方案质疑" 未产生任何输出')).toBe(true);
+    expect(isTransientEngineFailure('invalid api key')).toBe(false);
+  });
+
   test('does not treat AI file-read ENOENT as an engine-level failure', async () => {
     const { isEngineLevelFailure } = await import('@/lib/state-machine/workflow-manager');
     expect(isEngineLevelFailure(
       "codex 引擎执行失败: ENOENT: no such file or directory, open 'C:\\Users\\Shawn\\Desktop\\jinja4cj\\opencode_glm5.1_ace\\src\\ast.cj'"
     )).toBe(false);
+  });
+
+  // P8：#2349 问题复现结论正文写「Gboard zh-CN 引擎不可用」（输入法引擎），
+  // 被误判成 ACE 引擎崩溃。能提取到可信 verdict 的正常交卷不应判为引擎故障。
+  test('does not treat an IME-engine-unavailable note in a passed conclusion as an engine failure', async () => {
+    const { isEngineLevelFailure } = await import('@/lib/state-machine/workflow-manager');
+    const conclusion = [
+      '<ace-process>{"toolName":"bash","title":"执行命令","command":"ls outputs/"}</ace-process>',
+      '',
+      '# 问题复现结论',
+      '- OHOS 真机 2/2 复现；Android/iOS 打字 9/9 全保留。',
+      '- Android：Gboard zh-CN 引擎不可用（激活后不组合拼音），选词阶段无法驱动 → missing_evidence。',
+      '- iOS：模拟器无法配置可组合中文 IME。',
+      'verdict=conditional_pass',
+      '结论：pass → 问题复现。',
+    ].join('\n');
+    expect(isEngineLevelFailure(conclusion)).toBe(false);
+  });
+
+  test('still treats a real engine-unavailable error without a verdict as an engine failure', async () => {
+    const { isEngineLevelFailure } = await import('@/lib/state-machine/workflow-manager');
+    expect(isEngineLevelFailure('opencode 引擎不可用，请检查服务是否启动')).toBe(true);
+    expect(isEngineLevelFailure('engine unavailable: connection refused')).toBe(true);
+  });
+
+  test('keeps hard engine errors fatal even when a verdict is present in the text', async () => {
+    const { isEngineLevelFailure } = await import('@/lib/state-machine/workflow-manager');
+    // 上下文超限是硬错误，即便正文碰巧写了 verdict 也要判故障。
+    expect(isEngineLevelFailure('ApiError: reached its context window limit\nverdict=pass')).toBe(true);
+    expect(isEngineLevelFailure('模型调用失败 (401): 无效的令牌\nverdict=pass')).toBe(true);
+  });
+
+  test('summarizeEngineFailure strips tool stream and keeps the error line', async () => {
+    const { summarizeEngineFailure } = await import('@/lib/state-machine/utils');
+    const raw = '<ace-process>{"toolName":"bash","command":"ls"}</ace-process>\n\nopencode 引擎不可用，请检查服务是否启动\n其余正文';
+    const summary = summarizeEngineFailure(raw);
+    expect(summary).toContain('引擎不可用');
+    expect(summary).not.toContain('ace-process');
+    expect(summary).not.toContain('toolName');
+    expect(summary.length).toBeLessThanOrEqual(300);
+  });
+
+  test('summarizeEngineFailure truncates very long errors', async () => {
+    const { summarizeEngineFailure } = await import('@/lib/state-machine/utils');
+    const summary = summarizeEngineFailure('acp connection closed ' + 'x'.repeat(2000));
+    expect(summary.length).toBeLessThanOrEqual(300);
+    expect(summary).toContain('acp connection closed');
   });
 
   test('stops the workflow when an engine returns a context-window error as plain output', async () => {
@@ -2493,7 +2554,6 @@ describe('state machine execution flow', () => {
     const config = makeConfig();
     const state = config.workflow.states[0];
     const result = await (manager as any).executeState(state, config, 'Build a feature');
-
     expect(result.verdict).toBe('pass');
 
     const nextState = await (manager as any).evaluateTransitions(

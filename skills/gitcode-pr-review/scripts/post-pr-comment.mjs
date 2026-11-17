@@ -54,32 +54,32 @@ async function fetchPullComments(owner, repo, number, token) {
 async function waitForPushAck(input) {
   const { owner, repo, number, token, since, timeoutMs, pollMs = 5000 } = input;
   const sinceMs = since ? Date.parse(since) : NaN;
+  if (!Number.isFinite(sinceMs)) {
+    throw new Error('--wait-push-ack 必须提供有效的 --since <push完成时间ISO>；缺少起点会把新确认误当历史评论，已停止评论 start build');
+  }
   const deadline = Date.now() + timeoutMs;
-  let baseline = Number.isFinite(sinceMs) ? sinceMs : null;
-  let first = true;
+  const seen = new Set();
+  const matched = (item) => {
+    const timestamp = Date.parse(String(item.created_at || ''));
+    if (!Number.isFinite(timestamp) || seen.has(commentKey(item))) return false;
+    // 默认按时间防止把旧 push 的确认算成本次。GitCode 可能让多条评论共享同一毫秒，
+    // 此时用未出现过的唯一 ID 识别新评论，无需靠墙钟 sleep 1ms 规避。
+    return timestamp > sinceMs || (timestamp === sinceMs && Boolean(item.id || item.node_id));
+  };
+  let polls = 0;
   while (Date.now() < deadline) {
+    polls += 1;
     const comments = await fetchPullComments(owner, repo, number, token);
     const acks = comments.filter(isPushAckComment);
-    if (baseline === null) {
-      const newest = acks.reduce((max, item) => Math.max(max, Date.parse(String(item.created_at || '')) || 0), 0);
-      baseline = newest;
-      if (first && Number.isFinite(sinceMs)) {
-        const matched = acks.find((item) => Date.parse(String(item.created_at || '')) > sinceMs);
-        if (matched) {
-          return { status: 'acked', acked_at: String(matched.created_at || ''), polls: 1 };
-        }
-      }
-      first = false;
-    } else {
-      const matched = acks.find((item) => (Date.parse(String(item.created_at || '')) || 0) > baseline);
-      if (matched) {
-        return { status: 'acked', acked_at: String(matched.created_at || ''), polls: 1 };
-      }
-    }
+    const ack = acks.find(matched);
+    if (ack) return { status: 'acked', acked_at: String(ack.created_at || ''), polls };
+    // 以第一次查询作为“本进程观察过的历史”基线，兼容服务端毫秒级时间戳：
+    // 后续同一毫秒但新 ID 的确认也可识别，无需靠墙钟 sleep 1ms 规避。
+    for (const item of acks) seen.add(commentKey(item));
     if (Date.now() + pollMs >= deadline) break;
     await new Promise((r) => setTimeout(r, pollMs));
   }
-  return { status: 'timeout', acked_at: '', polls: 0 };
+  return { status: 'timeout', acked_at: '', polls };
 }
 
 async function gitcodeGet(path, token) {
@@ -145,6 +145,9 @@ async function main() {
       since: arg('--since') || '',
       timeoutMs: timeoutSeconds * 1000,
     });
+    if (waitAck.status !== 'acked') {
+      throw new Error(`等待 push 确认超时（${timeoutSeconds}s），已停止评论 start build；请确认代码更新事件已处理后重试`);
+    }
   }
 
   // GitCode Issue 号和 PR 号独立。POST issues/{n}/comments 会写到同号 Issue，网页上看不见。

@@ -87,6 +87,29 @@ describe('sanitizeNextOutput', () => {
     expect(readFileSync(join(root, 'server', 'chunks', 'a:b.js'), 'utf8')).toBe('old');
     expect(readFileSync(join(root, 'server', 'chunks', 'a_b.js'), 'utf8')).toBe('keep');
   });
+  it('不清理不参与生产加载的旧 dev 缓存', async () => {
+    const root = await makeTmp();
+    const dev = join(root, 'dev', 'server', 'chunks');
+    const production = join(root, 'server', 'chunks');
+    mkdirSync(dev, { recursive: true });
+    mkdirSync(production, { recursive: true });
+    writeFileSync(join(dev, COLON), 'stale');
+    writeFileSync(join(dev, PORTABLE), 'stale');
+    writeFileSync(join(production, COLON), 'production');
+
+    expect(sanitizeNextOutput(root)).toBe(1);
+    expect(readFileSync(join(dev, COLON), 'utf8')).toBe('stale');
+    expect(readFileSync(join(production, PORTABLE), 'utf8')).toBe('production');
+  });
+
+  it('显式清理 dev 目录时仍检查冲突', async () => {
+    const root = await makeTmp();
+    const chunks = join(root, 'dev', 'server', 'chunks');
+    mkdirSync(chunks, { recursive: true });
+    writeFileSync(join(chunks, COLON), 'old');
+    writeFileSync(join(chunks, PORTABLE), 'keep');
+    expect(() => sanitizeNextOutput(root, { skipDev: false })).toThrow(/重命名冲突/);
+  });
 });
 
 describe('预检不再生成 node: chunk 文件名', () => {

@@ -7,9 +7,9 @@ import { stringify, parse } from 'yaml';
 import { executeDiagnosisScript, issueApiAddress } from '@/lib/workflow/diagnosis-script-step';
 import { stateMachineWorkflowSchema } from '@/lib/core/schemas';
 
-const mocks = vi.hoisted(() => ({ root: '', command: vi.fn(), fetch: vi.fn() }));
+const mocks = vi.hoisted(() => ({ root: '', command: vi.fn(), fetch: vi.fn(), configuredEnv: { PATH: '/bin' } }));
 vi.mock('@/lib/core/app-paths', () => ({ getWorkspaceRoot: () => mocks.root, getInstallPath: (...v: string[]) => join(process.cwd(), ...v) }));
-vi.mock('@/lib/core/configured-env', () => ({ buildConfiguredProcessEnv: async () => ({ PATH: '/bin' }) }));
+vi.mock('@/lib/core/configured-env', () => ({ buildConfiguredProcessEnv: async () => mocks.configuredEnv }));
 vi.mock('@/lib/workflow/ohos-flutter-sdk', () => ({ loadOhosFlutterSdkInventory: () => ({}), listInventoryEntries: () => [],
   isUsableOhosFlutterSdk: () => false, resolveOhosFlutterSdk: () => ({ matched: false, reason: 'test inventory empty' }) }));
 vi.mock('node:child_process', async () => {
@@ -20,6 +20,7 @@ vi.mock('node:child_process', async () => {
 const dirs: string[] = [];
 beforeEach(async () => {
   mocks.root = await mkdtemp(join(tmpdir(), 'diagnosis-script-')); dirs.push(mocks.root);
+  mocks.configuredEnv = { PATH: '/bin' };
   mocks.command.mockReset().mockImplementation(async (cmd, args) => {
     if (cmd === 'git' && args.includes('--version')) return { stdout: 'git version 2' };
     if (cmd === 'git' && args.includes('status')) return { stdout: '' };
@@ -131,7 +132,17 @@ test('a pre-existing incomplete demo is preserved and never claimed restored', a
 test('real Git restore checks out the saved baseline, preserves dirty retries, and archives evidence honestly', async () => {
   const { execFile } = await vi.importActual<typeof import('node:child_process')>('node:child_process');
   const exec = promisify(execFile);
-  mocks.command.mockImplementation((cmd, args, options) => exec(cmd, args, options));
+  const actualEnv = { ...process.env };
+  mocks.configuredEnv = actualEnv;
+  mocks.command.mockImplementation((cmd, args, options) => {
+    if (cmd === 'git' && args.includes('clone')) {
+      return exec(cmd, args, options).then(async (value) => {
+        await mkdir(join(args.at(-1), '.git'), { recursive: true });
+        return value;
+      });
+    }
+    return exec(cmd, args, options);
+  });
   const input = await parent(await fixture());
   const repo = join(input.parentWork, 'repo');
   await exec('git', ['init', repo]);
@@ -148,7 +159,8 @@ test('real Git restore checks out the saved baseline, preserves dirty retries, a
   await writeFile(file, JSON.stringify(context));
   await writeFile(join(repo, 'file.txt'), 'parent fix');
   const restored = result(await executeDiagnosisScript({ ...input, operation: 'restore' }));
-  expect(restored.verdict).toBe('pass');
+  if (restored.verdict !== 'pass') console.error('恢复测试诊断:', restored);
+  expect(restored.verdict).toBe('pass'); expect(restored.issue_golden_flag).toBe('tap once crashes');
   expect(await readFile(join(input.workingDirectory, 'repo/file.txt'), 'utf8')).toBe('baseline');
   expect(result(await executeDiagnosisScript({ ...input, operation: 'restore' })).verdict).toBe('pass');
   await writeFile(join(input.workingDirectory, 'repo/file.txt'), 'child fix');
@@ -163,6 +175,31 @@ test('real Git restore checks out the saved baseline, preserves dirty retries, a
   expect(saved.repositories[0]).toMatchObject({ commit, baseline_confirmed: true });
   expect(await readFile(join(input.runDirectory, 'outputs/fix.patch'), 'utf8')).toBe('existing patch including new files');
   expect(await readFile(join(input.workingDirectory, 'repo/file.txt'), 'utf8')).toBe('child fix');
+});
+
+test('理论复现完成归档但验证失败仍保持待运行验证，实际复现兼容原通过路径', async () => {
+  for (const [reproduction, verdict, expected] of [['theoretical', 'fail', 'needs_runtime_validation'], ['reproduced', 'pass', 'verified']] as const) {
+    const input = await fixture();
+    const conclusions = [
+      ['信息采集-Issue信息采集', { verdict: 'pass' }],
+      ['问题复现-问题复现', { verdict: 'pass', reproduction_status: reproduction }],
+      ['根因分析-根因定位', { verdict: 'pass', problem_ownership: 'demo_code' }],
+      ['修复验证-修复方案对抗验证', { verdict, issue_golden_flag_met: true, engine_aligned: true, bug_fixed: verdict === 'pass' }],
+      ['完成-诊断完成', { verdict: 'pass' }],
+    ];
+    await writeFile(join(input.runDirectory, 'state.yaml'), stringify({ stepLogs: conclusions.map(([stepName, fields], i) => ({
+      id: String(i), stepName, outputRef: `outputs/step-${i}.md`,
+    })) }));
+    for (let i = 0; i < conclusions.length; i++) {
+      await writeFile(join(input.runDirectory, `outputs/step-${i}.md`), '```json\n' + JSON.stringify(conclusions[i][1]) + '\n```');
+    }
+    const data = result(await executeDiagnosisScript({ ...input, operation: 'finish' }));
+    expect(data).toMatchObject({ verdict: 'pass', verification_status: expected });
+    if (reproduction === 'theoretical') {
+      expect(data.verification_flags).toMatchObject({ issue_golden_flag_met: 'unknown', bug_fixed: 'unknown' });
+      expect(data.consistency_warnings.some((item: any) => item.code === 'theoretical_reproduction_runtime_required')).toBe(true);
+    }
+  }
 });
 
 test('an unconfirmed baseline uses legacy evidence recovery, never the latest branch head', async () => {

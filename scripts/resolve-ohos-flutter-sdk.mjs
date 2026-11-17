@@ -165,7 +165,7 @@ const result = winner
     inventory: entries.map((entry) => entry.id),
     reason: branch
       ? `没有与 ${branch} 对应的 SDK。禁止改用日常 SDK。`
-      : '没有 repo 分支，无法对号入座',
+      : '等待仓库分支后再对号入座',
   };
 
 console.log(JSON.stringify(result, null, 2));

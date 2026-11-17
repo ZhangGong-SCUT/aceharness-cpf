@@ -18,11 +18,13 @@
 look_at_image(path="outputs/screenshots/screenshot_1.png", question="《》下面的下划线是否对齐？偏左还是偏右？")
 ```
 
-MCP 不可用时用 Bash（把 `<skill-dir>` 换成本 Skill 目录的绝对路径）：
+MCP 不可用时禁止写「工具不可用」后跳过。改用 Bash，或把图片路径和问题交给子代理 `vision-inspector`：
 
 ```bash
 node "<skill-dir>/scripts/look-at-image.mjs" --image outputs/screenshots/screenshot_1.png --question "《》下面的下划线是否对齐？偏左还是偏右？"
 ```
+
+截图前先点亮屏幕并确认应用在前台。看图结果是黑屏、锁屏或只有底部横杠时，这张图不能写入证据，点亮后重拍。
 
 ## 问法
 

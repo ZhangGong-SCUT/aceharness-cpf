@@ -1712,7 +1712,7 @@ describe('Wrapper stream markdown rendering', () => {
                 ],
               },
             ],
-          })),
+          })).mockResolvedValueOnce({ data: [] }),
         },
       } as any,
       sessionId: 'session-1',

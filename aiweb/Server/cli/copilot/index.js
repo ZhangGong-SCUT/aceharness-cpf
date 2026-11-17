@@ -1,5 +1,6 @@
 import { CopilotClient, approveAll } from '@github/copilot-sdk';
 import { randomUUID } from 'node:crypto';
+import { resolveBundledCopilotCli } from './resolveCliPath.js';
 
 /**
  * Copilot CLI 适配器
@@ -49,7 +50,11 @@ class CopilotCLI {
 
     async _getClient() {
         if (!this._client) {
-            this._client = new CopilotClient(this._clientOpts);
+            const opts = { ...this._clientOpts };
+            if (!opts.cliUrl && !opts.cliPath && !process.env.COPILOT_CLI_PATH) {
+                opts.cliPath = resolveBundledCopilotCli();
+            }
+            this._client = new CopilotClient(opts);
         }
         if (this._client.state !== 'connected') {
             await this._client.start();
@@ -75,6 +80,18 @@ class CopilotCLI {
                 message: `Copilot SDK health check failed: ${error.message}`,
                 error: error.message
             };
+        }
+    }
+
+    /** 关掉本次拉起的 CLI。健康检查用完即关，避免检测按钮留下子进程。 */
+    async close() {
+        const client = this._client;
+        this._client = null;
+        if (!client) return;
+        try {
+            await client.stop();
+        } catch (error) {
+            this._log('warn', `close: ${error.message}`);
         }
     }
 

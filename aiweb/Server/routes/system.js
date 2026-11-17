@@ -94,13 +94,15 @@ export function createSystemRouter(orchestrator) {
 
     router.get('/alive/copilot', async (req, res) => {
         if (!await requireUser(req, res)) return;
+        const cli = new CopilotCLI();
         try {
-            const cli = new CopilotCLI();
             const health = await cli.checkHealth();
             res.json({ success: true, ...health });
         } catch (err) {
             logger.error('Copilot 健康检查失败', { error: err.message });
             res.status(503).json({ success: false, message: err.message });
+        } finally {
+            await cli.close();
         }
     });
 

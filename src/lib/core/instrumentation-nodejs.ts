@@ -41,6 +41,17 @@ export async function runNodejsInstrumentation() {
     console.error('[ACEHarness] Workflow recovery failed:', error);
   }
 
+  if (process.env.ACE_KEEP_SDK_OVERLAY !== '1') {
+    void (async () => {
+      const { sweepEndedRunSdkOverlays } = await import('@/lib/workflow/sdk-overlay');
+      const { loadRunState } = await import('@/lib/run/state-persistence');
+      const { getWorkspaceRunsDir } = await import('./app-paths');
+      const removed = await sweepEndedRunSdkOverlays(getWorkspaceRunsDir(),
+        async (runId) => (await loadRunState(runId, { hydrateLargeOutputs: false }))?.status);
+      if (removed.length) console.log(`[ACEHarness] Removed SDK overlays of ${removed.length} ended runs`);
+    })().catch((error) => console.error('[ACEHarness] SDK overlay sweep failed:', error));
+  }
+
   try {
     const { ensureChannelEventBridgeRegistered } = await import('@/lib/channel/delivery');
     ensureChannelEventBridgeRegistered();

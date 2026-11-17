@@ -630,8 +630,17 @@ const INLINE_ENUM_STRING_KEYS = new Set([
   'verdict', 'problem_ownership', 'fix_target', 'verification_status', 'evaluation_mode', 'input_source',
 ]);
 
+/** 中文顿号、逗号和英文逗号都用来并列短字段，不能只把后两种当分隔符。 */
+const INLINE_LIST_DELIMITERS = '、,，;；。';
+
+function cutBeforeNextInlineField(value: string): string {
+  const keys = [...INLINE_BOOL_KEYS, ...INLINE_STRING_KEYS].join('|');
+  const cut = new RegExp(`、\\s*(?:${keys})\\s*[=:：]`).exec(value);
+  return (cut ? value.slice(0, cut.index) : value).trim();
+}
+
 function coerceInlineValue(raw: string, key?: string): unknown {
-  let value = raw.trim().replace(/[*_`'"。，,；;]+$/, '').trim().replace(/\*\*/g, '').trim();
+  let value = raw.trim().replace(new RegExp(`[*_\`'"${INLINE_LIST_DELIMITERS}]+$`), '').trim().replace(/\*\*/g, '').trim();
   // 枚举型字段只取首个词元：真实输出常写 verdict=**conditional_pass**（原因括注），
   // 加粗残余与括注都属于噪声；自由文本字段不做此截断。
   if (key && (INLINE_BOOL_KEYS.has(key) || INLINE_ENUM_STRING_KEYS.has(key))) {
@@ -645,15 +654,37 @@ function coerceInlineValue(raw: string, key?: string): unknown {
 
 /**
  * 从散文中提取白名单内联字段。
- * 兼容 `key=value`、`key: value`、`key：**value**`，值截止到中文/英文逗号、分号、句号或换行。
+ * 兼容 `key=value`、`key: value`、`key：**value**`，值截止到顿号、中英文逗号、分号、句号或换行。
  */
+/**
+ * 结论里没有 issue_golden_flag_met 布尔字段时，认最后一次明确说法。
+ * 工具回显和「判定规则 / 禁止 / 不要」里的同形句子不算。
+ * 显式 true/false 与「黄金标志通过 / 黄金标志 OK / 黄金标志 … → OK」按出现位置取最后一次。
+ */
+export function extractSpokenGoldenFlagMet(text: string): boolean | null {
+  const cleaned = String(text || '').replace(/<ace-process\b[\s\S]*?<\/ace-process>/gi, '\n');
+  const spoken = /issue_golden_flag_met\**\s*[=:：]\s*\**\s*(true|false)\b|黄金标志(?:已经|已)?通过|黄金标志(?:没有通过|未通过|不通过|未达成|不成立|未满足)|黄金标志(?:\*{1,2})?\s*`?OK\b|黄金标志[^。\n]{0,120}?→\s*OK\b/gi;
+  let found: boolean | null = null;
+  for (const match of cleaned.matchAll(spoken)) {
+    const index = match.index ?? 0;
+    const prefix = cleaned.slice(Math.max(0, index - 12), index);
+    if (/禁止|不要|勿|不能|不可|并非|规则|例如|示例/.test(prefix)) continue;
+    if (match[1]) {
+      found = match[1].toLowerCase() === 'true';
+      continue;
+    }
+    found = !/没有通过|未通过|不通过|未达成|不成立|未满足/.test(match[0]);
+  }
+  return found;
+}
+
 export function extractInlineKeyValues(text: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (!text) return out;
   const sanitized = stripUntrustedRegions(text);
   const allKeys = [...INLINE_BOOL_KEYS, ...INLINE_STRING_KEYS];
   const pattern = new RegExp(
-    `(?<![A-Za-z0-9_])(${allKeys.join('|')})\\s*[:：=]\\s*(?:\\*\\*|__|\`)?([^\\n,，;；。]+?)(?:\\*\\*|__|\`)?(?=[,，;；。\\n]|$)`,
+    `(?<![A-Za-z0-9_])(${allKeys.join('|')})\\s*[:：=]\\s*(?:\\*\\*|__|\`)?([^\\n${INLINE_LIST_DELIMITERS}]+?)(?:\\*\\*|__|\`)?(?=[${INLINE_LIST_DELIMITERS}\\n]|$)`,
     'g',
   );
   let match: RegExpExecArray | null;
@@ -689,12 +720,12 @@ export function extractConditionalReason(text: string): string | null {
   if (!text) return null;
   const sanitized = stripUntrustedRegions(text);
   const structured = /["'`]?conditional_reason["'`]?\s*[:：=]\s*["'`]?([^。\n"'`,，}]+)/i.exec(sanitized);
-  if (structured?.[1]?.trim()) return structured[1].trim().slice(0, 200);
+  if (structured?.[1]?.trim()) return cutBeforeNextInlineField(structured[1]).slice(0, 200);
   const prose = /conditional_pass\s*的(?:唯一|主要)?原因\s*[:：是]?\s*([^。\n]+)/i.exec(sanitized);
-  if (prose?.[1]?.trim()) return prose[1].trim().slice(0, 200);
+  if (prose?.[1]?.trim()) return cutBeforeNextInlineField(prose[1]).slice(0, 200);
   // 工作流真实变体（#1712）：「运行验证未执行：无 OHOS 设备（hdc [Empty]）+ 引擎不对齐」
   const notExecuted = /(?:运行验证|真机验证|安装运行|验证)?未执行\s*[:：]\s*([^。\n]+)/.exec(sanitized);
-  if (notExecuted?.[1]?.trim()) return notExecuted[1].trim().slice(0, 200);
+  if (notExecuted?.[1]?.trim()) return cutBeforeNextInlineField(notExecuted[1]).slice(0, 200);
   // 变体：verdict=conditional_pass（原因括注）
   const paren = /conditional_pass\*{0,2}[（(]([^。\n）)]{2,120})[）)]/.exec(sanitized);
   if (paren?.[1]?.trim()) return paren[1].trim().slice(0, 200);
@@ -799,6 +830,14 @@ export function extractLooseStructuredResult(markdown: string): LooseExtraction 
   for (const fenced of fencedObjects) apply(fenced, 'fenced-json');
 
   apply(extractInlineKeyValues(markdown), 'inline-fields');
+
+  if (!('issue_golden_flag_met' in fields)) {
+    const spoken = extractSpokenGoldenFlagMet(markdown);
+    if (spoken !== null) {
+      fields.issue_golden_flag_met = spoken;
+      sources.issue_golden_flag_met = 'inline-fields';
+    }
+  }
 
   if (!('verdict' in fields)) {
     const prose = extractProseVerdict(markdown);

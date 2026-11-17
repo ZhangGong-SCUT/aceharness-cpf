@@ -1,12 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { afterEach, describe, expect, test } from 'vitest';
-import { getBuiltinMcpServers } from '@/lib/mcp/registry';
+import { describe, expect, test, vi } from 'vitest';
+import { getBuiltinMcpServers, allowMcpConnectAttempt, ensureOpenCodeCompatibleMcpServers } from '@/lib/mcp/registry';
 import {
   buildVisionMessages,
   chatCompletionsUrl,
   guessMimeType,
+  isLockScreenObservation,
   lookAtImage,
   mcpToolList,
   parseCliArgs,
@@ -28,6 +29,11 @@ describe('look-at-image helper', () => {
       question: '齐不齐？',
       mode: 'cli',
     });
+  });
+
+  test('锁屏观察不能当证据', () => {
+    expect(isLockScreenObservation('当前显示的是**系统锁屏**界面。无 SIM 卡，电量 77')).toBe(true);
+    expect(isLockScreenObservation('Demo 输入框里是一ersans')).toBe(false);
   });
 
   test('guesses image mime types', () => {
@@ -101,5 +107,22 @@ describe('look-at-image helper', () => {
     const servers = getBuiltinMcpServers();
     expect(servers[0]?.name).toBe('vision-look');
     expect(servers[0]?.command).toContain('look-at-image.mjs');
+    expect(servers[0]?.command.startsWith(JSON.stringify(process.execPath))).toBe(true);
+  });
+
+  test('retries transient MCP status errors and preserves structured errors', async () => {
+    const status = vi.fn()
+      .mockResolvedValueOnce({ error: {} })
+      .mockResolvedValueOnce({ data: { 'vision-look': { status: 'connected' } } });
+    await ensureOpenCodeCompatibleMcpServers({ mcp: { status } }, '/tmp/project', [{ name: 'vision-look', type: 'stdio', command: 'node look-at-image.mjs mcp' }]);
+    expect(status).toHaveBeenCalledTimes(2);
+
+    vi.useFakeTimers();
+    try {
+      const failing = ensureOpenCodeCompatibleMcpServers({ mcp: { status: vi.fn().mockResolvedValue({ error: {} }) } }, '/tmp/project', [{ name: 'vision-look', type: 'stdio', command: 'node look-at-image.mjs mcp' }]);
+      const assertion = expect(failing).rejects.toThrow('未知 MCP 错误（空错误对象）');
+      await vi.advanceTimersByTimeAsync(4_000);
+      await assertion;
+    } finally { vi.useRealTimers(); }
   });
 });

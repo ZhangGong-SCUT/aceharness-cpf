@@ -1,0 +1,91 @@
+[
+  {
+    "schema_version": 1,
+    "id": "synthetic-delayed-start-ack",
+    "kind": "synthetic",
+    "description": "人工异常：start build 的 CI 接收确认延迟，期间不得提前判绿或重复评论。",
+    "pr": { "owner": "CPF-Flutter", "repo": "flutter_flutter", "number": 9001 },
+    "timeScale": 1,
+    "seed": { "labels": ["dco检查成功", "AI已检视"], "comments": [] },
+    "script": [
+      { "atMs": 160, "who": "openharmony_ci", "comment": "门禁构建开始，包含静态检查、代码编译和测试。", "webhook": true },
+      { "atMs": 220, "who": "openharmony_ci", "comment": "代码门禁通过：静态检查、编译、测试均通过。", "labels": ["静态检查成功", "编译成功", "冒烟测试成功"], "webhook": true }
+    ],
+    "checkpoints": [{ "afterStep": 0, "expected": { "phase": "running" } }],
+    "expected": { "phase": "green" }
+  },
+  {
+    "schema_version": 1,
+    "id": "synthetic-duplicate-terminal-event",
+    "kind": "synthetic",
+    "description": "人工异常：重复门禁结果和重复评论触发不得再次调度同一剧本。",
+    "pr": { "owner": "CPF-Flutter", "repo": "flutter_flutter", "number": 9002 },
+    "timeScale": 1,
+    "seed": { "labels": ["dco检查成功", "AI已检视"], "comments": [] },
+    "script": [
+      { "atMs": 0, "who": "openharmony_ci", "comment": "门禁构建开始，包含静态检查、代码编译。", "webhook": true },
+      { "atMs": 30, "who": "openharmony_ci", "comment": "代码门禁通过：静态检查、编译均通过。", "labels": ["静态检查成功", "编译成功"], "webhook": true },
+      { "atMs": 60, "who": "openharmony_ci", "comment": "代码门禁通过：静态检查、编译均通过。", "labels": ["静态检查成功", "编译成功"], "webhook": true }
+    ],
+    "expected": { "phase": "green", "duplicateStartBuildRejected": true }
+  },
+  {
+    "schema_version": 1,
+    "id": "synthetic-late-stale-result",
+    "kind": "synthetic",
+    "description": "人工异常：新 push 到达后，旧版本迟到的失败评论不得重新污染当前门禁阶段。",
+    "pr": { "owner": "CPF-Flutter", "repo": "flutter_flutter", "number": 9003 },
+    "timeScale": 1,
+    "seed": { "labels": ["dco检查成功", "AI已检视"], "comments": [] },
+    "script": [
+      { "atMs": 0, "who": "openharmony_ci", "comment": "门禁构建开始，包含静态检查、代码编译。", "webhook": false },
+      { "atMs": 250, "who": "openharmony_ci", "comment": "门禁未通过：noPass。", "labels": ["编译失败"], "webhook": true }
+    ],
+    "interrupt": { "beforeStep": 1, "push": { "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } },
+    "expected": { "phase": "running" }
+  },
+  {
+    "schema_version": 1,
+    "id": "synthetic-out-of-order-old-success",
+    "kind": "synthetic",
+    "description": "人工异常：新失败之后迟到的旧成功评论不得覆盖失败标签； webhook 顺序不等于状态可靠性。",
+    "pr": { "owner": "CPF-Flutter", "repo": "flutter_flutter", "number": 9004 },
+    "timeScale": 1,
+    "seed": { "labels": ["dco检查成功", "AI已检视"], "comments": [] },
+    "script": [
+      { "atMs": 0, "who": "openharmony_ci", "comment": "门禁构建开始，包含静态检查、代码编译。", "webhook": false },
+      { "atMs": 30, "who": "openharmony_ci", "comment": "门禁未通过：noPass。", "labels": ["编译失败"], "webhook": true },
+      { "atMs": 60, "who": "openharmony_ci", "comment": "上一轮代码门禁通过。", "labels": ["静态检查成功", "编译成功"], "webhook": true }
+    ],
+    "expected": { "phase": "compile_failed" }
+  },
+  {
+    "schema_version": 1,
+    "id": "synthetic-static-failure",
+    "kind": "synthetic",
+    "description": "人工异常：确定性 noPass 静态失败必须进入静态修复，不得作为环境抖动盲目重试。",
+    "pr": { "owner": "CPF-Flutter", "repo": "flutter_flutter", "number": 9005 },
+    "timeScale": 1,
+    "seed": { "labels": ["dco检查成功", "AI已检视"], "comments": [] },
+    "script": [
+      { "atMs": 0, "who": "openharmony_ci", "comment": "门禁构建开始，包含静态检查、代码编译。", "webhook": true },
+      { "atMs": 30, "who": "openharmony_ci", "comment": "代码门禁未通过：静态检查 noPass。", "labels": ["静态检查失败"], "webhook": true }
+    ],
+    "expected": { "phase": "static_failed" }
+  },
+  {
+    "schema_version": 1,
+    "id": "synthetic-ai-review-pending",
+    "kind": "synthetic",
+    "description": "人工异常：门禁通过但 AI 检视仍有未处理意见，不得直接判 green。",
+    "pr": { "owner": "CPF-Flutter", "repo": "flutter_flutter", "number": 9006 },
+    "timeScale": 1,
+    "seed": { "labels": ["dco检查成功", "AI已检视"], "comments": [] },
+    "script": [
+      { "atMs": 0, "who": "openharmony_ci", "comment": "门禁构建开始，包含静态检查、代码编译。", "webhook": false },
+      { "atMs": 30, "who": "openharmony_ci", "comment": "代码门禁通过：静态检查、编译均通过。", "labels": ["静态检查成功", "编译成功"], "webhook": false },
+      { "atMs": 60, "who": "cpf-manager", "comment": "【AI-Review】【严重】【代码逻辑错误】请修复空指针问题。", "webhook": true }
+    ],
+    "expected": { "phase": "ai_review_pending" }
+  }
+]

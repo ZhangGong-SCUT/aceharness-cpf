@@ -2,7 +2,7 @@
 
 本文件汇总跨 Agent 的通用经验和硬约束。各 Agent 的 systemPrompt 不必重复声明这些内容，只需在需要时引用本文件。
 
-## 通用经验（10 条）
+## 通用经验（12 条）
 
 1. **上游优先**：先查上游社区是否已有同类问题/修复，再深入自研代码
 2. **渐进式深入**：从快速分类到深度分析，分层投入精力
@@ -14,9 +14,10 @@
 8. **报告保守表述**：Issue 未明确说明的具体现象（如崩溃、白屏、方向错误、镜像异常）只能写为"可能/推测"，不得写成已验证事实；未编译/未运行验证时，修复状态必须是 skipped 或 needs_runtime_validation。
 9. **步骤结论可传递**：每个阶段最终输出必须给下游一个结构化结论，至少包含 verdict、summary、artifact_path、key_findings、missing_evidence；不要只留下工具调用日志或零散 grep/ls 结果。
 10. **缺失证据要写影响**：正文、评论、截图、日志、样本、运行环境缺失时，必须说明影响的是分类、根因置信度、修复验证还是上游追踪，避免缺口一路隐身到报告。
-11. **真机操作先拿设备锁**：多 run 并发时同一台真机只有一台。凡执行 `hdc install` / `aa start` / `uitest uiInput` / `snapshot_display` / `hilog` 抓取前，必须先 `node <skill>/scripts/device-lock.mjs acquire --device <序列号> --run <runId> --step <步骤名>`（阻塞等待，默认 30 分钟）；操作完（含中途换步）`release`。acquire 超时（exit=3）时**禁止硬闯真机**，按 `needs_runtime_validation` 降级并注明设备被占。锁租约 45 分钟、同 run 重入续租，run 崩溃自动过期。
+11. **真机操作先拿设备锁**：多 run 并发时同一台真机只有一台。ACE 诊断工作流的「问题复现」「修复验证」步骤按 prompt 末尾「# 设备锁」一节执行：鸿蒙、安卓、iOS 各一把平台锁，写 Demo、编包时不用锁；只差装包/运行时 `node <skill>/scripts/device-lock.mjs acquire --platforms ohos,android --run <runId> --step <步骤名>`（写上还没做的平台），拿到哪个就做哪个平台的实验，做完立刻 `release --platform <平台>` 再申请剩下的；退出码 4 原样重试（排队位置保留），退出码 3 该平台按 `needs_runtime_validation` 降级，没拿到某平台的锁**禁止硬闯该平台设备**；同一时刻只持有一把；步骤结束引擎释放剩余的锁和排队。旧模式下（「# 设备锁」写明引擎已锁住全部设备）直接操作。其他场景执行 `hdc install` / `aa start` / `uitest uiInput` / `snapshot_display` / `hilog` 抓取前，先 `node <skill>/scripts/device-lock.mjs acquire --device <序列号> --run <runId> --step <步骤名>`（阻塞等待，默认 30 分钟），操作完 `release`；acquire 超时（exit=3）同样降级。脚本锁租约 45 分钟、同 run 重入续租，run 归档目录消失后自动失效。`ohos-har-install.mjs` 发现其他 run 持锁会拒绝安装。
+12. **长命令给足时限**：`repo-cache.mjs clone`、`flutter build hap/apk`、模拟器冷启动常超过 5 分钟。调用 bash 工具时把 `timeout` 设到 `1200000`（20 分钟），或者用 `nohup … > 日志 2>&1 &` 后台跑再轮询日志。被时限打断后重跑同一条命令，不要删掉已拉下的目录从头来。
 
-## NEVER 列表（17 条硬禁止）
+## NEVER 列表（硬禁止）
 
 - **NEVER** 在没有完整日志的情况下下根因结论
 - **NEVER** 忽略上游社区的已有分析
@@ -37,7 +38,8 @@
 - **NEVER** 在修复验证阶段修订、改写、放宽黄金标志后再写 `pass`（例如第 1 轮 `window ≠ local` 已 fail，第 2 轮改成「display 带偏移」）— 复现阶段锁定的 Issue 验收不能改。修不了：`issue_golden_flag_met=false`，`verdict` 最高 `conditional_pass`。引擎见到「修订黄金标志」或缺少 `issue_golden_flag_met=true` 会把 `pass` 降为 `conditional_pass`。
 - **NEVER** 把评论里的「已合入 / 已在 PR #xxx 修复 / 对照该 PR」或官方修复 commit 当成修法，也禁止 `git apply` / cherry-pick 官方修复。采集阶段不得写出 PR 号、PR URL、官方修复 commit；当前 Issue 号和 reset merge commit 必须保留。下游只根据回退后的源码和复现证据改。
 - **NEVER** 拿模板生成的 demo 工程直接 `flutter build hap` 就开始排编译错 — 模板是 HarmonyOS 商用配置，本机 Linux 工具链跑不通（会连环报 `SDK component missing` / `compatibleSdkVersion type integer` / 签名错）。**Use**：先按 `../../flutter-issue-demo-reproduction/references/linux-build-env.md` §B 完成五项改造（`runtimeOS: OpenHarmony` + 整数 26 + `compileSdkVersion` + `sdk.dir` + 签名密文块 + bundleName），再编。ArkTS 写法约束（handler 必须 class、`invokeMethod` 无 `.then`）也在该文件 §C。
-- **NEVER** 不持设备锁就操作真机（`hdc install` / `aa start` / `uitest` 点击 / `snapshot_display` / 场景化 `hilog` 抓取）— 并发 run 会互相覆盖安装（同 bundleName demo）、日志串台、截图串场。**Use**：`node <skill>/scripts/device-lock.mjs acquire --device <id> --run <runId>`，拿到才操作、做完就 `release`；超时降级 `needs_runtime_validation`，不得无锁硬闯。`hdc list targets` / `param get` 等只读查询不需要锁。
+- **NEVER** 不持设备锁就操作真机（`hdc install` / `aa start` / `uitest` 点击 / `snapshot_display` / 场景化 `hilog` 抓取）— 并发 run 会互相覆盖安装（同 bundleName demo）、日志串台、截图串场。**Use**：诊断工作流的复现/修复验证步骤看 prompt 末尾「# 设备锁」，按平台 `acquire --platforms` 拿到再操作该平台、用完 `release --platform`，超时降级；其他场景用 `node <skill>/scripts/device-lock.mjs acquire --device <id> --run <runId>`，拿到才操作、做完就 `release`；超时降级 `needs_runtime_validation`，不得无锁硬闯。`hdc list targets` / `param get` 等只读查询不需要锁。
+- **NEVER** 磁盘不足（`No space left on device` / `ENOSPC`）时删除本 run 工作区以外的任何东西来腾空间 — 模拟器镜像（`~/.android/avd/*`）、`~/.gradle` / `~/Library/Caches` 等共享缓存、`~/.aceharness/repo-cache/`（含锁文件）、其他 run 的目录、Flutter SDK 都被其他 run 和用户共用，删了会让别人的 run 失败或把模拟器恢复出厂。**Use**：只可清本 run 工作区里自己生成的构建产物（`demo/build`、`.dart_tool`）；仍不够就停下，在结论里写明阻塞点并附 `df -h` 输出，`verdict` 按缺环境降级，交给用户清理。
 
 ## 通用工具约束
 

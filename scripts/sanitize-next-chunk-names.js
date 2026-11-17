@@ -46,12 +46,28 @@ function walk(dir, files, dirs) {
         }
     }
 }
-function sanitizeNextOutput(root) {
+function sanitizeNextOutput(root, options = {}) {
     if (!root || !fs.existsSync(root))
         return 0;
     const files = [];
     const dirs = [];
-    walk(root, files, dirs);
+    // 开发缓存不属于生产运行产物；build 前后的旧 dev chunk 可能同时含原名和安全名。
+    // 仅清理将被生产服务加载的输出，保留冲突检测，避免删除/覆盖开发中的编译文件。
+    const skipDev = options.skipDev ?? true;
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+        if (entry.isSymbolicLink())
+            continue;
+        const full = path.join(root, entry.name);
+        if (skipDev && entry.isDirectory() && entry.name === 'dev')
+            continue;
+        if (entry.isDirectory()) {
+            dirs.push(full);
+            walk(full, files, dirs);
+        }
+        else if (entry.isFile()) {
+            files.push(full);
+        }
+    }
     for (const dir of dirs) {
         const base = path.basename(dir);
         if (portableChunkName(base) !== base) {

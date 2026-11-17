@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "id": "real-plugin-static-green",
+  "kind": "real_replay",
+  "description": "真实监控快照的脱敏重放；不访问真实 GitCode/DCP，不执行编译或测试。",
+  "source": {
+    "evidence": "local gate-source.json (pull comments + final PR labels)",
+    "repository": "CPF-Flutter/fluttertpc_flutter_exit_app#14",
+    "snapshot_at": "2026-11-12T05:11:41.164Z",
+    "start_build_comment_id": "200049686",
+    "excluded_non_ci_comments_after_start": 0,
+    "limitations": [
+      "评论正文和时间来自真实快照；URL、邮箱及普通作者身份已脱敏。",
+      "仅保存最终标签快照，结果标签附在最后一个门禁事件，不能据此声称知道标签的真实变更时刻。",
+      "webhook 仅用于本地重放测试，不是对线上 webhook 投递次数和顺序的记录。"
+    ]
+  },
+  "pr": {
+    "owner": "CPF-Flutter",
+    "repo": "fluttertpc_flutter_exit_app",
+    "number": 14,
+    "author": "replay-author",
+    "head_repo": "replay-author/replay-fork",
+    "head_ref": "replay-branch",
+    "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_ref": "br_3.41_dev"
+  },
+  "timeScale": 0.0001,
+  "seed": {
+    "labels": [],
+    "comments": [
+      {
+        "source_comment_id": "198559970",
+        "source_created_at": "2026-11-05T17:46:09+08:00",
+        "atMs": -530644000,
+        "who": "OH_TPC",
+        "comment": "本Issue主要用于开发协作,欢迎在此反馈问题或提出建议",
+        "webhook": false
+      }
+    ]
+  },
+  "script": [
+    {
+      "source_comment_id": "200049773",
+      "source_created_at": "2026-11-11T21:10:43+08:00",
+      "atMs": 30000,
+      "who": "openharmony_ci",
+      "comment": "首次触发 门禁构建开始,包含静态检查,预计在60分钟内完成,门禁结果会同步发送到注册邮箱。您可以通过如下链接跟踪门禁进展: [redacted-url]",
+      "webhook": false
+    },
+    {
+      "source_comment_id": "200049797",
+      "source_created_at": "2026-11-11T21:10:49+08:00",
+      "atMs": 36000,
+      "who": "openharmony_ci",
+      "comment": "感谢提交 Pull Requests！ Thanks for submitting a pull request.",
+      "webhook": false
+    },
+    {
+      "source_comment_id": "200050494",
+      "source_created_at": "2026-11-11T21:14:41+08:00",
+      "atMs": 268000,
+      "who": "openharmony_ci",
+      "comment": "代码门禁通过 您可以通过如下链接查看门禁报告: [redacted-url] 静态检查: # check type result report 1 codeCheck pass >>>",
+      "webhook": true,
+      "labels": [
+        "dco检查成功",
+        "静态检查成功"
+      ]
+    }
+  ],
+  "expected": {
+    "phase": "green"
+  }
+}

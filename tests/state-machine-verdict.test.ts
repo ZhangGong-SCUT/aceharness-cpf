@@ -16,6 +16,7 @@ import {
   hasTransitionFieldCondition,
   describeTransitionFieldCondition,
   shouldFinalizeDiagnosisAsCompleted,
+  isDiagnosisVerificationExitValid,
 } from '@/lib/state-machine/utils';
 
 describe('parseWorkflowVerdict', () => {
@@ -87,6 +88,25 @@ describe('parseWorkflowVerdict', () => {
 describe('enforceFixVerificationGoldenFlag', () => {
   const verifyCtx = { stateName: '修复验证', stepId: 'verify-fix', stepName: '修复方案对抗验证' };
 
+  test('理论复现不能冒充原 Issue 修复验证，已实测任务不受影响', () => {
+    const output = '{"verdict":"pass","run_verification":{"issue_golden_flag_met":true,"engine_aligned":true,"bug_fixed":true}}';
+    expect(enforceFixVerificationGoldenFlag(output, 'pass', { ...verifyCtx, reproductionStatus: 'theoretical' })).toBe('conditional_pass');
+    expect(enforceFixVerificationGoldenFlag(output, 'pass', { ...verifyCtx, reproductionStatus: 'verified' })).toBe('pass');
+    expect(enforceFixVerificationGoldenFlag(output, 'pass', verifyCtx)).toBe('pass');
+  });
+
+  test('理论复现只能交付待验证报告，设计内未进入修复的兼容出口不变', () => {
+    const base = {
+      hasFixVerificationState: true, lastFixVerificationVerdict: 'pass' as const, finalStateName: '完成',
+      diagnosisVerificationExitValid: true,
+    };
+    expect(shouldFinalizeDiagnosisAsCompleted({ ...base, fixVerificationReached: true, diagnosisReproductionStatus: 'theoretical' }).complete).toBe(false);
+    expect(shouldFinalizeDiagnosisAsCompleted({ ...base, fixVerificationReached: true, diagnosisReproductionStatus: 'verified' }).complete).toBe(true);
+    expect(shouldFinalizeDiagnosisAsCompleted({ ...base, fixVerificationReached: true, diagnosisReproductionStatus: 'verified', diagnosisRevisionMatched: false }).complete).toBe(false);
+    expect(shouldFinalizeDiagnosisAsCompleted({ ...base, fixVerificationReached: true, diagnosisReproductionStatus: 'verified', diagnosisRevisionMatched: true }).complete).toBe(true);
+    expect(shouldFinalizeDiagnosisAsCompleted({ ...base, fixVerificationReached: false, lastFixVerificationVerdict: null }).complete).toBe(true);
+  });
+
   test('does not touch fail or non-verify steps', () => {
     expect(enforceFixVerificationGoldenFlag('{"verdict":"fail"}', 'fail', verifyCtx)).toBe('fail');
     expect(enforceFixVerificationGoldenFlag('{"verdict":"pass"}', 'pass', { stateName: '根因分析' })).toBe('pass');
@@ -140,6 +160,37 @@ describe('enforceFixVerificationGoldenFlag', () => {
     const output = [
       '规则回显：修不了则 issue_golden_flag_met=false，verdict 最高 conditional_pass。',
       '最终结论：pass，issue_golden_flag_met=true（但未提及 engine_aligned）',
+    ].join('\n');
+    expect(enforceFixVerificationGoldenFlag(output, 'pass', verifyCtx)).toBe('conditional_pass');
+  });
+
+  test('prose fallback: 黄金标志通过 without the field name keeps pass', () => {
+    const output = [
+      '<ace-process>{"toolName":"read","output":"判定规则：黄金标志在 L1==L2 时 → OK"}</ace-process>',
+      '**verdict: pass**',
+      '- **黄金标志**（沿用复现阶段锁定，未修订）：L1==L2(≥2) 且逐项有序一致 → OK。',
+      '```json',
+      '{"verdict":"pass","remaining_issues":0,"summary":"修复后真机实测黄金标志通过：L1==L2==2"}',
+      '```',
+      '引擎对齐：engine_aligned=true',
+    ].join('\n');
+    expect(enforceFixVerificationGoldenFlag(output, 'pass', verifyCtx)).toBe('pass');
+  });
+
+  test('prose fallback: a rule table that mentions OK does not count as met', () => {
+    const output = [
+      '{"verdict":"pass","bug_fixed":true}',
+      '判定规则：黄金标志在 L1==L2 时 → OK。本次结论未填写。',
+      'engine_aligned=true',
+    ].join('\n');
+    expect(enforceFixVerificationGoldenFlag(output, 'pass', verifyCtx)).toBe('conditional_pass');
+  });
+
+  test('prose fallback: 黄金标志未通过 downgrades even after an earlier pass phrase', () => {
+    const output = [
+      '初稿：黄金标志通过。',
+      '复核：黄金标志未通过。',
+      'engine_aligned=true',
     ].join('\n');
     expect(enforceFixVerificationGoldenFlag(output, 'pass', verifyCtx)).toBe('conditional_pass');
   });
@@ -264,6 +315,30 @@ describe('matchTransitionFieldConditions', () => {
 });
 
 describe('shouldFinalizeDiagnosisAsCompleted', () => {
+  test('最后一次方案失败不能绕过修复验证直达报告（#2590）', () => {
+    const history = [
+      { from: '代码修复', to: '修复验证' },
+      { from: '修复验证', to: '方案设计' },
+      { from: '方案设计', to: '报告沉淀' },
+    ];
+    expect(isDiagnosisVerificationExitValid(history, true)).toBe(false);
+    expect(shouldFinalizeDiagnosisAsCompleted({
+      hasFixVerificationState: true, fixVerificationReached: true,
+      lastFixVerificationVerdict: 'pass', finalStateName: '完成',
+      diagnosisVerificationStatus: 'verified', diagnosisVerificationExitValid: false,
+    }).complete).toBe(false);
+  });
+
+  test('环境受限的报告出口不能把原始黄金标志 false 改写成完成（#2925）', () => {
+    expect(shouldFinalizeDiagnosisAsCompleted({
+      hasFixVerificationState: true, fixVerificationReached: true,
+      lastFixVerificationVerdict: 'fail', finalStateName: '完成',
+      diagnosisVerificationStatus: 'needs_runtime_validation',
+      diagnosisVerificationGoldenFlag: false, diagnosisVerificationExitValid: true,
+    }).reason).toContain('原始黄金标志');
+  });
+
+
   test('keeps completed when golden flag and engine alignment passed', () => {
     expect(shouldFinalizeDiagnosisAsCompleted({
       hasFixVerificationState: true,
@@ -460,6 +535,9 @@ describe('modelHasNativeVision', () => {
   test('treats volcano glm-5.3 as no native vision', () => {
     expect(modelHasNativeVision('火山AI网关/glm-5.3')).toBe(false);
     expect(buildVisionCapabilityPrompt('火山AI网关/glm-5.3')).toContain('必须调用 look_at_image');
+    expect(buildVisionCapabilityPrompt('火山AI网关/glm-5.3')).toContain('禁止写「工具不可用」后跳过');
+    expect(buildVisionCapabilityPrompt('火山AI网关/glm-5.3')).toContain('vision-inspector');
+    expect(buildVisionCapabilityPrompt('火山AI网关/glm-5.3')).toContain('黑屏');
   });
 });
 

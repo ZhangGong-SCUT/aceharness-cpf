@@ -24,6 +24,7 @@ import {
   discoverOpenCodeCommandsFromHttpClient,
   discoverOpenCodeModelsFromHttpClient,
   executeCommandWithOpenCodeHttp,
+  formatError,
   getSessionId,
   resolveOpenCodeModelId,
   type OpenCodeHttpClient,
@@ -53,7 +54,15 @@ interface SdkServerEntry {
 const serverPool = new Map<string, SdkServerEntry>();
 const SDK_SERVER_IDLE_TTL_MS = 2 * 60 * 60 * 1000;
 let activeExecutions = 0;
-const OPENCODE_SERVER_STARTUP_TIMEOUT_MS = 20_000;
+const DEFAULT_OPENCODE_SERVER_STARTUP_TIMEOUT_MS = 90_000;
+const MAX_OPENCODE_SERVER_STARTUP_TIMEOUT_MS = 10 * 60_000;
+
+/** 冷启动要加载配置与数据库。保持 90 秒上限，不无限等待；可用环境变量缩短或适度延长。 */
+export function getOpenCodeServerStartupTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const configured = Number.parseInt(String(env.ACE_OPENCODE_SERVER_STARTUP_TIMEOUT_MS || ''), 10);
+  if (!Number.isFinite(configured)) return DEFAULT_OPENCODE_SERVER_STARTUP_TIMEOUT_MS;
+  return Math.max(1_000, Math.min(MAX_OPENCODE_SERVER_STARTUP_TIMEOUT_MS, configured));
+}
 
 function closeSdkServerEntry(entry: SdkServerEntry): void {
   try { entry.server?.close(); } catch { /* best-effort */ }
@@ -65,12 +74,11 @@ function closeSdkServerEntry(entry: SdkServerEntry): void {
  * 引擎快速重试会连续打中死 serve → "引擎连续失败"整个 run 挂掉（实测复现）。
  * 探测用短超时 fetch，任何 HTTP 响应（含 404）都算活。
  */
-async function isSdkServerAlive(entry: SdkServerEntry): Promise<boolean> {
-  if (!entry.server) return false;
+async function probeSdkServerHealth(url: string, timeoutMs: number): Promise<boolean> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 1500);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${entry.server.url.replace(/\/$/, '')}/global/health`, { signal: controller.signal });
+    const res = await fetch(`${url.replace(/\/$/, '')}/global/health`, { signal: controller.signal });
     if (!res.ok) return false;
     const health = await res.json();
     return health?.healthy === true && typeof health.version === 'string';
@@ -79,6 +87,23 @@ async function isSdkServerAlive(entry: SdkServerEntry): Promise<boolean> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * 忙碌中的 serve 偶尔一次探测超时；单次失败就换新进程会让旧进程继续跑同一个会话，
+ * 所以连续几次都失败才判死。
+ */
+export async function isSdkServerAlive(
+  entry: { server: { url: string } | null },
+  options: { attempts?: number; timeoutMs?: number; retryDelayMs?: number } = {},
+): Promise<boolean> {
+  if (!entry.server) return false;
+  const attempts = options.attempts ?? 3;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (await probeSdkServerHealth(entry.server.url, options.timeoutMs ?? 3000)) return true;
+    if (attempt < attempts) await new Promise((resolveDelay) => setTimeout(resolveDelay, options.retryDelayMs ?? 1000));
+  }
+  return false;
 }
 
 function evictIdleSdkServers(): void {
@@ -278,18 +303,19 @@ async function ensureServer(userId?: string, workingDirectory?: string): Promise
     const { createOpencodeClient, createOpencodeServer } = await runtimeImport<typeof import('@opencode-ai/sdk')>('@opencode-ai/sdk');
     console.log(`[opencode-sdk] starting HTTP server (pool key=${key || '(default)'}) with command ${getOpencodeCommand(userId)}...`);
 
+    const startupTimeoutMs = getOpenCodeServerStartupTimeoutMs();
     const server = await withTemporaryProcessEnv(serverEnv, async () => {
       try {
         return await createOpencodeServer({
           port: 0,
           hostname: '127.0.0.1',
-          timeout: OPENCODE_SERVER_STARTUP_TIMEOUT_MS,
+          timeout: startupTimeoutMs,
         } as any);
       } catch (startupError) {
         // F07：启动失败必须带命令、超时与底层错误（退出码/stderr 尾），不再只有模糊消息
         throw new Error(
           `OpenCode 服务启动失败（command=${getOpencodeCommand(userId)}, `
-          + `timeout=${OPENCODE_SERVER_STARTUP_TIMEOUT_MS}ms）：${describeSdkError(startupError)}`,
+          + `timeout=${startupTimeoutMs}ms）：${describeSdkError(startupError)}`,
         );
       }
     });
@@ -617,7 +643,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         },
       };
     } catch (error: any) {
-      const errorMessage = error?.message || 'OpenCode SDK error';
+      const errorMessage = formatError(error) || 'OpenCode SDK error';
       const normalizedOutput = normalizeEngineOutput(this.collectedOutput || this.streamedTranscript || '');
       if (normalizedOutput && isIgnorableOpenCodeSdkTailError(errorMessage)) {
         this.emitDiagnosticLog({

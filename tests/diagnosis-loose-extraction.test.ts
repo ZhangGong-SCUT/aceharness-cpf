@@ -47,6 +47,14 @@ describe('extractInlineKeyValues', () => {
     const fields = extractInlineKeyValues('verdict=fail。后续又说 verdict=pass');
     expect(fields.verdict).toBe('fail');
   });
+
+  it('顿号并列的布尔字段各自入库，false 不被后面的 true 覆盖', () => {
+    const line = 'engine_aligned=true、issue_golden_flag_met=true、bug_fixed=false、issue_resolved=yes。';
+    const fields = extractInlineKeyValues(line);
+    expect(fields.engine_aligned).toBe(true);
+    expect(fields.issue_golden_flag_met).toBe(true);
+    expect(fields.bug_fixed).toBe(false);
+  });
 });
 
 describe('extractProseVerdict', () => {
@@ -86,6 +94,11 @@ describe('extractConditionalReason（F04，用 R5 真实散文）', () => {
     expect(extractConditionalReason('verdict=pass')).toBeNull();
     expect(extractConditionalReason('')).toBeNull();
   });
+
+  it('原因后面用顿号接另一个字段时，不把后一个字段算进原因', () => {
+    expect(extractConditionalReason('conditional_reason=缺设备、bug_fixed=false')).toBe('缺设备');
+    expect(extractConditionalReason('conditional_pass 的唯一原因：无 OHOS 设备、bug_fixed=true。')).toBe('无 OHOS 设备');
+  });
 });
 
 describe('extractLooseStructuredResult 综合', () => {
@@ -105,6 +118,34 @@ describe('extractLooseStructuredResult 综合', () => {
     expect(fields.verdict).toBe('fail');
     expect(sources.verdict).toBe('step-conclusion-json');
     expect('bug_fixed' in fields).toBe(false);
+  });
+
+  it('围栏 JSON 没有 bug_fixed 时，顿号并列的后文仍补上三个标志', () => {
+    const md = [
+      '```json',
+      '{"verdict":"pass","remaining_issues":0,"summary":"修复后真机黄金标志通过"}',
+      '```',
+      'engine_aligned=true、issue_golden_flag_met=true、bug_fixed=true、issue_resolved=yes、root_cause_coverage=covered、regression_risk=低。',
+    ].join('\n');
+    const { fields, sources } = extractLooseStructuredResult(md);
+    expect(fields.verdict).toBe('pass');
+    expect(fields.engine_aligned).toBe(true);
+    expect(fields.issue_golden_flag_met).toBe(true);
+    expect(fields.bug_fixed).toBe(true);
+    expect(sources.bug_fixed).toBe('inline-fields');
+  });
+
+  it('正文只写黄金标志通过时，补上 issue_golden_flag_met', () => {
+    const md = [
+      '**verdict: pass**',
+      '- **黄金标志**（沿用复现阶段锁定，未修订）：L1==L2(≥2) 且逐项有序一致 → OK。',
+      '```json',
+      '{"verdict":"pass","summary":"修复后真机实测黄金标志通过"}',
+      '```',
+    ].join('\n');
+    const { fields, sources } = extractLooseStructuredResult(md);
+    expect(fields.issue_golden_flag_met).toBe(true);
+    expect(sources.issue_golden_flag_met).toBe('inline-fields');
   });
 
   it('嵌套容器字段可被顶层读取', () => {

@@ -176,6 +176,27 @@ describe('run-state-persistence', () => {
     });
   });
 
+  test('long pr_url stays on the same line in state.yaml', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const { saveRunState, loadRunState } = await loadPersistence();
+      const url = 'https://gitcode.com/CPF-Flutter/fluttertpc_flutter_exit_app/merge_requests/13';
+      const globalContext = [
+        'GitCode 自己的 PR 自修任务',
+        'event: manual',
+        `pr_url: ${url}`,
+        'owner: CPF-Flutter',
+        'repo: fluttertpc_flutter_exit_app',
+        'number: 13',
+      ].join('\n');
+      const state = minimalRunState({ globalContext });
+      await saveRunState(state);
+      const raw = await readFile(resolve(aceHome, 'runs', state.runId, 'state.yaml'), 'utf8');
+      expect(raw).toContain(`pr_url: ${url}`);
+      expect(raw).not.toMatch(/pr_url:\s*\n/);
+      expect((await loadRunState(state.runId))?.globalContext).toBe(globalContext);
+    });
+  });
+
   test('saveRunState creates directory and file on first save', async () => {
     await withIsolatedAceHome(async () => {
       const { saveRunState, loadRunState } = await loadPersistence();
@@ -428,8 +449,30 @@ describe('run-state-persistence', () => {
     });
   });
 
-  test('loadStepOutputs returns empty object for run with no outputs', async () => {
+  test('repeated steps read their latest archived attempt, not a stale flat output', async () => {
     await withIsolatedAceHome(async () => {
+      const { saveRunState, saveProcessOutput, loadStepOutputs } = await loadPersistence();
+      const baseLog = { agent: 'verifier', status: 'completed' as const, error: '', costUsd: 0, durationMs: 1 };
+      const state = minimalRunState({
+        mode: 'state-machine' as const,
+        currentState: '问题复现',
+        stepLogs: [
+          { ...baseLog, id: 'attempt-1', stepName: '问题复现', output: '旧截图：profile_mode_demo', timestamp: '2026-01-01T00:00:01Z' },
+          { ...baseLog, id: 'attempt-2', stepName: '问题复现', output: '新截图：官方 Demo 当前轮证据', timestamp: '2026-01-01T00:01:01Z' },
+          { ...baseLog, id: 'attempt-3', stepName: '问题收集', output: '收集完成', timestamp: '2026-01-01T00:02:01Z' },
+        ],
+      });
+      await saveRunState(state);
+      await saveProcessOutput(state.runId, '问题复现', '旧的 flat 输出，不应再次注入');
+
+      const outputs = await loadStepOutputs(state.runId);
+      expect(outputs['问题复现']).toBe('新截图：官方 Demo 当前轮证据');
+      expect(outputs['问题收集']).toBe('收集完成');
+      expect(JSON.stringify(outputs)).not.toContain('旧的 flat 输出');
+    });
+  });
+
+  test('loadStepOutputs returns empty object for run with no outputs', async () => {    await withIsolatedAceHome(async () => {
       const { saveRunState, loadStepOutputs } = await loadPersistence();
       const state = minimalRunState();
       await saveRunState(state);

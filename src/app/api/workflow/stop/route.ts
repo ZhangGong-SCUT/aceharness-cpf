@@ -3,6 +3,7 @@ import { workflowRegistry } from '@/lib/workflow/registry';
 import { processManager } from '@/lib/core/process-manager';
 import { listRuns, listRunsByConfig } from '@/lib/run/store';
 import { loadRunState, saveRunState } from '@/lib/run/state-persistence';
+import { releaseRunDeviceLocks } from '@/lib/workflow/device-lock';
 
 export async function POST(request: NextRequest) {
   try {
@@ -39,7 +40,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const { killed } = await processManager.killAllSystem();
+    // 指定了 runId 时只停这一条。killAllSystem 会把进程表里其他分析的子进程一起杀掉。
+    let killed = 0;
+    if (!runId) {
+      killed = (await processManager.killAllSystem()).killed;
+    }
 
     // Fallback: if there is no active manager but run records are still marked
     // as running/preparing, force them to stopped so History view is consistent.
@@ -67,6 +72,12 @@ export async function POST(request: NextRequest) {
       state.processes = [];
       await saveRunState(state);
       touchedRunIds.add(run.id);
+    }
+
+    const releaseIds = new Set(touchedRunIds);
+    if (runId) releaseIds.add(runId);
+    for (const id of releaseIds) {
+      try { releaseRunDeviceLocks(id); } catch { /* 停止不能因为放锁失败而报成没停掉 */ }
     }
 
     return NextResponse.json({

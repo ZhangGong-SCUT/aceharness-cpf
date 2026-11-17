@@ -8,10 +8,11 @@
  *  4. 管理 JWT 认证（登录获取 token）
  *
  * AceHarness API 文档：ACEHarness/docs/workflow-api-spec.md
- * Base URL 默认 http://127.0.0.1:3031
+ * Base URL 默认 http://127.0.0.1:3000（与 ACE 默认端口一致）
  */
 
-import { aceDataDir, aceRunsDir, aceRuntimeRoot, isActiveAdmin } from '../library/aceRuntime.js';
+import { resolveLocalAdminSession } from '../library/localSession.js';
+import { aceDataDir } from '../library/aceRuntime.js';
 import https from 'node:https';
 import http  from 'node:http';
 import { readFileSync } from 'node:fs';
@@ -83,8 +84,20 @@ async function getToken() {
     if (_cachedToken && Date.now() < _tokenExpiry) {
         return _cachedToken;
     }
-    // 优先：同机读 AceHarness 的 admin 服务 token（7 天有效、随 admin 登录自动续期），
-    // 避免在 .env 明文存管理员密码（issue 分析启动只需要 requireAuth 任意有效用户）。
+    if (process.env.AIWEB_DEPLOYMENT === 'personal') {
+        const { token, expiresAt } = await resolveLocalAdminSession(async candidate => {
+            const result = await httpRequest('GET', '/api/auth/me', null, {
+                baseUrl: ACEHARNESS_API_BASE_URL,
+                token: candidate,
+                timeoutMs: 10000,
+            });
+            return result.status === 200 ? result.data?.user : null;
+        });
+        _cachedToken = token;
+        _tokenExpiry = Math.min(Date.now() + 60 * 60 * 1000, expiresAt);
+        return token;
+    }
+    // 公网多用户部署仍只使用原有服务令牌或显式配置的服务账号。
     const diskToken = _readAdminTokenFromDisk();
     if (diskToken) {
         _cachedToken = diskToken;
@@ -283,13 +296,33 @@ export async function startWorkflow(opts) {
 /**
  * 让已有运行从中断的步骤继续。AceHarness 会保留已完成步骤，只重跑当前步骤。
  * @param {string} runId
+ * @param {string} feedback - 只针对恢复步骤的补充指令，注入工作流全局上下文
  */
-export async function resumeWorkflow(runId) {
+export async function resumeWorkflow(runId, feedback = '') {
     const token = await getToken();
-    const result = await httpRequest('POST', '/api/workflow/resume', { runId }, { token, timeoutMs: 20000 });
+    const result = await httpRequest('POST', '/api/workflow/resume', {
+        runId, action: 'iterate', feedback: String(feedback || '').slice(0, 20000),
+    }, { token, timeoutMs: 20000 });
     if (result.status !== 200 || !result.data?.success) {
         const msg = result.data?.error || result.data?.message || `HTTP ${result.status}`;
         const error = new Error(`继续运行失败：${msg}`);
+        error.status = result.status === 409 ? 409 : 502;
+        throw error;
+    }
+    return result.data;
+}
+
+/**
+ * 停止一条工作流。只传 runId，避免停掉同一配置下的其他分析。
+ * @param {string} runId
+ */
+export async function stopWorkflow(runId) {
+    if (!runId) throw new Error('缺少 runId');
+    const token = await getToken();
+    const result = await httpRequest('POST', '/api/workflow/stop', { runId }, { token, timeoutMs: 90000 });
+    if (result.status !== 200) {
+        const msg = result.data?.error || result.data?.message || `HTTP ${result.status}`;
+        const error = new Error(`停止分析失败：${msg}`);
         error.status = result.status === 409 ? 409 : 502;
         throw error;
     }
@@ -306,10 +339,13 @@ export async function resumeWorkflow(runId) {
  * @param {string} [configFile] - 工作流配置文件名，默认取全局配置
  * @returns {Promise<object>} 精简状态 JSON
  */
+// 历史状态会读取较大的 state.yaml，不能用启动接口的短超时切断详情加载。
+const STATUS_QUERY_TIMEOUT_MS = 12000;
+
 export async function getWorkflowStatusCompact(runId, configFile) {
     const token = await getToken();
     const cf = configFile || config.aceharness.configFile || DEFAULT_CONFIG_FILE;
-    const result = await httpRequest('GET', `/api/workflow/status?runId=${encodeURIComponent(runId)}&configFile=${encodeURIComponent(cf)}&compact=1`, null, { token, timeoutMs: 4000 });
+    const result = await httpRequest('GET', `/api/workflow/status?runId=${encodeURIComponent(runId)}&configFile=${encodeURIComponent(cf)}&compact=1`, null, { token, timeoutMs: STATUS_QUERY_TIMEOUT_MS });
 
     if (result.status !== 200) {
         throw new Error(`查询状态失败（HTTP ${result.status}）：${JSON.stringify(result.data)}`);
@@ -328,7 +364,7 @@ export async function getWorkflowStatusCompact(runId, configFile) {
 export async function getWorkflowStatusFull(runId, configFile) {
     const token = await getToken();
     const cf = configFile || config.aceharness.configFile || DEFAULT_CONFIG_FILE;
-    const result = await httpRequest('GET', `/api/workflow/status?runId=${encodeURIComponent(runId)}&configFile=${encodeURIComponent(cf)}`, null, { token, timeoutMs: 4000 });
+    const result = await httpRequest('GET', `/api/workflow/status?runId=${encodeURIComponent(runId)}&configFile=${encodeURIComponent(cf)}`, null, { token, timeoutMs: STATUS_QUERY_TIMEOUT_MS });
 
     if (result.status !== 200) {
         throw new Error(`查询完整状态失败（HTTP ${result.status}）：${JSON.stringify(result.data)}`);

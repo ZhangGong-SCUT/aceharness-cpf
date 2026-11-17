@@ -380,7 +380,10 @@ workflow:
             在 repo/ 按 path/line 改，只改检视点到的文件。进入本状态前必须先跑 checkout-pr-head.mjs，禁止自己执行 git clone。本状态不要 git commit / git push，也不要在 repo 里直接 git push。
             改完代码后生成建议产物（用户在 AIWeb 面板审阅后才决定是否推送）：
             1. git -C repo diff > outputs/fix.patch（无改动则跳过）
-            2. 写 outputs/review-suggestion.json：{"mode":"suggestion","head_sha":"<git -C repo rev-parse HEAD>","comment_count":<actionable 条数>,"generated_at":"<ISO8601>"}
+            2. 写 outputs/review-suggestion.json。顶层固定为 {"mode":"suggestion","head_sha":"<git -C repo rev-parse HEAD>","comment_count":<actionable 条数>,"generated_at":"<ISO8601>","suggestions":[...]}。
+            每条建议必须使用这些字段名，不要另起 current_value、suggested_value、current_commit_title、proposed_commit_title：
+            {"comment_id":<评论 id>,"target":"file 或 commit-message","path":"<文件或 null>","current":"<当前标题或当前代码片段>","suggested_title":"<建议的 commit 标题，文件意见留空>","suggested_body":"<要保留的 commit 正文，没有则空字符串>"}。
+            只改 commit 标题时 current 写现有标题，suggested_title 写英文标题，suggested_body 写要保留的 Signed-off-by；不要因为没有文件 diff 就省略 suggestions。
             3. verdict=pass、summary 注明「已生成 N 条建议修复（未推送），等待用户决策」。
             用户不采纳是常态：意见是建议不是门禁，不要为了"修完"而扩大改动或重试。
             输出 JSON：verdict、summary、applied_issues。
@@ -406,8 +409,10 @@ workflow:
 
             【模式C：用户人工指令（优先级最高；命中时跳过上方模式A/B判断）】
             - user_fix_feedback: 行及后续缩进行为用户修改指令：按指令修改，只改指令涉及的文件；即使目标 PR 已有 AI已检视标签且无本地待处理意见，也必须执行。applied_issues 填「用户反馈：<指令摘要>」。
-            - user_apply_patch: run-<id> 行：用户已确认应用建议修复。读取 ~/.aceharness/runs/run-<id>/outputs/fix.patch，
-              git -C repo apply --check 通过后 git -C repo apply；apply 冲突说明 PR 基线已漂移，verdict=conditional_pass 并注明需在面板重新生成建议。applied_issues 填「应用建议修复（源 run-<id>）」。此模式改完正常走推送。
+            - user_apply_patch: run-<id> 行：用户已确认应用建议修复。读取 ~/.aceharness/runs/run-<id>/outputs/fix.patch 和同目录的 review-suggestion.json。
+              fix.patch 有文件 diff：git -C repo apply --check 通过后 git -C repo apply；apply 冲突说明 PR 基线已漂移，verdict=conditional_pass 并注明需在面板重新生成建议。
+              fix.patch 为空或不存在，且建议只改 commit 标题：不要 git apply。按 suggestions 里的 current、current_value 或 current_commit_title 对照 suggested_title、suggested_value 或 proposed_commit_title，用 git commit --amend 只改 HEAD 的 message。作者、提交者和 Signed-off-by 保持原提交；suggested_body 或 keep_trailer 里的 Signed-off-by 原样保留。不要改工作区文件。amend 后工作区是干净的，仍然进入推送。
+              applied_issues 填「应用建议修复（源 run-<id>）」。此模式改完正常走推送。
             - user_revert: from <sha> to <sha> 行：在 repo/ 执行 git revert --no-commit <sha>..<sha>（无变更则 verdict=pass 并说明无可回退）。applied_issues 填「回退 AI 检视修复」。
         - id: challenge-ai-review
           prScript: approved-apply-audit
@@ -451,14 +456,15 @@ workflow:
           role: defender
           task: |
             0. 在任何推送或评论前记录本轮 attempted_at（ISO 时间），写入 outputs/push-result.json；本轮始终保留该时间，门禁查询不能改写它。
-            1. git -C repo status。无改动且 gate-check.json 的 phase 不是 need_start_build 且上一步骤（编译修复裁决）结论 summary 不是以 env-jitter-retry 开头：不要空 commit，也不要空评论 start build，verdict=pass
+            1. git -C repo status。无改动且 gate-check.json 的 phase 不是 need_start_build 且上一步骤（编译修复裁决）结论 summary 不是以 env-jitter-retry 开头：不要空 commit，也不要空评论 start build，verdict=pass。本轮若刚按 user_apply_patch amend 了 commit message，工作区干净也要继续推送，不要在这里结束。
             2. phase=need_start_build 且无改动（CI 抖动重试，gate-check.json 的 start_build_count < start_build_max）：不要 commit、不要 push，直接重发恰好一行 start build，verdict=pass。
                或上一步骤结论 summary 以 env-jitter-retry 开头且工作区无改动（编译失败实证为 CI 环境问题的一次性豁免重试，不受 start_build 预算约束）：同样不 commit、不 push，以作者凭据直接重发恰好一行 start build，verdict=pass，summary 注明 env-jitter-retry 已使用
             3. 有改动（含已暂存改动）：git -C repo diff --binary HEAD > outputs/fix.patch。commit 写清修的是静态/编译/DCO/检视，必须带 Signed-off-by，可用 git commit -s。
                user.email 与 Signed-off-by 必须用 PR 基线 commit（head 起点，即 PR 原始提交）的 author 邮箱——那是作者 GitCode 账号绑定且已签 DCO 的邮箱；禁止从仓库其他历史 commit 或 git config 拿邮箱（1913 事故：拿了旧邮箱导致 DCO 失败）。
                禁止改写历史 commit 的 author 邮箱后 force push——那是顶替他人提交身份，永远不做；DCO 邮箱问题只能由作者本人在线签署对应邮箱的 DCO 协议解决。
                提交身份必须复用 fork 历史提交的作者（git -C repo log -1 --format='%an <%ae>' 取原 PR 提交人），禁止编造邮箱——DCO 校验 Signed-off-by 邮箱必须与 GitCode 账号一致，用错邮箱必挂 DCO
-            4. push 到 head_repo 的 head_ref（fork remote），禁止 --force。远程用 https://{author}@gitcode.com/{head_repo}.git，使用该作者自己的凭据。记录 push 完成时间
+            4. push 到 head_repo 的 head_ref（fork remote）。普通推送禁止 --force 和 --force-with-lease。远程用 https://{author}@gitcode.com/{head_repo}.git，使用该作者自己的凭据。记录 push 完成时间。
+               唯一例外：本轮 user_apply_patch 只 amend 了 commit message，本地 tree 与 amend 前相同。这时只能执行 git push --force-with-lease=<head_ref>:<review-suggestion.json 的 head_sha>。远程当前 sha 不是这个 head_sha 就停止，禁止改用 --force。禁止改作者邮箱。
                作者凭据获取（按序）：① 进程 env 的 GITCODE_TOKEN_<author小写替换非法字符为_>；② env 没有时运行
                node skills/gitcode-pr-review/scripts/gitcode-token.mjs --print-token <author小写>
                （服务端令牌库回退，打印令牌值供 remote URL 使用，exit 1=确实无凭据才转人工确认）。
@@ -476,7 +482,7 @@ workflow:
           name: 质疑推送
           agent: code-hunter
           role: attacker
-          task: 检查是否推错成上游仓、是否 force push、是否漏 DCO、是否误评论了 submit。输出 <step-conclusion>。
+          task: 检查是否推错成上游仓、是否漏 DCO、是否误评论了 submit。普通推送出现 --force 或 --force-with-lease 判失败。user_apply_patch 且只改了 commit message 时，只允许 --force-with-lease 指向建议文件里的 head_sha，出现 --force 仍判失败。输出 <step-conclusion>。
         - id: judge-push
           prScript: push-audit
           name: 推送裁决

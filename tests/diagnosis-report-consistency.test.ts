@@ -9,6 +9,18 @@ const HONEST_REUSE = '未执行：OHOS 真机安装/运行（无设备，不可�
 const F1941_CLAIM = '- **跨平台对照**： 未执行 Android/iOS 对照构建；推测为 OHOS 独有——"ohos" 目标值仅 OHOS 工具链 fork 产出，pub.dev 枚举含 ios/android/linux，无此断裂';
 
 describe('checkReportConsistency（F06）', () => {
+  it('P10：#1941 无限定对照构建在引入模式豁免后仍判为矛盾', () => {
+    // 确认 BUILD_MODE_QUALIFIER 不会误放 #1941（无 AOT/JIT/release/profile/debug 限定）。
+    expect(/(AOT|JIT|release|profile|debug)/i.test(F1941_CLAIM)).toBe(false);
+    const warnings = checkReportConsistency({
+      reportText: F1941_CLAIM,
+      archiveNames: ['i1941_android_build.log'],
+      verificationStatus: 'needs_runtime_validation',
+    });
+    expect(warnings.map((w) => w.code)).toContain('android_evidence_contradiction');
+  });
+
+
   it('#1941 真实矛盾：绝对性声称未执行 Android 对照但归档有证据 → 告警', () => {
     const warnings = checkReportConsistency({
       reportText: F1941_CLAIM,
@@ -56,6 +68,36 @@ describe('checkReportConsistency（F06）', () => {
 
   it('空报告不产生告警', () => {
     expect(checkReportConsistency({ reportText: '', archiveNames: ['android-logcat.txt'], verificationStatus: 'verified' })).toHaveLength(0);
+  });
+
+  // P10：run-1794719184021（#3071）报告 missing_evidence 的真实披露句——
+  // 「未做」的宾语是带 AOT 模式限定的特定对照动作，与归档里的 android 运行日志不矛盾。
+  const P3071_DISCLOSURE = '- 未做：原始毒 dill 直接对照（不可复得）、android/ios AOT 实测、Issue 分支对齐 SDK 验证。';
+  it('P10：missing_evidence 披露「未做 android AOT 实测」（带模式限定）不报矛盾（#3071 句式）', () => {
+    const warnings = checkReportConsistency({
+      reportText: P3071_DISCLOSURE,
+      archiveNames: ['android-logcat.txt', 'android-after.png', 'fix.patch'],
+      verificationStatus: 'needs_runtime_validation',
+    });
+    expect(warnings.map((w) => w.code)).not.toContain('android_evidence_contradiction');
+  });
+
+  it('P10：无限定的「未做 Android 实测」仍判为矛盾（不过度放行）', () => {
+    const warnings = checkReportConsistency({
+      reportText: '未做 Android 实测。',
+      archiveNames: ['android-logcat.txt'],
+      verificationStatus: 'needs_runtime_validation',
+    });
+    expect(warnings.map((w) => w.code)).toContain('android_evidence_contradiction');
+  });
+
+  it('P10：#2925 缺失的是关闭 Impeller 的特定对照，不否认已有 Android 证据', () => {
+    const warnings = checkReportConsistency({
+      reportText: '- **跨平台对照**: Android 关闭 Impeller 对照未覆盖，OHOS 独有性结论待补',
+      archiveNames: ['android-logcat.txt', 'android-after.png'],
+      verificationStatus: 'needs_runtime_validation',
+    });
+    expect(warnings.map((w) => w.code)).not.toContain('android_evidence_contradiction');
   });
 });
 

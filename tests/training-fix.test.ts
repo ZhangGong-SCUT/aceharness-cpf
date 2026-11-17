@@ -52,10 +52,10 @@ it('SDK launch path and writes are independent across runs, including internal a
   writeFileSync(join(sdk, 'bin/flutter'), '#!/bin/sh\nreadlink -f "$0"\n'); chmodSync(join(sdk, 'bin/flutter'), 0o755);
   writeFileSync(join(sdk, 'packages/source.dart'), 'old'); symlinkSync(join(sdk, 'packages/source.dart'), join(sdk, 'source-link'));
   const a = createSdkOverlay(sdk, join(root, 'a')), b = createSdkOverlay(sdk, join(root, 'b'));
-  expect(execFileSync(a.flutterBin!, { encoding: 'utf8' }).trim()).toBe(a.flutterBin);
+  expect(execFileSync(a.flutterBin!, { encoding: 'utf8' }).trim()).toBe(realpathSync(a.flutterBin!));
   writeFileSync(join(a.sdkLink, 'source-link'), 'changed');
   expect(readFileSync(join(sdk, 'packages/source.dart'), 'utf8')).toBe('old'); expect(readFileSync(join(b.sdkLink, 'source-link'), 'utf8')).toBe('old');
-  rmSync(a.overlayDir, { recursive: true }); expect(realpathSync(b.flutterBin!)).toBe(b.flutterBin);
+  rmSync(a.overlayDir, { recursive: true }); expect(realpathSync(b.flutterBin!)).toBe(join(realpathSync(b.sdkLink), 'bin/flutter'));
 });
 it('unsafe SDK copy fails cleanly and can retry after fixing the source', () => {
   const root = temp(), sdk = join(root, 'shared'), out = join(root, 'overlay'); mkdirSync(join(sdk, 'bin'), { recursive: true });

@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
 import {
   discoverOpenCodeModelsFromHttpClient,
+  formatError,
   getOpenCodeStreamTimeoutConfig,
   normalizeOpenCodeModelsFromProviderSources,
   resolveOpenCodeModelId,
@@ -44,6 +45,12 @@ describe('sendPromptWithOpenCodeHttp regressions', () => {
         process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS = originalIdle;
       }
     }
+  });
+
+  test('classifies OpenCode SQLite exhaustion as an environment failure', () => {
+    const message = formatError(new Error('Failed to execute statement: SQLiteError: database or disk is full'));
+    expect(message).toContain('OpenCode SQLite 数据库或磁盘已满');
+    expect(message).toContain('不是 Flutter 引擎错误');
   });
 
   test('normalizes OpenCode provider model responses from new and config shapes', () => {
@@ -224,7 +231,11 @@ describe('sendPromptWithOpenCodeHttp regressions', () => {
 
   test('completes from session status polling when OpenCode SSE misses idle with stale pending parts', async () => {
     const emitted: EngineStreamEvent[] = [];
-    const messagesMock = vi.fn(async () => ({
+    let messageCalls = 0;
+    const messagesMock = vi.fn(async () => {
+      messageCalls += 1;
+      if (messageCalls === 1) return { data: [] };
+      return {
       data: [
         {
           info: { role: 'assistant' },
@@ -245,7 +256,8 @@ describe('sendPromptWithOpenCodeHttp regressions', () => {
           ],
         },
       ],
-    }));
+    };
+    });
 
     const subscribeMock = vi.fn(async ({ signal }: { signal?: AbortSignal }) => ({
       stream: {
@@ -281,5 +293,171 @@ describe('sendPromptWithOpenCodeHttp regressions', () => {
       .map((event) => event.content)
       .join('');
     expect(textEvents).toContain('done from status poll');
+  });
+
+  test('does not treat a resumed session that is already idle as a finished empty reply', async () => {
+    const previous = {
+      info: { id: 'old-assistant', role: 'assistant' },
+      parts: [{ id: 'old-text', type: 'text', text: 'previous answer' }],
+    };
+    process.env.ACE_OPENCODE_NO_NEW_OUTPUT_GRACE_MS = '80';
+    try {
+      await expect(sendPromptWithOpenCodeHttp({
+        engineName: 'opencode-http',
+        client: {
+          event: {
+            subscribe: vi.fn(async ({ signal }: { signal?: AbortSignal }) => ({
+              stream: {
+                async *[Symbol.asyncIterator]() {
+                  while (!signal?.aborted) {
+                    await new Promise((resolve) => setTimeout(resolve, 5));
+                  }
+                },
+              },
+            })),
+          },
+          session: {
+            create: vi.fn(),
+            prompt: vi.fn(async () => ({ data: { parts: [] } })),
+            promptAsync: vi.fn(async () => ({ data: {} })),
+            status: vi.fn(async () => ({ data: { 'session-1': { type: 'idle' } } })),
+            messages: vi.fn(async () => ({ data: [previous] })),
+          },
+        } as any,
+        sessionId: 'session-1',
+        fullPrompt: 'challenge the plan again',
+        emit: () => {},
+      })).rejects.toThrow(/未产生任何输出/);
+    } finally {
+      delete process.env.ACE_OPENCODE_NO_NEW_OUTPUT_GRACE_MS;
+    }
+  });
+
+  test('aborts the server-side session when a prompt fails after acceptance', async () => {
+    const abort = vi.fn(async () => ({ data: true }));
+    process.env.ACE_OPENCODE_NO_NEW_OUTPUT_GRACE_MS = '80';
+    try {
+      await expect(sendPromptWithOpenCodeHttp({
+        engineName: 'opencode-http',
+        client: {
+          event: {
+            subscribe: vi.fn(async ({ signal }: { signal?: AbortSignal }) => ({
+              stream: {
+                async *[Symbol.asyncIterator]() {
+                  while (!signal?.aborted) await new Promise((resolve) => setTimeout(resolve, 5));
+                },
+              },
+            })),
+          },
+          session: {
+            create: vi.fn(),
+            prompt: vi.fn(async () => ({ data: { parts: [] } })),
+            promptAsync: vi.fn(async () => ({ data: {} })),
+            messages: vi.fn(async () => ({ data: [] })),
+            abort,
+          },
+        } as any,
+        sessionId: 'session-1',
+        fullPrompt: 'go',
+        workingDirectory: '/tmp/run-ws',
+        emit: () => {},
+      })).rejects.toThrow(/未产生任何输出/);
+      expect(abort).toHaveBeenCalledWith({ path: { id: 'session-1' }, query: { directory: '/tmp/run-ws' } });
+    } finally {
+      delete process.env.ACE_OPENCODE_NO_NEW_OUTPUT_GRACE_MS;
+    }
+  });
+
+  test('gives up on a promptAsync call that never answers instead of waiting forever', async () => {
+    const abort = vi.fn(async () => ({ data: true }));
+    const prompt = vi.fn(async () => ({ data: { parts: [] } }));
+    process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '1000';
+    try {
+      await expect(sendPromptWithOpenCodeHttp({
+        engineName: 'opencode-http',
+        client: {
+          event: {
+            subscribe: vi.fn(async ({ signal }: { signal?: AbortSignal }) => ({
+              stream: {
+                async *[Symbol.asyncIterator]() {
+                  while (!signal?.aborted) await new Promise((resolve) => setTimeout(resolve, 5));
+                },
+              },
+            })),
+          },
+          session: {
+            create: vi.fn(),
+            prompt,
+            promptAsync: vi.fn(() => new Promise(() => {})),
+            messages: vi.fn(async () => ({ data: [] })),
+            abort,
+          },
+        } as any,
+        sessionId: 'session-1',
+        fullPrompt: 'go',
+        workingDirectory: '/tmp/run-ws',
+        emit: () => {},
+      })).rejects.toThrow(/idle timed out/);
+      expect(abort).toHaveBeenCalledWith({ path: { id: 'session-1' }, query: { directory: '/tmp/run-ws' } });
+      expect(prompt).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
+    }
+  }, 10_000);
+
+  test('ignores a permission request that an earlier always-approval already resolved', async () => {
+    const logs: Array<{ level?: string; message: string }> = [];
+    const abort = vi.fn(async () => ({ data: true }));
+    const reply = vi.fn(async ({ path }: { path: { permissionID: string } }) => (path.permissionID === 'per-2'
+      ? { error: { name: 'NotFoundError', data: { message: 'Permission request not found: per-2' } } }
+      : { data: true }));
+    const permission = (id: string) => ({
+      type: 'permission.asked',
+      properties: { id, sessionID: 'session-1', permission: 'external_directory' },
+    });
+    const output = await sendPromptWithOpenCodeHttp({
+      engineName: 'opencode-http',
+      client: {
+        postSessionIdPermissionsPermissionId: reply,
+        event: {
+          subscribe: vi.fn(async () => ({
+            stream: {
+              async *[Symbol.asyncIterator]() {
+                await new Promise((resolve) => setTimeout(resolve, 20));
+                yield permission('per-1');
+                yield permission('per-2');
+                await new Promise((resolve) => setTimeout(resolve, 20));
+                yield {
+                  type: 'message.part.delta',
+                  properties: { sessionID: 'session-1', partID: 'new-text', field: 'text', delta: 'read both files' },
+                };
+                await new Promise((resolve) => setTimeout(resolve, 20));
+                yield { type: 'session.idle', properties: { sessionID: 'session-1' } };
+              },
+            },
+          })),
+        },
+        session: {
+          create: vi.fn(),
+          prompt: vi.fn(async () => ({ data: { parts: [] } })),
+          promptAsync: vi.fn(async () => ({ data: {} })),
+          messages: vi.fn(async () => ({
+            data: [{ info: { role: 'assistant' }, parts: [{ id: 'new-text', type: 'text', text: 'read both files' }] }],
+          })).mockResolvedValueOnce({ data: [] }),
+          abort,
+        },
+      } as any,
+      sessionId: 'session-1',
+      fullPrompt: 'read references',
+      permissionResponse: 'always',
+      emit: () => {},
+      log: (entry) => logs.push(entry),
+    });
+
+    expect(output).toBe('read both files');
+    expect(reply).toHaveBeenCalledTimes(2);
+    expect(abort).not.toHaveBeenCalled();
+    expect(logs.filter((entry) => entry.level === 'error')).toEqual([]);
+    expect(logs.map((entry) => entry.message)).toContain('OpenCode permission request already resolved');
   });
 });

@@ -146,7 +146,7 @@ node "<SKILL_ROOT>/scripts/post-pr-comment.mjs" --pr-url "<PR_URL>" --author "<P
 
 无改动且不是 `need_start_build`：不要空 commit，也不要空评论。
 `need_start_build` 的 CI 抖动重试（无改动）：不 commit、不 push，只重发 `start build`。
-**刚 push 过的必须等确认再评论**：GitCode 的 MR 更新事件异步滞后（实测 ~70s），抢先评论会让 DCP 把刚启动的构建按「代码有更新」中止。加 `--wait-push-ack --since <push完成时间ISO>`，脚本会轮询等「监测到PR/代码有更新/感谢提交」确认评论出现再发（默认超时 120s，超时仍发出并标记 `wait_ack=timeout`）：
+**刚 push 过的必须等确认再评论**：GitCode 的 MR 更新事件异步滞后（实测 ~70s），抢先评论会让 DCP 把刚启动的构建按「代码有更新」中止。必须传有效的 `--wait-push-ack --since <push完成时间ISO>`，脚本会轮询等「监测到PR/代码有更新/感谢提交」确认评论出现再发（默认超时 120s）。缺少或传入非法起点、确认超时都会停止发表评论，由上层显式失败后重试：
 
 ```powershell
 node "<SKILL_ROOT>/scripts/post-pr-comment.mjs" --pr-url "<PR_URL>" --author "<PR作者>" --body "start build" --wait-push-ack --since "<push完成时间>" --out outputs

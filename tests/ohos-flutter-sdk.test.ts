@@ -3,12 +3,16 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, test } from 'vitest';
 import {
+  buildOhosFlutterSdkPrompt,
   extractBaseBranch,
   extractRepoBranch,
+  extractPreciseVersionTag,
   extractVersionHint,
+  isPendingOhosFlutterSdkMatch,
   parseOhosFlutterSdkInventory,
   readRepoBranchFromDisk,
   resolveOhosFlutterSdk,
+  shouldDeferOhosFlutterSdkPin,
 } from '@/lib/workflow/ohos-flutter-sdk';
 import { enforceFixVerificationGoldenFlag } from '@/lib/state-machine/utils';
 
@@ -35,6 +39,11 @@ describe('ohos flutter sdk inventory', () => {
     // 行中非行首的「分支」不误报
     expect(extractRepoBranch('### 优先级 3：使用默认分支 dev（团队日常开发分支）')).toBeNull();
     expect(extractRepoBranch('engine 仓分支与 framework 同名，无同名分支回退 dev')).toBeNull();
+    expect(extractRepoBranch('- 分支 B（ArkUI 覆盖），回退方案设计')).toBeNull();
+    expect(extractRepoBranch('分支：B')).toBeNull();
+    expect(extractRepoBranch('{"branch":"B","summary":"分支 B（ArkUI 覆盖）"}')).toBeNull();
+    expect(extractRepoBranch('{"branch":"B1","summary":"方案 B1"}')).toBeNull();
+    expect(extractRepoBranch('{"branch":"dev","summary":"实际仓库分支"}')).toBe('dev');
   });
 
   test('reads attached HEAD from repo/.git', () => {
@@ -160,5 +169,70 @@ sdks:
     const output = '{"verdict":"pass","run_verification":{"issue_golden_flag_met":true,"engine_aligned":true}}';
     const ctx = { stateName: '修复验证', stepId: 'verify-fix', sdkMatched: false };
     expect(enforceFixVerificationGoldenFlag(output, 'pass', ctx)).toBe('conditional_pass');
+  });
+
+  test('no branch yet is pending, not a final mismatch warning', () => {
+    const pending = resolveOhosFlutterSdk({ branch: null });
+    expect(pending.matched).toBe(false);
+    expect(isPendingOhosFlutterSdkMatch(pending)).toBe(true);
+    expect(shouldDeferOhosFlutterSdkPin({ branch: null, fallbackBranch: null })).toBe(true);
+    expect(shouldDeferOhosFlutterSdkPin({ branch: null, fallbackBranch: 'oh-3.41.9-dev' })).toBe(false);
+    const prompt = buildOhosFlutterSdkPrompt(pending);
+    expect(prompt).toContain('pending');
+    expect(prompt).toContain('仓库分支尚未确定');
+    expect(prompt).not.toContain('engine_aligned=false');
+    expect(pending.reason).toContain('等待仓库分支');
+  });
+
+  test('real unmatched branch still warns about engine_aligned', () => {
+    const daily = fakeSdk('327');
+    const inventory = parseOhosFlutterSdkInventory(`
+dailySdk: ${daily.replace(/\\/g, '/')}
+sdks:
+  - id: 3.27.5-ohos
+    version: 3.27.5
+    aliases: [oh-3.27]
+    path: ${daily.replace(/\\/g, '/')}
+`);
+    const resolved = resolveOhosFlutterSdk({ branch: 'oh-3.41.9-dev', inventory });
+    expect(isPendingOhosFlutterSdkMatch(resolved)).toBe(false);
+    expect(buildOhosFlutterSdkPrompt(resolved)).toContain('engine_aligned=false');
+  });
+
+  test('prompt surfaces successful precise version alignment', () => {
+    const sdk = fakeSdk('341');
+    const inventory = parseOhosFlutterSdkInventory(`
+sdks:
+  - id: 3.41.9-ohos
+    version: 3.41.9
+    aliases: [3.41.10, oh-3.41.9-release]
+    path: ${sdk.replace(/\\/g, '/')}
+`);
+    const resolved = {
+      ...resolveOhosFlutterSdk({ branch: 'oh-3.41.9-release', inventory }),
+      versionAlign: { targetTag: '3.41.10-ohos-0.0.1-canary1', targetCommit: 'c2adf95b00d', aligned: true, precacheOk: true, artifactVerified: true, alignedSdkRoot: '/x', reason: 'ok' },
+    };
+    const prompt = buildOhosFlutterSdkPrompt(resolved);
+    expect(prompt).toContain('精确版本对齐');
+    expect(prompt).toContain('3.41.10-ohos-0.0.1-canary1');
+    expect(prompt).toContain('不要因小版本不同而标 theoretical');
+  });
+
+  test('prompt notes precache failure honestly', () => {
+    const sdk = fakeSdk('341b');
+    const inventory = parseOhosFlutterSdkInventory(`
+sdks:
+  - id: 3.41.9-ohos
+    version: 3.41.9
+    aliases: [oh-3.41.9-release]
+    path: ${sdk.replace(/\\/g, '/')}
+`);
+    const resolved = {
+      ...resolveOhosFlutterSdk({ branch: 'oh-3.41.9-release', inventory }),
+      versionAlign: { targetTag: '3.41.10-ohos-0.0.1-canary1', targetCommit: 'c2adf95b00d', aligned: true, precacheOk: false, artifactVerified: false, alignedSdkRoot: '/x', reason: 'download timeout' },
+    };
+    const prompt = buildOhosFlutterSdkPrompt(resolved);
+    expect(prompt).toContain('precache 未成功');
+    expect(prompt).toContain('需如实标注');
   });
 });

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { isDirectRun } from './script-path.mjs';
 
 function arg(name, fallback = '') {
   const index = process.argv.indexOf(name);
@@ -11,10 +12,29 @@ function clean(value) {
   return String(value || '').trim().replace(/^['"]|['"]$/g, '');
 }
 
-function parseContext(raw) {
+/** 折叠样式会把超长的 pr_url 折到下一行。拼回同一行后再取字段。 */
+function unfoldFoldedLines(block) {
+  const merged = [];
+  for (const line of block.split(/\r?\n/)) {
+    if (!line.trim()) {
+      merged.push('');
+      continue;
+    }
+    const startsField = /^\s*(?!https?:)[A-Za-z][\w-]*:/.test(line);
+    const prev = merged.length ? merged[merged.length - 1] : '';
+    if (!startsField && prev.trim()) {
+      merged[merged.length - 1] = `${prev} ${line.trim()}`;
+      continue;
+    }
+    merged.push(line);
+  }
+  return merged.join('\n');
+}
+
+export function parseContext(raw) {
   const block = /^globalContext:\s*[|>]\s*[+-]?\s*\n([\s\S]*?)(?=\n[^\s]|(?![\s\S]))/m.exec(raw)?.[1] || '';
   const fields = {};
-  for (const line of block.split(/\r?\n/)) {
+  for (const line of unfoldFoldedLines(block).split(/\r?\n/)) {
     const match = /^\s*([A-Za-z][\w-]*):\s*(.*?)\s*$/.exec(line);
     if (match) fields[match[1].toLowerCase()] = clean(match[2]);
   }
@@ -116,7 +136,9 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error.message || error}\n`);
-  process.exitCode = 1;
-});
+if (isDirectRun(import.meta.url)) {
+  main().catch((error) => {
+    process.stderr.write(`${error.message || error}\n`);
+    process.exitCode = 1;
+  });
+}

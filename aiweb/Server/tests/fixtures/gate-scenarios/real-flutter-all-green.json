@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "id": "real-flutter-all-green",
+  "kind": "real_replay",
+  "description": "真实监控快照的脱敏重放；不访问真实 GitCode/DCP，不执行编译或测试。",
+  "source": {
+    "evidence": "local gate-source.json (pull comments + final PR labels)",
+    "repository": "CPF-Flutter/flutter_flutter#2494",
+    "snapshot_at": "2026-11-14T11:45:37.362Z",
+    "start_build_comment_id": "200788015",
+    "excluded_non_ci_comments_after_start": 0,
+    "limitations": [
+      "评论正文和时间来自真实快照；URL、邮箱及普通作者身份已脱敏。",
+      "仅保存最终标签快照，结果标签附在最后一个门禁事件，不能据此声称知道标签的真实变更时刻。",
+      "webhook 仅用于本地重放测试，不是对线上 webhook 投递次数和顺序的记录。"
+    ]
+  },
+  "pr": {
+    "owner": "CPF-Flutter",
+    "repo": "flutter_flutter",
+    "number": 2494,
+    "author": "replay-author",
+    "head_repo": "replay-author/replay-fork",
+    "head_ref": "replay-branch",
+    "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_ref": "oh-3.44.9-dev"
+  },
+  "timeScale": 0.0001,
+  "seed": {
+    "labels": [],
+    "comments": [
+      {
+        "source_comment_id": "186096518",
+        "source_created_at": "2026-08-22T20:00:03+08:00",
+        "atMs": -7252648000,
+        "who": "luqi_tan",
+        "comment": "本 Issue 主要用于开发协作，欢迎在此反馈问题或提出建议。",
+        "webhook": false
+      }
+    ]
+  },
+  "script": [
+    {
+      "source_comment_id": "200788118",
+      "source_created_at": "2026-11-14T18:38:04+08:00",
+      "atMs": 33000,
+      "who": "openharmony_ci",
+      "comment": "本地或库上代码有更新,全量重新构建,重置所有关联PR的验证状态 门禁构建开始,包含静态检查、代码编译和测试【flutter_3.44.9-dev_flutter编译, flutter_3.44.9-dev_flutter_sdk-unit编译, flutter_3.44.9-dev_flutter_integration-gate编译, flutter_3.44.9-dev_flutter测试】,预计在60分钟内完成,门禁结果会同步发送到注册邮箱。您可以通过如下链接跟踪门禁进展: [redacted-url]",
+      "webhook": false
+    },
+    {
+      "source_comment_id": "200788125",
+      "source_created_at": "2026-11-14T18:38:06+08:00",
+      "atMs": 35000,
+      "who": "openharmony_ci",
+      "comment": "感谢提交 Pull Requests！ Thanks for submitting a pull request.",
+      "webhook": false
+    },
+    {
+      "source_comment_id": "200796590",
+      "source_created_at": "2026-11-14T19:45:32+08:00",
+      "atMs": 4081000,
+      "who": "openharmony_ci",
+      "comment": "代码门禁通过 您可以通过如下链接查看门禁报告: [redacted-url] 静态检查: # check type result report 1 codeCheck pass >>> 编译测试: # Device build result test result package 1 flutter_3.44.9-dev_flutter success success >>> 2 flutter_3.44.9-dev_flutter_sdk-unit failed(IGNORE)(compile failed) NA >>> 3 flutter_3.44.9-dev_flutter_integration-gate success NA >>>",
+      "webhook": true,
+      "labels": [
+        "dco检查成功",
+        "冒烟测试成功",
+        "编译成功",
+        "静态检查成功"
+      ]
+    }
+  ],
+  "expected": {
+    "phase": "green"
+  }
+}

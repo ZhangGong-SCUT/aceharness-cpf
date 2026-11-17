@@ -17,10 +17,15 @@
  */
 
 import { aceDataDir, aceRunsDir, aceRuntimeRoot, isActiveAdmin } from '../library/aceRuntime.js';
+import { resolveLocalAdminSession, readLocalAdminUserByToken } from '../library/localSession.js';
+import { isIsolatedRunDir, readWorkingDirectory } from '../library/runPath.js';
 import { httpRequest, ACEHARNESS_API_BASE_URL } from '../issueAnalysis/aceHarnessClient.js';
 import config from '../library/config.js';
 import { createLogger } from '../library/logger.js';
 import { readHumanApproval } from './approvalState.js';
+import { createRecentQueryCache } from './recentQueryCache.js';
+import { listLocalPrRuns, findLocalPrRun } from './localRunSummaries.js';
+import { createSessionValidationCache } from './sessionValidation.js';
 import { readExecutionEvidence } from './executionEvidence.js';
 import { reviewArtifactMatchesPr } from './review-match.js';
 import { readPushedPatch } from './pushedPatch.js';
@@ -63,13 +68,7 @@ export async function loginUser(email, password) {
  * 只复用 AceHarness 已签发、仍在有效期内的管理员 token。
  */
 export async function openLocalSession() {
-    if (process.env.AIWEB_DEPLOYMENT !== 'personal') {
-        throw new Error('当前部署需要登录');
-    }
-    const token = _readAdminTokenFromDisk();
-    if (!token) throw new Error('本机还没有可用的管理员会话');
-    const user = await getUserByToken(token);
-    if (!user) throw new Error('本机管理员会话已失效');
+    const { token, user } = await resolveLocalAdminSession(getUserByToken);
     return { token, user };
 }
 
@@ -242,10 +241,20 @@ async function _registerPendingUser(opts) {
  * @param {string} token
  * @returns {Promise<object|null>} 用户信息，token 无效时返回 null
  */
+const validateSession = createSessionValidationCache();
+
+/**
+ * 校验 token 并返回当前用户信息。
+ * 短期缓存的是上游确认结果；每次仍先校验凭证，再做任务归属检查。
+ */
 export async function getUserByToken(token) {
-    const result = await httpRequest('GET', '/api/auth/me', null, { token });
-    if (result.status !== 200) return null;
-    return result.data?.user || null;
+    const localUser = readLocalAdminUserByToken(token);
+    if (localUser) return localUser;
+    return validateSession(token, async value => {
+        const result = await httpRequest('GET', '/api/auth/me', null, { token: value, timeoutMs: 10000 });
+        if (result.status !== 200) return null;
+        return result.data?.user || null;
+    });
 }
 
 /**
@@ -281,6 +290,54 @@ export function extractPrNumber(runId) {
  * @returns {Promise<{runs: array, total: number, page: number, totalPages: number}>}
  */
 export async function listPrReviewRuns(token, page = 1, pageSize = 50) {
+    // 本机摘要已包含状态、进度和归属，无需让 ACE 为每次浏览扫描全部 state.yaml。
+    // 本地归档不可用时回退 ACE API；两种路径都先校验会话，绝不绕过所有权过滤。
+    if (aceRunsDir()) {
+        try {
+            return await localPrReviewRuns(token, page, pageSize);
+        } catch (error) {
+            logger.warn('本机 PR 摘要不可用，回退 ACE 运行历史', { error: error.message });
+        }
+    }
+    return remotePrReviewRuns(token, page, pageSize);
+}
+
+async function localPrReviewRuns(token, page, pageSize) {
+    const user = await getUserByToken(token);
+    if (!user) throw new Error('查询运行历史失败（HTTP 401）：登录已过期');
+    const result = await listLocalPrRuns({
+        user, runsRoot: aceRunsDir(), configFile: PR_REVIEW_CONFIG_FILE, page, pageSize,
+        enrich: summary => prReviewRunSummary(summary),
+    });
+    return result || remotePrReviewRuns(token, page, pageSize);
+}
+
+function prReviewRunSummary(r) {
+    const id = r.runId || r.id;
+    return {
+        runId: id,
+        prNumber: extractPrNumber(id),
+        repo: runRepoOf(id),
+        prTitle: runTitleOf(id),
+        configName: r.configName,
+        status: r.status,
+        currentPhase: r.currentPhase,
+        totalSteps: r.totalSteps,
+        completedSteps: r.completedSteps,
+        failedSteps: r.failedSteps,
+        startTime: r.startTime,
+        endTime: r.endTime,
+        ownerName: r.ownerName,
+        totalTokens: r.totalTokens,
+        cost: r.cost,
+        tokenUsageSource: r.tokenUsageSource || (r.totalTokens > 0 ? 'reported' : 'unavailable'),
+        costSource: r.costSource || (r.cost > 0 ? 'reported' : 'unavailable'),
+        ...runGateOutcomeOf(id),
+        ...(r.currentPhase === '__human_approval__' ? humanApprovalFields(id) : {}),
+    };
+}
+
+export async function remotePrReviewRuns(token, page = 1, pageSize = 50) {
     const path = `/api/run-history?page=${page}&pageSize=${Math.min(pageSize, 100)}&keyword=${encodeURIComponent('gitcode-pr-review')}`;
     const result = await httpRequest('GET', path, null, { token });
     if (result.status !== 200) {
@@ -340,6 +397,12 @@ export async function listPrReviewRuns(token, page = 1, pageSize = 50) {
 
 /** 查询并验证单个 run 的归属，避免为一次详情请求下载最近 100 条运行记录。 */
 export async function findOwnedPrReviewRun(token, runId) {
+    const user = await getUserByToken(token);
+    if (!user) return null;
+    const local = await findLocalPrRun({
+        user, runsRoot: aceRunsDir(), configFile: PR_REVIEW_CONFIG_FILE, runId,
+    });
+    if (local !== undefined) return local;
     const path = `/api/run-history?page=1&pageSize=1&runId=${encodeURIComponent(runId)}`;
     const result = await httpRequest('GET', path, null, { token, timeoutMs: 12000 });
     if (result.status !== 200) {
@@ -437,8 +500,7 @@ function _readRunGlobalContext(runId) {
 function _readRunWorkingDirectory(runId) {
     try {
         const yaml = readFileSync(join(aceRunsDir(), runId, 'state.yaml'), 'utf8');
-        const m = /^workingDirectory:\s*(\S+)\s*$/m.exec(yaml);
-        return m ? m[1] : '';
+        return readWorkingDirectory(yaml);
     } catch {
         return '';
     }
@@ -449,7 +511,7 @@ function _readRunArtifactLocal(runId, name, workDir = '') {
     const candidates = [
         join(aceRunsDir(), runId, 'outputs', name),
         // 共享模板工作区可能已有其他 PR 的产物，仅隔离目录可以回退读取。
-        workDir && workDir.replace(/\\/g, '/').endsWith('/' + runId) ? join(workDir, 'outputs', name) : '',
+        isIsolatedRunDir(workDir, runId) ? join(workDir, 'outputs', name) : '',
     ].filter(Boolean);
     for (const path of candidates) {
         try { return readFileSync(path, 'utf8'); } catch { /* 尝试下一个本地位置 */ }
@@ -519,7 +581,7 @@ export function runGateDiagnosisOf(runId, runsRoot = join(aceRunsDir())) {
     const workDir = _readRunWorkingDirectory(runId);
     const candidates = [
         join(runsRoot, runId, 'outputs', 'gate-check.json'),
-        workDir && workDir.replace(/\\/g, '/').endsWith('/' + runId) ? join(workDir, 'outputs', 'gate-check.json') : '',
+        isIsolatedRunDir(workDir, runId) ? join(workDir, 'outputs', 'gate-check.json') : '',
     ].filter(Boolean);
     let raw = null;
     for (const path of candidates) {
@@ -1125,6 +1187,52 @@ function _classifyReviewComments(rawComments) {
     return { ai, human, noise };
 }
 
+function suggestionField(item, keys) {
+    for (const key of keys) {
+        const value = String(item?.[key] || '').replace(/\r\n/g, '\n').trim();
+        if (value) return value;
+    }
+    return '';
+}
+
+/** keep_trailer 里「保留」的 Signed-off-by 行。括号说明不是提交正文。 */
+function keptTrailer(item) {
+    const explicit = suggestionField(item, ['suggested_body']);
+    if (explicit) return explicit;
+    const line = suggestionField(item, ['keep_trailer'])
+        .split('\n')
+        .map((part) => part.trim())
+        .find((part) => /^[A-Za-z][\w-]*:\s+\S/.test(part));
+    return line ? line.replace(/[（(].*$/, '').trim() : '';
+}
+
+/** commit 标题/正文建议做成展示用 diff。它不是文件补丁，不能 git apply。 */
+export function commitMessagePatch(suggestion) {
+    const items = Array.isArray(suggestion?.suggestions) ? suggestion.suggestions : [];
+    const blocks = [];
+    for (const item of items) {
+        if (!item || typeof item !== 'object') continue;
+        let current = suggestionField(item, ['current', 'current_value', 'current_commit_title', 'current_commit_message', 'current_title']);
+        const title = suggestionField(item, ['suggested_title', 'proposed_commit_title', 'suggested_value', 'proposed_value', 'proposed_title']);
+        const body = keptTrailer(item);
+        if (body && current && !current.includes(body)) current = `${current}\n\n${body}`;
+        if (!title && !body) continue;
+        const next = [title, body].filter(Boolean).join('\n\n');
+        if (next === current) continue;
+        const oldLines = (current || '(empty)').split('\n');
+        const newLines = next.split('\n');
+        blocks.push([
+            'diff --git a/COMMIT_EDITMSG b/COMMIT_EDITMSG',
+            '--- a/COMMIT_EDITMSG',
+            '+++ b/COMMIT_EDITMSG',
+            `@@ -1,${oldLines.length} +1,${newLines.length} @@`,
+            ...oldLines.map((line) => `-${line}`),
+            ...newLines.map((line) => `+${line}`),
+        ].join('\n'));
+    }
+    return blocks.join('\n');
+}
+
 /**
  * 聚合读取一个 run 的「AI 检视修复」数据：
  *   ai-review-comments.json（结构化意见） + fix.patch（提交的修改） + state.yaml globalContext（PR 元数据/基线 sha）
@@ -1234,8 +1342,9 @@ export async function getReviewFixData(token, runId) {
         logPlatformVerified: gateCheck.log_platform_verified === true,
         maintainerHint: String(gateCheck.maintainer_hint || ''),
     } : null;
-    // 建议模式：本 run 生成了检视建议但未推送（工作流检视修复模式A）。前端据此切换"应用/驳回/反馈"决策。
-    const suggestionMode = Boolean(suggestion?.mode === 'suggestion' && runPatch);
+    // 建议模式：本 run 生成了检视建议但未推送。文件 diff 和只改 commit 标题的建议都要进入决策。
+    const suggestionMode = suggestion?.mode === 'suggestion';
+    const commitPatch = commitMessagePatch(suggestion);
 
     // 净化分类（旧版全量数据在此被兜底过滤；新版已过滤的数据分类结果不变）。
     // comments[] 为待处理意见，stale_comments[] 为"旧代码意见"（push 后过期）——
@@ -1317,10 +1426,12 @@ export async function getReviewFixData(token, runId) {
         recoveredCommits,
         // 建议模式：检视意见的建议修复已生成但未推送，等用户决策（应用/驳回/反馈）
         suggestionMode,
+        commitPatch,
         suggestion: suggestionMode ? {
             headSha: suggestion.head_sha || '',
             commentCount: suggestion.comment_count ?? null,
             generatedAt: suggestion.generated_at || null,
+            fixPatchAvailable: suggestion.fix_patch_available !== false && Boolean(runPatch),
         } : null,
         siblingReview,
         prMeta,
@@ -1652,8 +1763,9 @@ export async function startReviewActionRun(token, pr, instruction, options = {})
  *  GitCode PR 总览 + 监控人工控制
  * ════════════════════════════════════════════════════════════════════════ */
 
-const GITCODE_API_BASE = 'https://gitcode.com/api/v5';
-const GITCODE_ORG_API_BASE = 'https://api.gitcode.com/api/v5';
+// 测试钩子：GITCODE_API_ROOT / GITCODE_ORG_API_ROOT 可指向本地 GitCode 模拟器（默认线上地址，行为不变）。
+const GITCODE_API_BASE = process.env.GITCODE_API_ROOT || 'https://gitcode.com/api/v5';
+const GITCODE_ORG_API_BASE = process.env.GITCODE_ORG_API_ROOT || 'https://api.gitcode.com/api/v5';
 
 /**
  * 拉单个 PR 详情（列表接口的 testers 恒为空数组，测试人/审批人状态必须用详情接口）。
@@ -1964,7 +2076,10 @@ export async function listGitcodeOrgPrs(opts = {}) {
     const payload = await fetchGitcodeJson(`${GITCODE_ORG_API_BASE}/org/${encodeURIComponent(org)}/pull_requests?${query}`, gitcodeApiHeaders());
     if (!Array.isArray(payload)) throw new Error('GitCode 组织 PR 接口返回格式异常');
     const prs = payload.map((item) => normalizeGitcodePr(item, org)).filter((item) => item.number && item.repoFull);
-    // 组织列表 API 的文档响应未列出 title/user；实际响应若也缺字段，则只补当前页详情，最多 4 个并发。
+    // 组织列表响应不带 user。按作者查询时 GitCode 已按作者筛过，直接用查询的作者；
+    // 逐条读详情会很快触发 GitCode 429，作者补不上，个人部署的列表就会变空。
+    if (author) for (const pr of prs) if (!pr.author) pr.author = author;
+    // 其余缺 title/user 的条目只补当前页详情，最多 4 个并发。
     let cursor = 0;
     const enrichWorker = async () => {
         while (cursor < prs.length) {
@@ -2356,7 +2471,7 @@ export async function saveGitcodeToken(token, gitcodeToken, options = {}) {
     // 校验令牌：GitCode /user 返回该令牌对应的账号 login
     let login = '';
     try {
-        const resp = await fetch('https://gitcode.com/api/v5/user', {
+        const resp = await fetch(`${process.env.GITCODE_API_ROOT || 'https://gitcode.com/api/v5'}/user`, {
             headers: { Authorization: `Bearer ${value}` },
             signal: AbortSignal.timeout(10000),
         });

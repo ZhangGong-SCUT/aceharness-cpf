@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "id": "real-engine-build-green",
+  "kind": "real_replay",
+  "description": "真实监控快照的脱敏重放；不访问真实 GitCode/DCP，不执行编译或测试。",
+  "source": {
+    "evidence": "local gate-source.json (pull comments + final PR labels)",
+    "repository": "CPF-Flutter/flutter_engine#1623",
+    "snapshot_at": "2026-11-14T11:22:41.183Z",
+    "start_build_comment_id": "200788161",
+    "excluded_non_ci_comments_after_start": 0,
+    "limitations": [
+      "评论正文和时间来自真实快照；URL、邮箱及普通作者身份已脱敏。",
+      "仅保存最终标签快照，结果标签附在最后一个门禁事件，不能据此声称知道标签的真实变更时刻。",
+      "webhook 仅用于本地重放测试，不是对线上 webhook 投递次数和顺序的记录。"
+    ]
+  },
+  "pr": {
+    "owner": "CPF-Flutter",
+    "repo": "flutter_engine",
+    "number": 1623,
+    "author": "replay-author",
+    "head_repo": "replay-author/replay-fork",
+    "head_ref": "replay-branch",
+    "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_ref": "oh-3.27.4-dev"
+  },
+  "timeScale": 0.0001,
+  "seed": {
+    "labels": [],
+    "comments": []
+  },
+  "script": [
+    {
+      "source_comment_id": "200788267",
+      "source_created_at": "2026-11-14T18:38:45+08:00",
+      "atMs": 30000,
+      "who": "openharmony_ci",
+      "comment": "本地或库上代码有更新,全量重新构建,重置所有关联PR的验证状态 门禁构建开始,包含静态检查、代码编译【flutter_3.27.4-dev_engine编译】,预计在60分钟内完成,门禁结果会同步发送到注册邮箱。您可以通过如下链接跟踪门禁进展: [redacted-url]",
+      "webhook": false
+    },
+    {
+      "source_comment_id": "200788320",
+      "source_created_at": "2026-11-14T18:39:02+08:00",
+      "atMs": 47000,
+      "who": "openharmony_ci",
+      "comment": "感谢提交 Pull Requests！ Thanks for submitting a pull request.",
+      "webhook": false
+    },
+    {
+      "source_comment_id": "200794217",
+      "source_created_at": "2026-11-14T19:22:39+08:00",
+      "atMs": 2664000,
+      "who": "openharmony_ci",
+      "comment": "代码门禁通过 您可以通过如下链接查看门禁报告: [redacted-url] 静态检查: # check type result report 1 codeCheck pass >>> 编译测试: # Device build result package 1 flutter_3.27.4-dev_engine success >>>",
+      "webhook": true,
+      "labels": [
+        "dco检查成功",
+        "编译成功",
+        "静态检查成功"
+      ]
+    }
+  ],
+  "expected": {
+    "phase": "green"
+  }
+}

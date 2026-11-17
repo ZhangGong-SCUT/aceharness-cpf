@@ -28,6 +28,7 @@ vi.mock('@/lib/engines/opencode-http-adapter', () => ({
   buildOpenCodeExecutePrompt: adapterMocks.buildFullPrompt,
   discoverOpenCodeCommandsFromHttpClient: adapterMocks.discoverOpenCodeCommandsFromHttpClient,
   executeCommandWithOpenCodeHttp: adapterMocks.executeCommandWithOpenCodeHttp,
+  formatError: (error: unknown) => typeof error === 'string' ? error : String((error as any)?.message || error),
   getSessionId: vi.fn((data?: { id?: string }) => data?.id || 'session-test'),
   resolveOpenCodeModelId: vi.fn((modelId: string) => modelId),
   sendPromptWithOpenCodeHttp: adapterMocks.sendPromptWithOpenCodeHttp,
@@ -293,5 +294,33 @@ describe('OpenCodeSdkEngineWrapper', () => {
     expect(result.success).toBe(true);
     expect(result.output).toBe(`${toolCall}${finalJson}`.trim());
     expect(result.error).toBeUndefined();
+  });
+
+  test('keeps OpenCode cold starts bounded while allowing config and database loading', async () => {
+    const { getOpenCodeServerStartupTimeoutMs } = await import('@/lib/engines/opencode-sdk-wrapper');
+    expect(getOpenCodeServerStartupTimeoutMs({})).toBe(90_000);
+    expect(getOpenCodeServerStartupTimeoutMs({ ACE_OPENCODE_SERVER_STARTUP_TIMEOUT_MS: '1' })).toBe(1_000);
+    expect(getOpenCodeServerStartupTimeoutMs({ ACE_OPENCODE_SERVER_STARTUP_TIMEOUT_MS: '45000' })).toBe(45_000);
+    expect(getOpenCodeServerStartupTimeoutMs({ ACE_OPENCODE_SERVER_STARTUP_TIMEOUT_MS: '99999999' })).toBe(600_000);
+  });
+
+  test('keeps a busy server that misses one health probe instead of spawning a second one', async () => {
+    const { isSdkServerAlive } = await import('@/lib/engines/opencode-sdk-wrapper');
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockResolvedValue({ ok: true, json: async () => ({ healthy: true, version: '1.0.0' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const entry = { server: { url: 'http://127.0.0.1:1/' } };
+      await expect(isSdkServerAlive(entry, { retryDelayMs: 1 })).resolves.toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      fetchMock.mockReset();
+      fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
+      await expect(isSdkServerAlive(entry, { retryDelayMs: 1 })).resolves.toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

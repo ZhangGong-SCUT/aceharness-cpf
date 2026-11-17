@@ -9,6 +9,7 @@
  *  POST   /api/issue-analysis/validate                     校验 URL 是否合法
  *  GET    /api/issue-analysis/:taskId/status               查询任务状态（代理到 AceHarness）
  *  POST   /api/issue-analysis/:taskId/continue             服务重启中断后从原步骤继续
+ *  POST   /api/issue-analysis/:taskId/stop                 停止分析并释放该 run 的设备锁
  *  GET    /api/issue-analysis                               列出所有任务
  *  GET    /api/issue-analysis/:taskId/artifacts            列出 run 产物（截图/日志/补丁，本地磁盘直读）
  *  GET    /api/issue-analysis/:taskId/artifacts/file       读取单个产物（?ref=work/xx.png）
@@ -21,8 +22,9 @@
 import { Router } from 'express';
 import { createLogger } from '../library/logger.js';
 import config from '../library/config.js';
-import { getUserByToken } from '../prReview/client.js';
+import { getUserByToken, openLocalSession } from '../prReview/client.js';
 import { renderMarkdownSafe } from '../issueAnalysis/markdownSafe.js';
+import { issueDetailStatus } from '../issueAnalysis/detailPresentation.js';
 import {
     startIssueAnalysis,
     getTask,
@@ -35,6 +37,9 @@ import {
     readTaskArtifact,
     submitFeedback,
     continueIssueAnalysis,
+    diagnoseIssueAnalysisFailure,
+    listIssuePlatformDefects,
+    stopIssueAnalysis,
     getIssueChainHealth,
     getIterationChain,
     compareIterations,
@@ -42,7 +47,43 @@ import {
 
 const logger = createLogger('Router.IssueAnalysis');
 
-export function createIssueAnalysisRouter(orchestrator) {
+export function issueAnalysisPresentation(task) {
+    const t = task || {};
+    let meta = {};
+    try { meta = typeof t.metadata === 'string' ? JSON.parse(t.metadata) : (t.metadata || {}); } catch { /* 保留可展示的本地字段 */ }
+    const runId = meta.runId || t.analysisSessionId || null;
+    const configFile = meta.configFile || (t.parentTaskId ? 'cpf-ohos-diagnosis-iterate.yaml' : config.aceharness.configFile) || 'cpf-ohos-diagnosis.yaml';
+    const route = runId ? `/workbench/${configFile}?mode=run&run=${runId}` : null;
+    return {
+        taskId: t.taskId,
+        cliType: t.cliType,
+        stage: t.stage,
+        issueUrl: t.issueUrl,
+        issueType: t.issueType,
+        dirName: t.dirName,
+        runId,
+        frontendSessionId: meta.frontendSessionId || null,
+        workbenchUrl: route ? `${config.aceharness.baseUrl}/dashboard?route=${encodeURIComponent(route)}` : null,
+        priorityLevel: t.priorityLevel,
+        summary: t.summary,
+        error: t.error,
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt,
+        startedAt: t.startedAt,
+        finishedAt: t.finishedAt,
+        parentTaskId: t.parentTaskId ?? null,
+        userFeedback: t.userFeedback ?? null,
+        metadata: { artifactStatus: meta.artifactStatus ?? null, verificationStatus: meta.verificationStatus ?? null },
+    };
+}
+
+export function createIssueAnalysisRouter(orchestrator, dependencies = {}) {
+    const {
+        getUser = getUserByToken,
+        getLocalSession = openLocalSession,
+        startTask = startIssueAnalysis,
+        findTask = getTask,
+    } = dependencies;
     const router = Router();
 
     // ── 鉴权（身份隔离：提交人仅可见自己的任务，admin 可见全部） ──────────────
@@ -58,23 +99,28 @@ export function createIssueAnalysisRouter(orchestrator) {
 
     async function _requireUser(req, res) {
         const token = extractToken(req);
-        if (!token) {
-            res.status(401).json({ success: false, message: '未登录' });
-            return null;
+        const user = token ? await getUser(token) : null;
+        if (user) return user;
+        // 仅限真正的本机个人部署；转发头不参与判断，公网部署永不回退。
+        if (process.env.AIWEB_DEPLOYMENT === 'personal'
+            && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket?.remoteAddress)) {
+            try {
+                const local = await getLocalSession();
+                if (local?.user) return local.user;
+            } catch (err) {
+                res.status(503).json({ success: false, message: `本机免登录会话不可用：${err.message}` });
+                return null;
+            }
         }
-        const user = await getUserByToken(token);
-        if (!user) {
-            res.status(401).json({ success: false, message: '登录已过期，请重新登录' });
-            return null;
-        }
-        return user;
+        res.status(401).json({ success: false, message: token ? '登录已过期，请重新登录' : '未登录' });
+        return null;
     }
 
     // 单任务归属校验：任务不存在 → 404；非本人且非 admin → 403
     async function _authTask(req, res, taskId) {
         const user = await _requireUser(req, res);
         if (!user) return null;
-        const task = getTask(taskId);
+        const task = findTask(taskId);
         if (!task) {
             res.status(404).json({ success: false, message: `Issue 分析任务 ${taskId} 不存在` });
             return null;
@@ -114,7 +160,7 @@ export function createIssueAnalysisRouter(orchestrator) {
         }
 
         try {
-            const { taskId, runId, dirName, frontendSessionId } = await startIssueAnalysis({
+            const { taskId, runId, dirName, frontendSessionId } = await startTask({
                 issueUrl,
                 accessToken: accessToken || null,
                 priority: priority || null,
@@ -185,16 +231,53 @@ export function createIssueAnalysisRouter(orchestrator) {
 
     // ── 3. 任务状态（代理到 AceHarness） ──────────────────────────────────────
 
+    router.post('/issue-analysis/:taskId/stop', async (req, res) => {
+        const { taskId } = req.params;
+        const auth = await _authTask(req, res, taskId);
+        if (!auth) return;
+        try {
+            const result = await stopIssueAnalysis(taskId);
+            res.json({ success: true, ...result });
+        } catch (err) {
+            logger.error('停止分析失败', { taskId, error: err.message });
+            res.status(err.status || 500).json({ success: false, message: err.message });
+        }
+    });
+
+    // 失败分诊只读取真实运行证据；不会启动或修改原工作流。
+    router.get('/issue-analysis/:taskId/failure-diagnosis', async (req, res) => {
+        const { taskId } = req.params;
+        const auth = await _authTask(req, res, taskId);
+        if (!auth) return;
+        try {
+            const diagnosis = await diagnoseIssueAnalysisFailure(taskId, { supervisor: true });
+            res.json({ success: true, diagnosis });
+        } catch (err) {
+            res.status(err.status || 500).json({ success: false, message: err.message, diagnosis: err.diagnosis });
+        }
+    });
+
+    router.get('/issue-analysis/platform-defects', async (req, res) => {
+        const user = await _requireUser(req, res);
+        if (!user) return;
+        if (!isActiveAdmin(user)) return res.status(403).json({ success: false, message: '仅管理员可查看平台缺陷台账' });
+        try { res.json({ success: true, ...(await listIssuePlatformDefects()) }); }
+        catch (err) { res.status(500).json({ success: false, message: err.message }); }
+    });
+
     router.post('/issue-analysis/:taskId/continue', async (req, res) => {
         const { taskId } = req.params;
         const auth = await _authTask(req, res, taskId);
         if (!auth) return;
         try {
-            const result = await continueIssueAnalysis(taskId);
+            const result = await continueIssueAnalysis(taskId, {
+                feedback: typeof req.body?.feedback === 'string' ? req.body.feedback : '',
+                fixEvidence: typeof req.body?.fixEvidence === 'string' ? req.body.fixEvidence : '',
+            });
             res.json({ success: true, ...result });
         } catch (err) {
             logger.error('继续分析失败', { taskId, error: err.message });
-            res.status(err.status || 500).json({ success: false, message: err.message });
+            res.status(err.status || 500).json({ success: false, message: err.message, diagnosis: err.diagnosis });
         }
     });
 
@@ -203,11 +286,13 @@ export function createIssueAnalysisRouter(orchestrator) {
         const auth = await _authTask(req, res, taskId);
         if (!auth) return;
         try {
-            const task = await getTaskStatus(taskId);
-            if (!task) {
+            const rawTask = await getTaskStatus(taskId);
+            if (!rawTask) {
                 return res.status(404).json({ success: false, message: `Issue 分析任务 ${taskId} 不存在` });
             }
-            res.json({ success: true, task });
+            const presentation = issueAnalysisPresentation(rawTask);
+            const { accessToken, metadata: _metadata, ...rawFields } = rawTask;
+            res.json({ success: true, task: { ...rawFields, ...presentation, aceharnessStatus: issueDetailStatus(rawTask.aceharnessStatus), queryUnavailable: !!rawTask.queryUnavailable } });
         } catch (err) {
             logger.error('查询状态失败', { taskId, error: err.message });
             res.status(500).json({ success: false, message: err.message });
@@ -229,48 +314,11 @@ export function createIssueAnalysisRouter(orchestrator) {
             page,
             pageSize,
         });
-        const tasks = rawTasks.map(t => {
-            // 从 metadata 中提取 runId，构造 AceHarness 工作流任务详情页 URL
-            // URL 格式: {baseUrl}/dashboard?route=/workbench/{configFile}?mode=run&run={runId}
-            let frontendSessionId = null;
-            let workbenchUrl = null;
-            let meta = {};
-            try {
-                meta = typeof t.metadata === 'string' ? JSON.parse(t.metadata) : (t.metadata || {});
-                frontendSessionId = meta.frontendSessionId || null;
-                const runId = meta.runId || t.analysisSessionId;
-                if (runId) {
-                    const configFile = meta.configFile || (t.parentTaskId ? 'cpf-ohos-diagnosis-iterate.yaml' : config.aceharness.configFile) || 'cpf-ohos-diagnosis.yaml';
-                    const route = `/workbench/${configFile}?mode=run&run=${runId}`;
-                    workbenchUrl = `${config.aceharness.baseUrl}/dashboard?route=${encodeURIComponent(route)}`;
-                }
-            } catch { /* ignore */ }
-
-            return {
-                taskId: t.taskId,
-                cliType: t.cliType,
-                stage: t.stage,
-                issueUrl: t.issueUrl,
-                issueType: t.issueType,
-                dirName: t.dirName,
-                runId: t.analysisSessionId,
-                frontendSessionId,
-                workbenchUrl,
-                priorityLevel: t.priorityLevel,
-                summary: t.summary,
-                ownerUsername: isAdmin ? (t.ownerUsername ?? null) : undefined,
-                accessToken: t.accessToken ? '***' : null,
-                error: t.error,
-                createdAt: t.createdAt,
-                updatedAt: t.updatedAt,
-                startedAt: t.startedAt,
-                finishedAt: t.finishedAt,
-                parentTaskId: t.parentTaskId ?? null,
-                userFeedback: t.userFeedback ?? null,
-                // F01/F04/R06：列表页也要呈现归档/验证异常徽标（仅状态值，不带内部细节）
-                metadata: { artifactStatus: meta.artifactStatus ?? null, verificationStatus: meta.verificationStatus ?? null },
-            };
-        });
+        const tasks = rawTasks.map(t => ({
+            ...issueAnalysisPresentation(t),
+            ownerUsername: isAdmin ? (t.ownerUsername ?? null) : undefined,
+            accessToken: t.accessToken ? '***' : null,
+        }));
         res.json({
             success: true,
             page,
@@ -385,8 +433,9 @@ export function createIssueAnalysisRouter(orchestrator) {
     router.get('/issue-analysis/:taskId/artifacts', async (req, res) => {
         const auth = await _authTask(req, res, req.params.taskId);
         if (!auth) return;
-        const { taskId } = req.params;
-        const result = listTaskArtifacts(taskId);
+    const { taskId } = req.params;
+    try {
+        const result = await listTaskArtifacts(taskId);
         if (!result) {
             return res.status(404).json({ success: false, message: `Issue 分析任务 ${taskId} 不存在` });
         }
@@ -396,6 +445,10 @@ export function createIssueAnalysisRouter(orchestrator) {
             runId: result.runId,
             ...result.artifacts,
         });
+    } catch (err) {
+        logger.error('列出产物失败', { taskId, error: err.message });
+        res.status(500).json({ success: false, message: '诊断证据暂时无法读取，请稍后重试' });
+    }
     });
 
     // ── 6. 诊断报告下载（Markdown 文件） ─────────────────────────────────────

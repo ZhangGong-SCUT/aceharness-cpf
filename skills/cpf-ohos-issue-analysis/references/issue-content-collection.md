@@ -235,18 +235,17 @@ Issue body 或评论中明确提到分支名（如 `br_pigeon-v26.1.5_ohos`）�
 
 ## 5.5 多仓准备规则（framework + engine）
 
-Flutter 3.35 以下版本的部分功能代码在 engine 仓实现，只拉 framework 仓会漏掉引擎层源码。按以下规则确定仓库清单：
+Flutter 3.35 以下版本的部分功能代码在 engine 仓实现，只拉 framework 仓会漏掉引擎层源码。3.35 及以上的 embedding 在 framework 仓 `repo/engine/src/flutter/`，禁止拉取 `flutter_engine`。按以下规则确定仓库清单：
 
 | 条件 | 准备的仓 |
 |---|---|
-| Issue 正文/评论给了仓地址 | 正文地址（可能是 engine fork，如 wxflutter_engine335） |
+| 版本不低于 3.35（oh-3.35.x / oh-3.41.x / 3.41.10 等） | 只准备 framework 仓。禁止 clone `flutter_engine`，禁止创建 `repo-engine/`。功能、渲染、稳定性、性能都一样 |
+| Issue 正文/评论给了仓地址，且版本低于 3.35 | 正文地址（可能是 engine fork，如 wxflutter_engine335） |
 | 版本低于 3.35（oh-3.27.x / oh-3.22.x 等） | framework 仓 **和** engine 仓 |
-| problem_type_preliminary ∈ 渲染/稳定性/性能（引擎层高发） | 建议一并准备 engine 仓 |
-| 其余（3.35+ 且功能类问题） | framework 仓 |
 
 - framework 仓：`https://gitcode.com/CPF-Flutter/flutter_flutter.git`（默认分支 `dev`）
-- engine 仓：`https://gitcode.com/CPF-Flutter/flutter_engine.git`（**分支与 framework 同名**，如 `oh-3.27.4-dev`；无同名分支回退 `dev`）
-- 目录约定：framework/正文主仓 → `repo/`；engine 仓 → `repo-engine/`
+- engine 仓仅版本低于 3.35 时准备：`https://gitcode.com/CPF-Flutter/flutter_engine.git`（**分支与 framework 同名**，如 `oh-3.27.4-dev`；无同名分支回退 `dev`）。版本以 Issue 标题、正文和影响分支为准，在克隆前决定。请求里没有低于 3.35 的版本号（只写 `dev`，或分支不低于 3.35）时，`repo-cache.mjs clone` 直接失败，不会回退到 `dev`
+- 目录约定：framework/正文主仓 → `repo/`；低于 3.35 的 engine 仓 → `repo-engine/`。3.35 及以上的引擎源码路径是 `repo/engine/src/flutter/`
 
 ### 统一用共享镜像缓存脚本（禁止手写 git clone 全量拉取）
 
@@ -259,13 +258,17 @@ node .agents/skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs clone \
   --repo https://gitcode.com/CPF-Flutter/flutter_flutter.git \
   --dest repo/ --branch oh-3.27.4-dev --fallback-branch dev
 
-# engine 仓（需要时；分支同名，无同名分支自动回退 dev）
+# engine 仓（仅版本低于 3.35；分支同名，无同名分支自动回退 dev。3.35 及以上不要执行这条）
 node .agents/skills/cpf-ohos-issue-analysis/scripts/repo-cache.mjs clone \
   --repo https://gitcode.com/CPF-Flutter/flutter_engine.git \
   --dest repo-engine/ --branch oh-3.27.4-dev --fallback-branch dev
 ```
 
-脚本行为：目录已存在自动 fetch 复用；镜像异常自动降级直连上游（与旧流程一致的保底）；完整历史（支持回退 merge commit），不要 `--depth=1`。输出单行 JSON：`result`（success|degraded|failed）、`from_cache`、`branch`、`branch_source`、`commit`、`duration_ms`、`degraded_reason`。
+脚本行为：目录已存在自动 fetch 复用；镜像异常自动降级直连上游（与旧流程一致的保底）。不要自己加 `--depth=1`。输出单行 JSON：`result`（success|degraded|failed）、`from_cache`、`branch`、`branch_source`、`commit`、`duration_ms`、`degraded_reason`。
+
+- **给足命令时限**：首次从上游拉分支可能要几分钟。调用 bash 工具时把 `timeout` 设为 `1200000`（20 分钟），不要用默认值。被时限打断后原样重跑同一条命令即可，脚本会复用已有的 `repo/` 继续拉，不要手动删 `repo/` 重来
+- **浅仓的历史深度**：清单里对上的本地 SDK 多为浅克隆，脚本按写时复制拷它的 `.git`（秒级）。目标分支本地没有时只拉最近 500 个提交（`ACE_REPO_CACHE_SHALLOW_DEPTH` 可调）。要回退的 merge commit 不在 `repo/` 里（`git -C repo cat-file -e <sha>` 失败）时，执行 `git -C repo fetch --deepen=2000 origin <分支>` 补历史，同样给足 `timeout`，仍不够再加大
+- **禁止动共享缓存**：不要删除或改动 `~/.aceharness/repo-cache/`（含 `locks/` 下的锁文件），也不要手写 `git clone` 绕过脚本
 
 ## 6. 输出 JSON 模板
 

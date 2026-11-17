@@ -28,6 +28,9 @@ yarn-error.log*
 # runtime logs (PM2 / cloudflared)
 logs/
 
+# local databases (runtime state, never commit)
+/db/
+
 # local env files
 .env
 .env*.local

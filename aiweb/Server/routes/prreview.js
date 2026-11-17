@@ -1,4 +1,5 @@
 import { aceDataDir, aceRunsDir, aceRuntimeRoot, isActiveAdmin } from '../library/aceRuntime.js';
+import { isIsolatedRunDir, readWorkingDirectory } from '../library/runPath.js';
 import { buildPrMonitorHealth } from '../prReview/monitorHealth.js';
 import { classifyParkApproval, readHumanApproval } from '../prReview/approvalState.js';
 import { splitPatch, patchContextApplies, decideSync, loadModelEndpoint, askSyncModel } from '../prReview/siblingSync.js';
@@ -30,6 +31,8 @@ import { readdirSync, readFileSync, mkdirSync, writeFileSync, renameSync, statSy
 import { homedir } from 'os';
 import { join } from 'path';
 import { httpRequest, ACEHARNESS_API_BASE_URL } from '../issueAnalysis/aceHarnessClient.js';
+import { createRecentQueryCache } from '../prReview/recentQueryCache.js';
+import { createOrgPrPageCache } from '../prReview/orgPrPageCache.js';
 import {
     loginUser,
     openLocalSession,
@@ -443,36 +446,13 @@ function getPrsCached(author, fresh = false) {
     return p;
 }
 
-const ORG_PR_PAGE_CACHE_TTL_MS = 60 * 1000;
-const ORG_PR_PAGE_CACHE_MAX = 200;
-const _orgPrPageCache = new Map();
-const _orgPrPageInflight = new Map();
+const _prRunsQueryCache = createRecentQueryCache();
+const _orgPrPages = createOrgPrPageCache({ file: join(aceDataDir(), 'aiweb', 'org-pr-pages.json') });
 
 function getOrgPrPageCached(options, fresh = false) {
-    const normalized = {
-        org: 'CPF-Flutter',
-        repo: String(options.repo || ''),
-        page: Number(options.page) || 1,
-        perPage: Number(options.perPage) || 20,
-        state: String(options.state || 'all'),
-        search: String(options.search || ''),
-        author: String(options.author || ''),
-    };
-    const key = JSON.stringify({ ...normalized, repo: normalized.repo.toLowerCase(), author: normalized.author.toLowerCase() });
-    const hit = _orgPrPageCache.get(key);
-    if (!fresh && hit && Date.now() - hit.at < ORG_PR_PAGE_CACHE_TTL_MS) return Promise.resolve(hit.data);
-    if (_orgPrPageInflight.has(key)) return _orgPrPageInflight.get(key);
-    const read = normalized.repo
+    return _orgPrPages.get(options, fresh, normalized => normalized.repo
         ? listGitcodeRepoPrsPage(normalized.repo, normalized)
-        : listGitcodeOrgPrs(normalized);
-    const pending = Promise.resolve(read).then((data) => {
-        _orgPrPageCache.delete(key);
-        _orgPrPageCache.set(key, { at: Date.now(), data });
-        while (_orgPrPageCache.size > ORG_PR_PAGE_CACHE_MAX) _orgPrPageCache.delete(_orgPrPageCache.keys().next().value);
-        return data;
-    }).finally(() => _orgPrPageInflight.delete(key));
-    _orgPrPageInflight.set(key, pending);
-    return pending;
+        : listGitcodeOrgPrs(normalized));
 }
 
 export function createPrReviewRouter(orchestrator) {
@@ -483,6 +463,14 @@ export function createPrReviewRouter(orchestrator) {
     function extractToken(req) {
         const h = req.headers.authorization || '';
         return h.startsWith('Bearer ') ? h.slice(7) : null;
+    }
+
+    function queryPrRuns(token, page = 1, pageSize = 50) {
+        return _prRunsQueryCache.get(token, ['pr-runs', page, pageSize], () => listPrReviewRuns(token, page, pageSize));
+    }
+
+    function invalidatePrRuns(token) {
+        _prRunsQueryCache.invalidate(token);
     }
 
     // ── 1. 本地个人部署：直接进入本机管理员，不展示登录页 ─────────────────────
@@ -648,7 +636,7 @@ export function createPrReviewRouter(orchestrator) {
         try {
             const page = Math.max(1, parseInt(req.query.page || '1', 10) || 1);
             const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize || '50', 10) || 50));
-            const data = await listPrReviewRuns(token, page, pageSize);
+            const data = await queryPrRuns(token, page, pageSize);
             // 附加 AceHarness 工作台跳转链接
             const cf = PR_REVIEW_CONFIG_FILE;
             data.runs = data.runs.map(r => {
@@ -830,8 +818,10 @@ export function createPrReviewRouter(orchestrator) {
                 return res.status(400).json({ success: false, message: '仓库筛选只支持 CPF-Flutter 组织内的仓库' });
             }
             let repos = [];
-            try { repos = await listGitcodeOrgRepos('CPF-Flutter', req.query.fresh === '1', isAdmin ? 'all' : 'public'); }
-            catch (error) { logger.warn('读取 CPF-Flutter 仓库筛选目录失败', { error: error.message }); }
+            // 仓库下拉与 PR 列表独立并行读取；只有筛选私有仓库时才依赖目录做权限判断。
+            const reposPending = listGitcodeOrgRepos('CPF-Flutter', req.query.fresh === '1', isAdmin ? 'all' : 'public')
+                .catch(error => { logger.warn('读取 CPF-Flutter 仓库筛选目录失败', { error: error.message }); return []; });
+            if (repoFilter) repos = await reposPending;
             const isPublicRepo = repos.some((name) => name.toLowerCase() === repoFilter.toLowerCase());
             if (repoFilter && !isAdmin && !isPublicRepo && !ownLogin) {
                 return res.status(403).json({ success: false, message: '筛选非公开仓库需要绑定自己的 GitCode 身份' });
@@ -839,6 +829,7 @@ export function createPrReviewRouter(orchestrator) {
             // 单仓 API 能读到服务令牌可见的私有 PR；普通用户筛私有仓时只查询自己的 PR。
             const pageAuthor = repoFilter && !isAdmin && !isPublicRepo ? (author || ownLogin) : author;
             const data = await getOrgPrPageCached({ page, perPage, state, search, repo: repoFilter, author: pageAuthor }, req.query.fresh === '1');
+            if (!repoFilter) repos = await reposPending;
             // 私有项目的 PR 不能因为服务端令牌权限更高而泄露给普通平台用户；本人仍可查看自己的条目。
             let prs = data.prs.filter((p) => {
                 if (personal) return Boolean(ownLogin && p.author.toLowerCase() === ownLogin.toLowerCase());
@@ -847,7 +838,7 @@ export function createPrReviewRouter(orchestrator) {
             });
             if (!degraded) {
                 // 标注每条 PR 的监控状态：匹配当前用户名下的 run（仓库+编号双键，防跨仓同号误标）
-                const runs = await listPrReviewRuns(token, 1, 100);
+                const runs = await queryPrRuns(token, 1, 100);
                 const runByPr = new Map();
                 for (const r of runs.runs) {
                     if (!r.prNumber) continue;
@@ -873,6 +864,7 @@ export function createPrReviewRouter(orchestrator) {
             for (const pr of prs) if (pr.repoFull && !repos.some((name) => name.toLowerCase() === pr.repoFull.toLowerCase())) repos.push(pr.repoFull);
             res.json({ success: true, prs, repo: 'CPF-Flutter', repos, author,
                 identitySource: personal || author ? 'self' : 'organization', degraded,
+                stale: Boolean(data.stale),
                 page: data.page, perPage: data.perPage, hasMore: data.hasMore,
                 searchMode: repoFilter ? 'current-page' : 'organization' });
         } catch (err) {
@@ -1041,6 +1033,7 @@ export function createPrReviewRouter(orchestrator) {
                 });
             }
             const result = out.value;
+            invalidatePrRuns(token);
             logger.info('人工开启 PR 监控', { username: user.username, pr: `${repoShort}#${pr.number}`, runId: result.runId });
             res.json({ success: true, ...result, capabilities });
         } catch (err) {
@@ -1065,12 +1058,13 @@ export function createPrReviewRouter(orchestrator) {
             }
             const { runId } = req.body ?? {};
             // 校验 run 归属：非管理员只能停止自己的 run
-            const runs = await listPrReviewRuns(token, 1, 100);
+            const runs = await queryPrRuns(token, 1, 100);
             const target = runs.runs.find(r => r.runId === runId);
             if (!target && user.role !== 'admin') {
                 return res.status(403).json({ success: false, message: '只能停止自己的监控任务' });
             }
             const result = await stopPrMonitor(token, runId);
+            invalidatePrRuns(token);
             logger.info('人工关闭 PR 监控', { username: user.username, runId, message: result.message });
             res.json({ success: true, ...result });
         } catch (err) {
@@ -1762,7 +1756,7 @@ export function createPrReviewRouter(orchestrator) {
 
             // ── 应用建议 / 重试未推送的修复：均以 user_apply_patch 启动新 run ──
             if (decision === 'apply') {
-                if (!data.patch) {
+                if (!data.patch && !data.commitPatch) {
                     return res.status(422).json({ success: false, message: '该任务没有可应用的 fix.patch' });
                 }
                 if (!data.suggestionMode && !data.pushFailed
@@ -1869,8 +1863,9 @@ export function createPrReviewRouter(orchestrator) {
             // R01：为本次动作建立幂等操作记录。同键进行中/已成功则拒绝，
             // 避免连点或请求重放导致重复推送、重复触发构建。
             const actionKind = decision;
-            const patchHash = hashPatch(data.patch);
-            if (decision === 'apply') instruction.patchHash = createHash('sha256').update(data.patch).digest('hex');
+            const applyBody = data.patch || data.commitPatch || '';
+            const patchHash = hashPatch(decision === 'apply' ? applyBody : data.patch);
+            if (decision === 'apply') instruction.patchHash = createHash('sha256').update(applyBody).digest('hex');
             const origHead = data.suggestionMode ? (data.suggestion?.headSha || '') : (meta.origHeadSha || '');
             const actionKey = operationKey({
                 owner: meta.owner, repo: meta.repo, number: meta.number, origHead, patchHash, action: actionKind,
@@ -2253,10 +2248,10 @@ export function createPrReviewRouter(orchestrator) {
             if (!owner || !repo || !number || !author) {
                 return res.status(422).json({ success: false, message: '任务里缺少 PR 身份，无法找兄弟分支' });
             }
-            const workDir = /^\s*workingDirectory:\s*(\S+)/m.exec(readFileSync(join(aceRunsDir(), runId, 'state.yaml'), 'utf8'))?.[1] || '';
+            const workDir = readWorkingDirectory(readFileSync(join(aceRunsDir(), runId, 'state.yaml'), 'utf8'));
             const patchPaths = [
                 join(aceRunsDir(), runId, 'outputs', 'fix.patch'),
-                workDir && workDir.endsWith('/' + runId) ? join(workDir, 'outputs', 'fix.patch') : '',
+                isIsolatedRunDir(workDir, runId) ? join(workDir, 'outputs', 'fix.patch') : '',
             ].filter(Boolean);
             let patch = '';
             for (const path of patchPaths) {

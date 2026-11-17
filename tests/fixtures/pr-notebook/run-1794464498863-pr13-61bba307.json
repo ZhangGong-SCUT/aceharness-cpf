@@ -1,0 +1,87 @@
+{
+  "id": "run-1794464498863-pr13-61bba307",
+  "pr": "CPF-Flutter/fluttertpc_flutter_exit_app#13",
+  "note": "分类器结论是 green。这次 run 之后又被改成 user_fix，错题本只锁分类器，不重放后面的人工指令。",
+  "recorded": {
+    "phase": "user_fix",
+    "verdict": "pass"
+  },
+  "input": {
+    "labels": [
+      "AI已检视",
+      "dco检查成功",
+      "静态检查成功"
+    ],
+    "comments": [
+      {
+        "user": {
+          "login": "z2036709353"
+        },
+        "body": "Start build",
+        "created_at": "2026-11-11T14:31:32+08:00",
+        "comment_type": "pr_comment"
+      },
+      {
+        "user": {
+          "login": "openharmony_ci"
+        },
+        "body": "首次触发\n门禁构建开始,包含静态检查,预计在60分钟内完成,门禁结果会同步发送到注册邮箱。您可以通过如下链接跟踪门禁进展:<a href=\"http://dcp.openharmony.cn/workbench/cicd/detail/6af40bdf64650f998b90e01d/runlist\">http://dcp.openharmony.cn/workbench/cicd/detail/6af40bdf64650f998b90e01d/runlist</a>",
+        "created_at": "2026-11-11T14:32:03+08:00",
+        "comment_type": "pr_comment"
+      },
+      {
+        "user": {
+          "login": "openharmony_ci"
+        },
+        "body": "<p>感谢提交 Pull Requests！<br>Thanks for submitting a pull request.</br>",
+        "created_at": "2026-11-11T14:32:09+08:00",
+        "comment_type": "pr_comment"
+      },
+      {
+        "user": {
+          "login": "openharmony_ci"
+        },
+        "body": "代码门禁通过 <br>您可以通过如下链接查看门禁报告:<a href=\"http://dcp.openharmony.cn/workbench/cicd/detail/6af40bdf64650f998b90e01d/runlist\">http://dcp.openharmony.cn/workbench/cicd/detail/6af40bdf64650f998b90e01d/runlist</a></br> <br>静态检查:</br> <table> <thead> <tr> <th>#</th> <th>check type</th> <th>result</th> <th>report</th> </tr> </thead> <tbody> <tr> <td>1</td> <td>codeCheck</td> <td>pass</td> <td><a href='https://dcp.openharmony.cn/workbench/cicd/detail/6af40bdf64650f998b90e01d/runlist?pop=codecheck&taskId=MR_0018b1ab643d42d7bfa56a2525058a18'>>>></a></td> </tr> </tbody> </table>",
+        "created_at": "2026-11-11T14:38:08+08:00",
+        "comment_type": "pr_comment"
+      },
+      {
+        "user": {
+          "login": "cpf-manager"
+        },
+        "body": "【AI-Review】【一般】【编码规范】【其他编码规范】\n● 问题: 本 PR 的 commit message 标题 \"docs: 为 flutter_exit_app 文档补充 Android/iOS 平台支持列（2 文件）\" 包含中文内容。CPF-Flutter flutter_thirdparty 检视规范明确要求「代码注释、日志输出、git commit 信息必须使用纯英文，禁止使用中文」，commit message 的标题与正文均不得包含中文。\n\n● 影响: 当前 commit 历史中混入中文标题，不符合本仓库三方库适配项目对 commit 信息纯英文的统一约束；后续基于 commit message 的检索、CI 流水线解析、changelog 自动生成等工具链在中文混入时可能出现编码或解析异常。\n\n● 建议: 将 commit message 改写为纯英文，例如：\"docs: add Android/iOS platform support columns to flutter_exit_app OpenHarmony READMEs (2 files)\"。",
+        "created_at": "2026-11-11T14:39:47+08:00",
+        "comment_type": "diff_comment"
+      }
+    ],
+    "pull": {
+      "title": "docs: 为 flutter_exit_app 文档补充 Android/iOS 平台支持列（2 文件）",
+      "body": "## 修改点\n\n为 flutter_exit_app 的 OpenHarmony 中英文文档补充 Android/iOS 平台支持列，依据 android/、ios/、ohos/ 原生实现填写 yes/no。\n\n- README.OpenHarmony_CN.md：FlutterExitApp、FlutterExitAppPlugin 两个接口表增加 android 支持、iOS 支持列，列名统一为 ohos 支持，并更新三端 TIP；注明 iosForceExit 仅 iOS 生效\n- README.OpenHarmony.md：与中文文档同步增加 android Support、iOS Support 列及三端 TIP\n\n## 方案说明（AI输出）\n\n- **修改方案说明**：不改插件源码。公开接口 exitApp、platformVersion 三端均为 yes。FlutterExitAppPlugin 中 getUniqueClassName、onAttachedToAbility、onDetachedFromAbility 为鸿蒙专有，android/iOS 记为 no。iOS 使用 register/handle，不实现 onAttachedToEngine、onDetachedFromEngine、onMethodCall。\n- **影响范围说明**：仅两份 OpenHarmony README。调用方仍使用 FlutterExitApp.exitApp() 与 FlutterExitApp.platformVersion。\n- **兼容性分析说明**：无 Breaking Change，不改变运行时行为。\n\n## 测试情况\n\n纯文档修改，无行为变更，测试不适用。\n\n### 手动验证\n\n- [ ] 已验证修复有效（文档变更，未做设备验证）\n- [ ] 已确认不影响其他功能（未做设备验证）\n\n## 资料修改\n\n- 是否已在README说明该接口/功能的变化：是\n- 是否已在README和package.json修改了版本信息：不涉及\n\n## 依赖关系变更\n\n无\n\n## 关联 Issue\n\nCloses #16（[#16](https://gitcode.com/CPF-Flutter/fluttertpc_flutter_exit_app/issues/16)）\n\n---\n\n## Checklist\n\n- [x] 已关联 Issue（#16 https://gitcode.com/CPF-Flutter/fluttertpc_flutter_exit_app/issues/16）\n- [x] Issue 包含：问题描述、影响范围、环境信息、修改点（文档类已省略复现步骤、预期结果、实际结果、复现概率）\n- [x] 方案说明已补全（文档类已省略根因分析）\n- [ ] 修复代码与测试用例同步提交（纯文档，不适用）\n- [ ] 已列出触发的用例及运行结果（纯文档，不适用）\n- [ ] 已通过 AI 扫描评审（未执行）\n- [ ] 所有测试用例通过（纯文档，不适用）\n- [x] 兼容性影响和依赖关系影响已完成分析\n\n---\n> 此 PR 由 ohos-lib-pr-push 工作流自动生成\n",
+      "state": "open",
+      "user": {
+        "login": "z2036709353"
+      },
+      "labels": [
+        "AI已检视",
+        "dco检查成功",
+        "静态检查成功"
+      ]
+    },
+    "state": "open",
+    "own_pr": true,
+    "dcp_defect_count": 0
+  },
+  "expected": {
+    "phase": "green",
+    "verdict": "pass",
+    "welcome": true,
+    "start_build_posted": true,
+    "dco_ok": true,
+    "static_ok": true,
+    "compile_ok": true,
+    "test_fail": false,
+    "build_passed": true,
+    "failure_cause": "none",
+    "trigger_rejected": false
+  }
+}

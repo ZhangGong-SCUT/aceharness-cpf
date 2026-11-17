@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { classifyOhosPrGates, commentBelongsToPull, hasAssociatedIssue, isFlakyTestFailure, routeClassifyState } from '../skills/gitcode-pr-review/scripts/ohos-pr-gates.mjs';
+import { classifyOhosPrGates, commentBelongsToPull, compileNotInThisGate, hasAssociatedIssue, isFlakyTestFailure, routeClassifyState } from '../skills/gitcode-pr-review/scripts/ohos-pr-gates.mjs';
 import { findQuoteCandidates, parsePatchAddedLines } from '../skills/gitcode-pr-review/scripts/scan-same-rule-defects.mjs';
 import { decideGitcodeWebhookRun } from '@/lib/workflow/pr-monitor-policy';
 import { parseGitcodeWebhookPayload } from '@/lib/workflow/pr-review-input';
@@ -209,6 +209,123 @@ describe('classifyOhosPrGates', () => {
       own_pr: true,
     });
     expect(result.phase).toBe('green');
+  });
+
+  test('doc gate with no compile section reaches green without a compile label', () => {
+    const comments = [
+      { author: 'openharmony_ci', body: '感谢提交 Pull Requests！', created_at: '2026-11-12T09:00:00+08:00' },
+      { author: 'z2036709353', body: 'start build', created_at: '2026-11-12T09:01:00+08:00' },
+      { author: 'openharmony_ci', body: '门禁构建开始,预计60分钟内完成', created_at: '2026-11-12T09:02:00+08:00' },
+      { author: 'openharmony_ci', body: '代码门禁通过 <br>静态检查:</br> <table><tr><td>codeCheck</td><td>pass</td></tr></table>', created_at: '2026-11-12T09:20:00+08:00' },
+    ];
+    expect(compileNotInThisGate(comments)).toBe(true);
+    const result = classifyOhosPrGates({
+      labels: ['AI已检视', 'dco检查成功', '静态检查成功'],
+      comments,
+      pull: { user: { login: 'z2036709353' } },
+      state: 'open',
+      own_pr: true,
+    });
+    expect(result.phase).toBe('green');
+    expect(result.build_passed).toBe(true);
+  });
+
+  test('code gate pass report that includes 编译测试 still waits for the compile label', () => {
+    const comments = [
+      { author: 'openharmony_ci', body: '感谢提交 Pull Requests！', created_at: '2026-11-12T09:00:00+08:00' },
+      { author: 'dev', body: 'start build', created_at: '2026-11-12T09:01:00+08:00' },
+      { author: 'openharmony_ci', body: '门禁构建开始,包含代码编译和测试', created_at: '2026-11-12T09:02:00+08:00' },
+      { author: 'openharmony_ci', body: '代码门禁通过 <br>静态检查:</br><table><tr><td>codeCheck</td><td>pass</td></tr></table><br>编译测试:</br><table><tr><td>compile</td><td>pending</td></tr></table>', created_at: '2026-11-12T09:20:00+08:00' },
+    ];
+    expect(compileNotInThisGate(comments)).toBe(false);
+    const result = classifyOhosPrGates({
+      labels: ['AI已检视', 'dco检查成功', '静态检查成功'],
+      comments,
+      pull: { user: { login: 'dev' } },
+      state: 'open',
+      own_pr: true,
+    });
+    expect(result.phase).toBe('running');
+    expect(result.summary).toContain('编译还在跑');
+    expect(result.build_passed).toBe(false);
+  });
+
+  test('code gate pass report with an English build-result table still waits for the compile label', () => {
+    const comments = [
+      { author: 'openharmony_ci', body: '感谢提交 Pull Requests！', created_at: '2026-11-12T09:00:00+08:00' },
+      { author: 'dev', body: 'start build', created_at: '2026-11-12T09:01:00+08:00' },
+      { author: 'openharmony_ci', body: '门禁构建开始,包含代码编译和测试', created_at: '2026-11-12T09:02:00+08:00' },
+      { author: 'openharmony_ci', body: '代码门禁通过 <table><tr><th>Device</th><th>build result</th><th>test result</th></tr><tr><td>flutter</td><td>pass</td><td>pass</td></tr></table>', created_at: '2026-11-12T10:00:00+08:00' },
+    ];
+    expect(compileNotInThisGate(comments)).toBe(false);
+    const result = classifyOhosPrGates({
+      labels: ['AI已检视', 'dco检查成功', '静态检查成功'],
+      comments,
+      pull: { user: { login: 'dev' } },
+      state: 'open',
+      own_pr: true,
+    });
+    expect(result.phase).toBe('running');
+    expect(result.summary).toContain('编译还在跑');
+  });
+
+  test('code gate still compiling has no pass report and keeps waiting', () => {
+    const comments = [
+      { author: 'openharmony_ci', body: '感谢提交 Pull Requests！', created_at: '2026-11-12T09:00:00+08:00' },
+      { author: 'dev', body: 'start build', created_at: '2026-11-12T09:01:00+08:00' },
+      { author: 'openharmony_ci', body: '门禁构建开始,包含代码编译', created_at: '2026-11-12T09:02:00+08:00' },
+    ];
+    expect(compileNotInThisGate(comments)).toBe(false);
+    const result = classifyOhosPrGates({
+      labels: ['dco检查成功', '静态检查成功'],
+      comments,
+      pull: { user: { login: 'dev' } },
+      state: 'open',
+      own_pr: true,
+    });
+    expect(result.phase).toBe('running');
+    expect(result.summary).toContain('编译还在跑');
+  });
+
+  test('an older pass report does not close a newer build that has no result yet', () => {
+    const comments = [
+      { author: 'openharmony_ci', body: '感谢提交 Pull Requests！', created_at: '2026-11-10T09:00:00+08:00' },
+      { author: 'dev', body: 'start build', created_at: '2026-11-10T09:01:00+08:00' },
+      { author: 'openharmony_ci', body: '门禁构建开始', created_at: '2026-11-10T09:02:00+08:00' },
+      { author: 'openharmony_ci', body: '代码门禁通过 <br>静态检查:</br><table><tr><td>codeCheck</td><td>pass</td></tr></table>', created_at: '2026-11-10T09:20:00+08:00' },
+      { author: 'dev', body: 'start build', created_at: '2026-11-12T09:00:00+08:00' },
+      { author: 'openharmony_ci', body: '门禁构建开始,包含代码编译', created_at: '2026-11-12T09:02:00+08:00' },
+    ];
+    expect(compileNotInThisGate(comments)).toBe(false);
+    const result = classifyOhosPrGates({
+      labels: ['dco检查成功', '静态检查成功'],
+      comments,
+      pull: { user: { login: 'dev' } },
+      state: 'open',
+      own_pr: true,
+    });
+    expect(result.phase).toBe('running');
+    expect(result.summary).toContain('编译还在跑');
+  });
+
+  test('compile failure label stays failed when a pass report has no compile section', () => {
+    const comments = [
+      { author: 'openharmony_ci', body: '感谢提交 Pull Requests！', created_at: '2026-11-12T09:00:00+08:00' },
+      { author: 'dev', body: 'start build', created_at: '2026-11-12T09:01:00+08:00' },
+      { author: 'openharmony_ci', body: '门禁构建开始', created_at: '2026-11-12T09:02:00+08:00' },
+      { author: 'openharmony_ci', body: '代码门禁通过 <br>静态检查:</br><table><tr><td>codeCheck</td><td>pass</td></tr></table>', created_at: '2026-11-12T09:20:00+08:00' },
+      { author: 'openharmony_ci', body: '代码门禁未通过 编译失败 http://dcp.openharmony.cn/x/runlist', created_at: '2026-11-12T09:30:00+08:00' },
+    ];
+    expect(compileNotInThisGate(comments)).toBe(true);
+    const result = classifyOhosPrGates({
+      labels: ['dco检查成功', '静态检查成功', '编译失败'],
+      comments,
+      pull: { user: { login: 'dev' } },
+      state: 'open',
+      own_pr: true,
+    });
+    expect(result.phase).toBe('compile_failed');
+    expect(result.build_passed).toBe(false);
   });
 
   test('deterministic static failure on first round goes straight to fix, no jitter retry (R3)', () => {

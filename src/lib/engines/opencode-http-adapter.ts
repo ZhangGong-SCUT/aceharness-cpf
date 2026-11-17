@@ -168,6 +168,10 @@ export type OpenCodeHttpClient = {
       path: { id: string };
       query?: { directory?: string; limit?: number };
     }) => Promise<{ data?: OpenCodeSessionMessage[]; error?: unknown }>;
+    abort?: (options: {
+      path: { id: string };
+      query?: { directory?: string };
+    }) => Promise<{ data?: unknown; error?: unknown }>;
   };
 };
 
@@ -281,9 +285,27 @@ type OpenCodeAdapterLogFn = (entry: {
 }) => void;
 
 const STABLE_ASSISTANT_COMPLETION_WINDOW_MS = 2_500;
+const DEFAULT_NO_NEW_OUTPUT_GRACE_MS = 45_000;
+// 用户 prompt 回显也会产生新的 text part，只有这些类型能证明模型已开始处理本轮 prompt
+const ASSISTANT_ONLY_PART_TYPES = new Set(['tool', 'reasoning', 'step-start', 'step-finish', 'patch']);
+
+function getNoNewOutputGraceMs(): number {
+  const parsed = Number.parseInt(String(process.env.ACE_OPENCODE_NO_NEW_OUTPUT_GRACE_MS || ''), 10);
+  if (Number.isFinite(parsed) && parsed >= 50) return parsed;
+  return DEFAULT_NO_NEW_OUTPUT_GRACE_MS;
+}
 
 function isDebugEnabled(): boolean {
   return process.env.ACE_TIMING_DEBUG === '1' || process.env.ACE_TIMING_DEBUG === 'true';
+}
+
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal, reason: () => unknown): Promise<T> {
+  if (signal.aborted) return Promise.reject(reason());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(reason());
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 
 class PromptAlreadyStartedError extends Error {
@@ -468,6 +490,13 @@ export async function executeCommandWithOpenCodeHttp(options: {
 }
 
 export function formatError(error: unknown): string {
+  const formatted = formatErrorBase(error);
+  return /database or disk is full|ENOSPC|no space left on device/i.test(formatted)
+    ? `${formatted}（OpenCode SQLite 数据库或磁盘已满，请清理空间后恢复；不是 Flutter 引擎错误）`
+    : formatted;
+}
+
+function formatErrorBase(error: unknown): string {
   if (typeof error === 'string') return error;
   if (error instanceof Error) {
     const code = typeof (error as any)?.code === 'string' ? ` code=${(error as any).code}` : '';
@@ -476,6 +505,12 @@ export function formatError(error: unknown): string {
   if (error && typeof error === 'object' && typeof (error as any)?.message === 'string') {
     const code = typeof (error as any)?.code === 'string' ? ` code=${(error as any).code}` : '';
     return `${String((error as any).message)}${code}`.trim();
+  }
+  if (error && typeof error === 'object') {
+    const data = (error as any).data;
+    if (data && typeof data === 'object' && typeof data.message === 'string') {
+      return `OpenCode: ${data.message}`;
+    }
   }
   try {
     const serialized = JSON.stringify(error);
@@ -736,13 +771,18 @@ async function sendPromptStreaming(options: {
   const onAbort = () => abortController.abort();
   options.signal?.addEventListener('abort', onAbort, { once: true });
   const existingMessageIds = new Set<string>();
-  const existingAssistantPartIds = await loadAssistantPartIds(options.client, options.sessionId, options.query, existingMessageIds);
+  const assistantBaseline = await loadAssistantBaseline(options.client, options.sessionId, options.query, existingMessageIds);
+  const existingAssistantPartIds = assistantBaseline.partIds;
+  const baselineAssistantText = assistantBaseline.text;
   const collectUsage = createOpenCodeUsageCollector(options.onUsage, existingMessageIds);
   const startedAt = Date.now();
 
   let output = '';
   let idle = false;
   let promptAccepted = false;
+  let promptAcceptedAt = 0;
+  let promptSent = false;
+  let sawBusyAfterPrompt = false;
   let streamEnded = false;
   let streamError: unknown = null;
   const partTypes = new Map<string, string>();
@@ -885,15 +925,21 @@ async function sendPromptStreaming(options: {
       throw new Error(`[${options.engineName}] event stream closed before prompt start`);
     }
 
-    const promptResult = await options.client.session.promptAsync!({
-      path: { id: options.sessionId },
-      body: options.promptBody,
-      query: options.query,
-    });
+    promptSent = true;
+    const promptResult = await untilAborted(
+      options.client.session.promptAsync!({
+        path: { id: options.sessionId },
+        body: options.promptBody,
+        query: options.query,
+      }),
+      abortController.signal,
+      () => streamError || new Error(`[${options.engineName}] prompt cancelled`),
+    );
     if (promptResult.error) {
       throw new Error(formatError(promptResult.error));
     }
     promptAccepted = true;
+    promptAcceptedAt = Date.now();
     touchActivity();
     options.log?.({
       message: 'promptAsync accepted',
@@ -918,6 +964,7 @@ async function sendPromptStreaming(options: {
       signal: abortController.signal,
       shouldStop: () => idle || streamEnded || Boolean(streamError),
       onIdle: () => {
+        if (!idleMeansThisPromptFinished()) return;
         finalizeUnknownPartTypes();
         options.log?.({
           message: 'OpenCode session status poll idle',
@@ -927,10 +974,23 @@ async function sendPromptStreaming(options: {
         idle = true;
         abortController.abort();
       },
+      onBusy: () => {
+        sawBusyAfterPrompt = true;
+      },
     });
 
     while (!idle && !streamEnded && !streamError && !abortController.signal.aborted) {
       await sleep(50);
+      if (
+        promptAcceptedAt > 0
+        && !sawBusyAfterPrompt
+        && !assistantOutputAdvanced()
+        && Date.now() - promptAcceptedAt >= getNoNewOutputGraceMs()
+      ) {
+        streamError = new Error(`[${options.engineName}] AI 服务中断：会话未产生任何输出`);
+        abortController.abort();
+        break;
+      }
       if (promptAccepted && shouldCompleteFromStableAssistantSnapshot()) {
         idle = true;
         abortController.abort();
@@ -947,27 +1007,31 @@ async function sendPromptStreaming(options: {
     finalizeUnknownPartTypes();
     const hydratedOutput = (await hydrateOutputFromSessionMessages(options.client, options.sessionId, options.query))
       || latestAssistantTextSnapshot;
-    if (streamEnded && !idle && !(hydratedOutput || output)) {
+    const freshOutput = freshAssistantText(hydratedOutput) || freshAssistantText(output);
+    if (streamError && !freshOutput) {
+      throw new Error(formatError(streamError));
+    }
+    if (streamEnded && !idle && !freshOutput) {
       throw new Error(`[${options.engineName}] event stream ended before session idle`);
     }
-    if (hydratedOutput) {
+    if (hydratedOutput && freshOutput) {
       if (!output) {
         emitTextDelta(hydratedOutput);
       } else if (hydratedOutput.startsWith(output) && hydratedOutput.length > output.length) {
         emitTextDelta(hydratedOutput.slice(output.length));
       }
     }
-    if (streamError && !hydratedOutput) {
-      throw new Error(formatError(streamError));
-    }
     options.log?.({
       message: 'Streaming prompt done',
-      detail: `outputLength=${(hydratedOutput || output).length}`,
+      detail: `outputLength=${freshOutput.length}`,
       verbose: true,
     });
-    return hydratedOutput || output;
+    return freshOutput;
   } catch (error) {
-    if (promptAccepted) {
+    if (promptAccepted || promptSent) {
+      // 本轮放弃后服务端的 agent 循环还会继续跑；不中止的话，恢复重试时会有两条线同时操作同一个会话。
+      // promptAsync 发出但没回包时服务端可能已存下这条消息，按已开始处理，避免降级再发一遍
+      await abortServerSession(options.client, options.sessionId, options.query, options.log);
       throw new PromptAlreadyStartedError(formatError(error));
     }
     throw error;
@@ -975,6 +1039,24 @@ async function sendPromptStreaming(options: {
     clearInterval(timer);
     options.signal?.removeEventListener('abort', onAbort);
     abortController.abort();
+  }
+
+  function freshAssistantText(text: string): string {
+    const trimmed = text.trim();
+    if (!trimmed || trimmed === baselineAssistantText) return '';
+    return trimmed;
+  }
+
+  function assistantOutputAdvanced(): boolean {
+    return Boolean(freshAssistantText(latestAssistantTextSnapshot) || freshAssistantText(output));
+  }
+
+  function isNewPart(partId: unknown): boolean {
+    return typeof partId === 'string' && partId !== '' && !existingAssistantPartIds.has(partId);
+  }
+
+  function idleMeansThisPromptFinished(): boolean {
+    return sawBusyAfterPrompt || assistantOutputAdvanced();
   }
 
   function emitTextDelta(delta: string): void {
@@ -1030,6 +1112,7 @@ async function sendPromptStreaming(options: {
   }
 
   function shouldCompleteFromStableAssistantSnapshot(): boolean {
+    if (!assistantOutputAdvanced()) return false;
     if (!latestAssistantTextSnapshot) return false;
     if (latestAssistantHasPendingStructuredParts) return false;
     if (!latestAssistantPartsTouchedAtMs) return false;
@@ -1226,6 +1309,16 @@ async function sendPromptStreaming(options: {
         throw new Error(formatError(result.error));
       }
     } catch (error) {
+      // 并行工具调用会对同一目录连发多个请求；前一个以 always 放行后，其余请求已被 OpenCode 一并处理
+      if (/permission request not found/i.test(formatError(error))) {
+        options.log?.({
+          level: 'warning',
+          message: 'OpenCode permission request already resolved',
+          detail: permissionID,
+          verbose: true,
+        });
+        return;
+      }
       streamError = error;
       options.log?.({
         level: 'error',
@@ -1269,21 +1362,21 @@ async function sendPromptStreaming(options: {
       }
       return;
     }
-    if (type === 'session.idle') {
-      finalizeUnknownPartTypes();
-      options.log?.({
-        message: 'OpenCode session idle',
-        detail: options.sessionId,
-        verbose: true,
-      });
-      idle = true;
-      abortController.abort();
-      return;
+    if (type === 'session.status' && properties?.status && (properties.status as any).type && (properties.status as any).type !== 'idle') {
+      sawBusyAfterPrompt = true;
     }
-    if (type === 'session.status' && properties?.status && (properties.status as any).type === 'idle') {
+    if (type === 'session.idle' || (type === 'session.status' && properties?.status && (properties.status as any).type === 'idle')) {
+      if (!idleMeansThisPromptFinished()) {
+        options.log?.({
+          message: 'Ignoring stale OpenCode idle before new output',
+          detail: options.sessionId,
+          verbose: true,
+        });
+        return;
+      }
       finalizeUnknownPartTypes();
       options.log?.({
-        message: 'OpenCode session status idle',
+        message: type === 'session.idle' ? 'OpenCode session idle' : 'OpenCode session status idle',
         detail: options.sessionId,
         verbose: true,
       });
@@ -1303,10 +1396,12 @@ async function sendPromptStreaming(options: {
     }
     if (type === 'message.updated') { collectUsage(properties?.info); return; }
     if (type === 'message.part.updated' && properties?.part) {
+      if (ASSISTANT_ONLY_PART_TYPES.has(String(properties.part?.type)) && isNewPart(properties.part?.id)) sawBusyAfterPrompt = true;
       handlePartUpdated(properties.part);
       return;
     }
     if (type === 'message.part.delta') {
+      if (isNewPart(properties?.partID)) sawBusyAfterPrompt = true;
       handlePartDelta(properties);
       return;
     }
@@ -1587,6 +1682,7 @@ async function pollSessionStatusWhileRunning(options: {
   signal: AbortSignal;
   shouldStop: () => boolean;
   onIdle: () => void;
+  onBusy?: () => void;
 }): Promise<void> {
   if (typeof options.client.session.status !== 'function') return;
 
@@ -1599,7 +1695,9 @@ async function pollSessionStatusWhileRunning(options: {
         const status = result.data[options.sessionId];
         if (status?.type === 'idle') {
           options.onIdle();
-          return;
+          if (options.shouldStop()) return;
+        } else if (status?.type) {
+          options.onBusy?.();
         }
       }
     } catch {
@@ -1611,29 +1709,56 @@ async function pollSessionStatusWhileRunning(options: {
   }
 }
 
-async function loadAssistantPartIds(
+const SESSION_ABORT_TIMEOUT_MS = 3_000;
+
+async function abortServerSession(
+  client: OpenCodeHttpClient,
+  sessionId: string,
+  query: { directory?: string } | undefined,
+  log: OpenCodeAdapterLogFn | undefined,
+): Promise<void> {
+  if (typeof client.session.abort !== 'function') return;
+  try {
+    const result = await Promise.race([
+      client.session.abort({ path: { id: sessionId }, query }),
+      new Promise<{ error: string }>((resolveTimeout) => {
+        setTimeout(() => resolveTimeout({ error: `超过 ${SESSION_ABORT_TIMEOUT_MS}ms 未响应` }), SESSION_ABORT_TIMEOUT_MS).unref?.();
+      }),
+    ]);
+    if (result?.error) throw new Error(formatError(result.error));
+    log?.({ message: 'OpenCode session aborted after failed prompt', detail: sessionId, verbose: true });
+  } catch (error) {
+    log?.({ level: 'warning', message: 'OpenCode session abort failed', detail: `${sessionId}: ${formatError(error)}` });
+  }
+}
+
+async function loadAssistantBaseline(
   client: OpenCodeHttpClient,
   sessionId: string,
   query?: { directory?: string },
   messageIds?: Set<string>,
-): Promise<Set<string>> {
-  if (typeof client.session.messages !== 'function') return new Set<string>();
+): Promise<{ partIds: Set<string>; text: string }> {
+  if (typeof client.session.messages !== 'function') return { partIds: new Set<string>(), text: '' };
   try {
     const result = await client.session.messages({
       path: { id: sessionId },
       query: { ...(query || {}), limit: 20 },
     });
-    if (result.error || !Array.isArray(result.data)) return new Set<string>();
+    if (result.error || !Array.isArray(result.data)) return { partIds: new Set<string>(), text: '' };
     for (const message of result.data) if (message.info?.id) messageIds?.add(message.info.id);
-    return new Set(
-      result.data
-        .filter((message) => message?.info?.role === 'assistant')
-        .flatMap((message) => (Array.isArray(message?.parts) ? message.parts : []))
-        .map((part) => String(part?.id || ''))
-        .filter(Boolean),
-    );
+    const assistantMessages = result.data.filter((message) => message?.info?.role === 'assistant');
+    const latestAssistant = assistantMessages[assistantMessages.length - 1];
+    return {
+      partIds: new Set(
+        assistantMessages
+          .flatMap((message) => (Array.isArray(message?.parts) ? message.parts : []))
+          .map((part) => String(part?.id || ''))
+          .filter(Boolean),
+      ),
+      text: collectTextFromParts(latestAssistant?.parts).trim(),
+    };
   } catch {
-    return new Set<string>();
+    return { partIds: new Set<string>(), text: '' };
   }
 }
 

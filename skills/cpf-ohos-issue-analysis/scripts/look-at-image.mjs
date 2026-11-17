@@ -29,6 +29,11 @@ export function guessMimeType(filePath) {
   return MIME_BY_EXT[path.extname(String(filePath || '')).toLowerCase()] || 'image/png';
 }
 
+/** 看图结果是锁屏时，这张图不能当证据。调用方看到非 0 退出码后必须重拍。 */
+export function isLockScreenObservation(text) {
+  return /系统锁屏|当前显示的是\*{0,2}锁屏|lock screen/i.test(String(text || ''));
+}
+
 function readJsonIfExists(filePath) {
   if (!filePath || !existsSync(filePath)) return null;
   try {
@@ -344,6 +349,10 @@ export async function runCli(argv = process.argv.slice(2)) {
   }
   const result = await lookAtImage({ image: args.image, question: args.question });
   process.stdout.write(`${result.text}\n`);
+  if (isLockScreenObservation(result.text)) {
+    process.stdout.write('evidence=invalid reason=lock_screen\n');
+    return 2;
+  }
   return 0;
 }
 

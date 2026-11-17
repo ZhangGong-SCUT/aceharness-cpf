@@ -22,7 +22,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { constants, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withFileLock } from '../../../scripts/file-lock.mjs';
@@ -122,6 +122,42 @@ function repoBasename(rawUrl) {
   }
 }
 
+export function branchVersion(name) {
+  const match = String(name || '').match(/(\d+)\.(\d+)(?:\.(\d+))?/);
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3] || 0)];
+}
+
+function versionAtLeast335(version) {
+  if (!version) return false;
+  const [major, minor] = version;
+  return major > 3 || (major === 3 && minor >= 35);
+}
+
+function versionBelow335(version) {
+  if (!version) return false;
+  const [major, minor] = version;
+  return major < 3 || (major === 3 && minor < 35);
+}
+
+/** 单个分支名：3.35 及以上拒绝。没有版本号时不在这里拒绝，由整次请求判断。 */
+export function flutterEngineCloneBlock(repo, branch) {
+  if (repoBasename(repo) !== 'flutter_engine') return null;
+  const version = branchVersion(branch);
+  if (!versionAtLeast335(version)) return null;
+  return `3.35 及以上禁止拉取 flutter_engine（请求分支 ${branch}）。embedding 源码在 framework 仓 repo/engine/src/flutter/，不要创建 repo-engine/。`;
+}
+
+/** 整次 clone：必须有一个明确低于 3.35 的分支。只写 dev、或任一分支不低于 3.35，都拒绝。 */
+export function flutterEngineCloneRequestBlock(repo, branches) {
+  if (repoBasename(repo) !== 'flutter_engine') return null;
+  const names = (Array.isArray(branches) ? branches : [branches]).map((name) => String(name || '').trim()).filter(Boolean);
+  const tooNew = names.find((name) => versionAtLeast335(branchVersion(name)));
+  if (tooNew) return flutterEngineCloneBlock(repo, tooNew);
+  if (names.some((name) => versionBelow335(branchVersion(name)))) return null;
+  return `拉取 flutter_engine 必须给出低于 3.35 的版本分支（收到 ${names.join(', ') || '空'}）。3.35 及以上只用 framework 仓 repo/engine/src/flutter/，不要创建 repo-engine/。`;
+}
+
 /** 运行时清单：<运行时根>/configs/ohos-flutter-sdks.yaml */
 function sdkInventoryPath() {
   return join(runtimeRoot(), 'configs', 'ohos-flutter-sdks.yaml');
@@ -175,9 +211,63 @@ function findLocalSdkSource(options) {
   return null;
 }
 
+const DEFAULT_SHALLOW_FETCH_DEPTH = 500;
+
+/** @param {Record<string, string | undefined>} [env] */
+export function shallowFetchDepth(env = process.env) {
+  const parsed = Number.parseInt(String(env.ACE_REPO_CACHE_SHALLOW_DEPTH || ''), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SHALLOW_FETCH_DEPTH;
+}
+
+/** 浅仓里拉一个本地还没有的分支时限深度；不限的话会把该分支几乎整段历史拉下来（实测 40 万对象，超过 agent 命令时限）。 */
+export function fetchBranchArgs(dest, name, { shallow, hasBranch, depth = shallowFetchDepth() }) {
+  const args = ['-C', dest, 'fetch'];
+  if (shallow && !hasBranch) args.push(`--depth=${depth}`);
+  return [...args, 'origin', `+refs/heads/${name}:refs/remotes/origin/${name}`];
+}
+
 function fetchRemoteBranch(dest, name) {
   if (!name) return { ok: false, error: 'empty branch' };
-  return runGitOk(['-C', dest, 'fetch', 'origin', `+refs/heads/${name}:refs/remotes/origin/${name}`]);
+  const shallow = existsSync(join(dest, '.git', 'shallow'));
+  const hasBranch = runGitOk(['-C', dest, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${name}`]).ok;
+  return runGitOk(fetchBranchArgs(dest, name, { shallow, hasBranch }));
+}
+
+/** 拷出来的 .git 要和 `git clone --no-checkout` 一样：没有索引、不认源仓的 worktree、不带残留锁。 */
+const COPIED_GIT_TRANSIENT = ['index', 'worktrees', 'FETCH_HEAD', 'ORIG_HEAD', 'gc.pid', 'gc.log'];
+
+function removeLockFiles(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name !== 'objects') removeLockFiles(path);
+    } else if (entry.name.endsWith('.lock')) {
+      rmSync(path, { force: true });
+    }
+  }
+}
+
+/**
+ * 写时复制拷本地 SDK 的 .git（APFS/btrfs/XFS 上秒级、几乎不占新空间）。
+ * git clone 本地浅仓会重新打包，几个 run 同时做要好几分钟、每个多写约 2GB。
+ * 文件系统不支持 reflink 时 COPYFILE_FICLONE_FORCE 直接报错，由调用方退回 git clone。
+ */
+export function copyGitDirCow(source, dest, copy = cpSync) {
+  const gitDir = join(dest, '.git');
+  try {
+    mkdirSync(dest, { recursive: true });
+    copy(join(source, '.git'), gitDir, {
+      recursive: true,
+      mode: constants.COPYFILE_FICLONE_FORCE,
+      verbatimSymlinks: true,
+    });
+    for (const name of COPIED_GIT_TRANSIENT) rmSync(join(gitDir, name), { recursive: true, force: true });
+    removeLockFiles(gitDir);
+    return { ok: true };
+  } catch (error) {
+    rmSync(dest, { recursive: true, force: true });
+    return { ok: false, error: String(error?.message || error) };
+  }
 }
 
 /** 从本地 SDK 克隆对象，origin 改回请求的上游，只拉目标分支再检出。失败则返回 null 以外的错误，由调用方决定是否退回旧路径。 */
@@ -185,7 +275,8 @@ function cloneFromLocalSdk(options, dest, upstreamUrl) {
   const local = findLocalSdkSource(options);
   if (!local) return null;
   if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
-  const cloned = runGitOk(['clone', '--no-checkout', local.path, dest]);
+  const copied = statSync(join(local.path, '.git')).isDirectory() ? copyGitDirCow(local.path, dest) : { ok: false };
+  const cloned = copied.ok ? copied : runGitOk(['clone', '--no-checkout', local.path, dest]);
   if (!cloned.ok) {
     if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
     return { ok: false, local, error: cloned.error };
@@ -234,16 +325,35 @@ function listRemoteBranches(dest) {
   );
 }
 
-function checkoutBranch(dest, branch, fallbackBranch) {
-  const branches = listRemoteBranches(dest);
+/** 符号链接启动时 argv 仍是链接路径，import.meta.url 已是真实文件。两边都解析后再比较。 */
+export function isRepoCacheCli(argvPath, moduleUrl = import.meta.url) {
+  if (!argvPath) return false;
+  const modulePath = fileURLToPath(moduleUrl);
+  try {
+    return realpathSync(argvPath) === realpathSync(modulePath);
+  } catch {
+    return resolve(argvPath) === modulePath;
+  }
+}
+
+/**
+ * --track 要求起点本身是分支。本地 SDK 拷出来的 origin/分支有时只是一个提交，
+ * Git 会报 “is not a branch”。这时改为直接检出该提交，不再因为设不上上游就整次克隆失败。
+ */
+export function checkoutBranch(dest, branch, fallbackBranch, deps = {}) {
+  const git = deps.runGitOk || runGitOk;
+  const branches = deps.listRemoteBranches ? deps.listRemoteBranches(dest) : listRemoteBranches(dest);
   const pick = (candidate) => (candidate && branches.has(candidate) ? candidate : null);
   const target = pick(branch) || pick(fallbackBranch);
   if (!target) {
     return { branch: null, branchSource: 'default_branch', error: null };
   }
-  const result = runGitOk(['-C', dest, 'checkout', '-B', target, '--track', `origin/${target}`]);
+  const tracked = git(['-C', dest, 'checkout', '-B', target, '--track', `origin/${target}`]);
+  const result = tracked.ok || !/not a branch|cannot set up tracking/i.test(tracked.error || '')
+    ? tracked
+    : git(['-C', dest, 'checkout', '-B', target, `origin/${target}`]);
   if (!result.ok) {
-    return { branch: null, branchSource: 'default_branch', error: result.error };
+    return { branch: null, branchSource: 'default_branch', error: result.error || tracked.error };
   }
   return {
     branch: target,
@@ -365,6 +475,13 @@ function commandClone(options) {
     payload.duration_ms = Date.now() - started;
     emit({ ...payload, ...extra });
   };
+
+  const blocked = flutterEngineCloneRequestBlock(options.repo, [options.branch, options.fallbackBranch]);
+  if (blocked) {
+    finish({ result: 'failed', error: blocked });
+    process.exitCode = 1;
+    return;
+  }
 
   // 场景 0：清单里有同一仓库的本地 SDK → 本地克隆，只增量拉取目标分支
   if (!isValidGitRepo(dest)) {
@@ -532,4 +649,4 @@ function main() {
   process.exitCode = 1;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+if (isRepoCacheCli(process.argv[1])) main();

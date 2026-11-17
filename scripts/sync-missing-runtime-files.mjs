@@ -42,11 +42,34 @@ export function syncMissingTree(src, dst) {
   return 1;
 }
 
+/** 技能脚本用相对路径加载这两个文件。运行时目录里缺了，或只是指到源码树的链接，就补一份真实文件。 */
+const RUNTIME_HELPERS = ['scripts/file-lock.mjs', 'scripts/runtime-root.mjs'];
+
+export function ensureRuntimeHelpers(installRoot, runtimeRoot) {
+  let copied = 0;
+  for (const rel of RUNTIME_HELPERS) {
+    const src = path.join(installRoot, rel);
+    const dst = path.join(runtimeRoot, rel);
+    if (!fs.existsSync(src)) continue;
+    let replace = !fs.existsSync(dst);
+    if (!replace) {
+      try { replace = fs.lstatSync(dst).isSymbolicLink(); } catch { replace = true; }
+    }
+    if (!replace) continue;
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    try { fs.lstatSync(dst); fs.rmSync(dst, { force: true }); } catch { /* 目标本来就不存在 */ }
+    fs.copyFileSync(src, dst);
+    copied += 1;
+  }
+  return copied;
+}
+
 export function syncRuntimeTrees(installRoot, runtimeRoot) {
   let copied = 0;
   for (const name of ['configs', 'skills', 'scripts']) {
     copied += syncMissingTree(path.join(installRoot, name), path.join(runtimeRoot, name));
   }
+  copied += ensureRuntimeHelpers(installRoot, runtimeRoot);
   return copied;
 }
 

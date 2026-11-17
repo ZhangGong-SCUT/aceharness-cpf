@@ -7,6 +7,7 @@ import { stateMachineWorkflowSchema } from '@/lib/core/schemas';
 import {
   applySupervisorTransitionVeto,
   buildVisionCapabilityPrompt,
+  matchTransitionFieldConditions,
   parseWorkflowVerdict,
   pickCircuitBreakerEscape,
 } from '@/lib/state-machine/utils';
@@ -74,6 +75,17 @@ describe('cpf-ohos-diagnosis.yaml', () => {
       ?.steps?.find((step: any) => step.id === 'modify-code');
     expect(String(flutterCollect?.task || '')).toMatch(/禁止写出 PR 号/);
     expect(String(flutterModify?.task || '')).toMatch(/git apply/);
+  });
+
+  test('问题复现没拿到目标平台锁时留在本状态', () => {
+    const repro = config.workflow.states.find((state: any) => state.name === '问题复现');
+    const hold = repro.transitions.find((item: any) => item.to === '问题复现');
+    const output = '{"verdict":"conditional_pass","reproduction_status":"theoretical","summary":"没拿到目标平台锁，黄金标志没有运行证据"}';
+    expect(matchTransitionFieldConditions([output], hold.condition)).toBe(true);
+    expect(matchTransitionFieldConditions(
+      ['{"verdict":"pass","reproduction_status":"verified","summary":"真机复现"}'],
+      hold.condition,
+    )).toBe(false);
   });
 
   test('verify-fix forbids rewriting the Issue golden flag', () => {

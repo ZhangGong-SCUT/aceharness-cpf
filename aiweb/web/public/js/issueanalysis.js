@@ -1,5 +1,6 @@
 /* ── Issue 分析模块（AceHarness 代理模式） ── */
 
+const _IA_DETAIL_MODE = /\/issue-analysis\.html$/.test(window.location.pathname);
 let _iaCounter = 0;
 const _iaTasks = {}; // idx -> { taskId, runId, dirName, issueUrl, timer, pollTimer, startTime, stage, priorityLevel, summary }
 
@@ -127,6 +128,7 @@ function _setupIaUrlCheck() {
 
 /* ── 页面加载时恢复历史任务（身份隔离：仅本人任务，admin 全量） ── */
 async function initIssueAnalysisHistory() {
+  if (_IA_DETAIL_MODE) return initIssueAnalysisDetail();
   const auth = (typeof getAuth === 'function') ? getAuth() : null;
   _iaLastAuthUser = auth?.user?.username || null;
   if (!auth?.user) {
@@ -161,6 +163,7 @@ async function initIssueAnalysisHistory() {
           priorityLevel: t.priorityLevel || null,
           summary: t.summary || null,
           workbenchUrl: t.workbenchUrl || null,
+          metadata: t.metadata || null,
           parentTaskId: t.parentTaskId || null,
           userFeedback: t.userFeedback || null,
           startTime: t.startedAt ? new Date(t.startedAt).getTime() : new Date(t.createdAt).getTime(),
@@ -185,18 +188,13 @@ async function initIssueAnalysisHistory() {
 
 /* 面板切换时复检登录态：登录/退出后无需刷新页面即可刷新列表（退出时清理卡片与轮询） */
 window.addEventListener('panelswitch', (e) => {
-  if (e.detail?.panelId !== 'p-issueanalysis') return;
+  if (_IA_DETAIL_MODE || e.detail?.panelId !== 'p-issueanalysis') return;
   const cur = (typeof getAuth === 'function') ? (getAuth()?.user?.username || null) : null;
   if (cur !== _iaLastAuthUser) initIssueAnalysisHistory();
 });
 
-/* ── 提交 Issue 分析（需登录，任务归属提交人） ── */
+/* ── 提交 Issue 分析：本机个人部署无需登录；公网仍由服务端鉴权 ── */
 async function doIssueAnalysis() {
-  if (!(typeof getAuth === 'function' && getAuth()?.user)) {
-    _showIaErr('本机会话未就绪，请刷新页面后再提交 Issue 分析', true);
-    return;
-  }
-
   const issueUrl = $('ia-issue-url').value.trim();
   const accessToken = $('ia-access-token').value.trim();
   const priority = $('ia-priority').value;
@@ -274,7 +272,7 @@ function _formatIaIssueShort(issueUrl) {
 }
 
 /* ── 创建任务卡片 ── */
-function _createIaCard(idx, t, isHistory) {
+async function _createIaCard(idx, t, isHistory) {
   const emptyEl = $('ia-tasks-empty');
   if (emptyEl) emptyEl.style.display = 'none';
   const countEl = $('ia-task-count');
@@ -294,6 +292,49 @@ function _createIaCard(idx, t, isHistory) {
   const card = document.createElement('div');
   card.className = `task-card ia-card stage-${t.stage || 'pending'}`;
   card.id = `ia-card-${idx}`;
+  if (!_IA_DETAIL_MODE) {
+    card.innerHTML = `
+      <div class="task-card-header ia-history-entry" role="link" tabindex="0"
+           data-detail-url="${escHtml(_iaDetailUrl(t.taskId))}"
+           aria-label="查看 ${escHtml(issueShort || t.dirName || t.taskId)} 的分析详情">
+        <span class="pr-dot ${dotCls}"></span>
+        <span class="tc-lib ia-history-title">${escHtml(t.dirName || t.taskId)}</span>
+        ${issueShort ? `<span class="ia-history-issue" title="${escHtml(t.issueUrl || '')}">${escHtml(issueShort)}</span>` : ''}
+        <code id="ia-${idx}-runid-head" class="ia-history-run" title="点击复制 AceHarness Run ID"
+              onclick="event.stopPropagation();copyIaRunId(${idx})">${escHtml(t.runId || 'runId 待分配')}</code>
+        <span class="tc-spacer"></span>
+        <a id="ia-${idx}-workbench-link" href="${escHtml(t.workbenchUrl || '#')}" target="_blank" rel="noopener noreferrer"
+           class="ia-history-action ia-workbench-link" style="display:none" onclick="event.stopPropagation()">工作台 ↗</a>
+        <span class="badge-time ia-history-time" id="ia-${idx}-time">${escHtml(timeLabel)}</span>
+        <span class="badge-priority" id="ia-${idx}-priority-badge" style="display:none"></span>
+        <a id="ia-${idx}-stop" href="#" class="ia-history-action ia-stop-link"
+           style="display:${['issueanalysis_complete', 'failed', 'cancelled'].includes(t.stage) ? 'none' : 'inline-flex'}"
+           onclick="event.preventDefault();event.stopPropagation();stopIssueAnalysis(${idx})">停止</a>
+        <a id="ia-${idx}-continue" href="#" class="ia-history-action ia-continue-link" style="display:none"
+           onclick="event.preventDefault();event.stopPropagation();continueIssueAnalysis(${idx})">继续</a>
+        <span class="badge-stage ${stageClass}" id="ia-${idx}-badge">${escHtml(stageLabel)}</span>
+        <span class="tc-elapsed" id="ia-${idx}-elapsed" style="display:none"></span>
+        <span class="ia-history-open">查看详情 <span aria-hidden="true">→</span></span>
+      </div>
+      <div class="ia-history-summary" id="ia-${idx}-summary" style="display:none"></div>
+      <div class="ia-history-flags" id="ia-${idx}-flags" style="display:${_iaFlagsHtml(t.metadata).show ? 'flex' : 'none'}">${_iaFlagsHtml(t.metadata).html}</div>
+      <div class="ia-history-phase" id="ia-${idx}-phase" style="display:none"></div>
+      <div id="ia-${idx}-error" class="error-msg ia-history-error" style="display:none"></div>
+      <span id="ia-${idx}-runid-copied" class="ia-history-copied" style="display:none">Run ID 已复制</span>
+      <div id="ia-${idx}-recovery-zone" style="display:none"></div>`;
+    const list = $('ia-tasks-list');
+    const entry = card.querySelector('.ia-history-entry');
+    entry.addEventListener('click', () => openIssueAnalysisDetail(idx));
+    entry.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openIssueAnalysisDetail(idx);
+      }
+    });
+    list.insertBefore(card, list.firstChild);
+    _initIaCardTimer(idx, isHistory);
+    return;
+  }
   card.innerHTML = `
     <div class="task-card-header" onclick="toggleIaCard(${idx})">
       <span class="tc-chevron">▶</span>
@@ -311,6 +352,10 @@ function _createIaCard(idx, t, isHistory) {
          onclick="event.stopPropagation()">🔗 Issue分析详情</a>
       <span class="badge-time" id="ia-${idx}-time" style="font-size:var(--font-size-xs);padding:2px 8px;border-radius:10px;background:rgba(255,255,255,.06);color:var(--dim);font-family:var(--mono);font-weight:500;flex-shrink:0">${escHtml(timeLabel)}</span>
       <span class="badge-priority" id="ia-${idx}-priority-badge" style="display:none"></span>
+      <a id="ia-${idx}-stop" href="#" style="display:${['issueanalysis_complete', 'failed', 'cancelled'].includes(t.stage) ? 'none' : 'inline-flex'};align-items:center;gap:4px;padding:2px 8px;border-radius:10px;
+         font-size:var(--font-size-xs);font-weight:700;background:rgba(240,82,82,.12);color:#f05252;
+         border:1px solid rgba(240,82,82,.4);text-decoration:none;cursor:pointer;white-space:nowrap;flex-shrink:0"
+         onclick="event.preventDefault();event.stopPropagation();stopIssueAnalysis(${idx})">⏹ 停止</a>
       <a id="ia-${idx}-continue" href="#" style="display:none;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;
          font-size:var(--font-size-xs);font-weight:700;background:rgba(245,185,66,.12);color:#f5b942;
          border:1px solid rgba(245,185,66,.4);text-decoration:none;cursor:pointer;white-space:nowrap;flex-shrink:0"
@@ -330,7 +375,7 @@ function _createIaCard(idx, t, isHistory) {
           <div class="pipe-icon" id="ia-${idx}-icon" style="width:40px;height:40px;font-size:var(--font-size-lg);border:2px solid var(--border2);border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--surface2)">📋</div>
           <div style="flex:1">
             <div style="font-size:var(--font-size-md);font-weight:600;color:#fff;margin-bottom:4px">Issue 智能分析</div>
-            <div style="font-size:var(--font-size-xs);color:var(--text-aux);font-family:var(--mono)" id="ia-${idx}-stage-txt">${escHtml(stageLabel)}</div>
+            <div class="ia-detail-phase" id="ia-${idx}-stage-txt" style="display:none"></div>
             <div id="ia-${idx}-summary" style="font-size:var(--font-size-xs);color:var(--text-aux);margin-top:4px;display:none"></div>
             <div id="ia-${idx}-flags" style="margin-top:4px;display:${_iaFlagsHtml(t.metadata).show ? 'flex' : 'none'};gap:6px;flex-wrap:wrap">${_iaFlagsHtml(t.metadata).html}</div>
             <div id="ia-${idx}-phase" style="font-size:var(--font-size-xs);color:var(--dim);margin-top:2px;display:none"></div>
@@ -352,6 +397,7 @@ function _createIaCard(idx, t, isHistory) {
         </div>
       </div>
       <div id="ia-${idx}-error" class="error-msg" style="display:none;margin-top:8px"></div>
+      <div id="ia-${idx}-recovery-zone" style="display:none;margin-top:10px"></div>
       <div id="ia-${idx}-timeline-zone" style="display:none;margin-top:10px"></div>
       <div id="ia-${idx}-artifacts-zone" style="display:none;margin-top:10px"></div>
       <div id="ia-${idx}-report-zone" style="display:none;margin-top:10px"></div>
@@ -359,12 +405,41 @@ function _createIaCard(idx, t, isHistory) {
       <div id="ia-${idx}-feedback-zone" style="display:none;margin-top:10px"></div>
     </div>`;
 
-  const list = $('ia-tasks-list');
-  list.insertBefore(card, list.firstChild);
-
-  // 默认折叠
+  if (_IA_DETAIL_MODE) {
+    card.innerHTML = `
+      <div class="ia-detail-summary">
+        <div class="ia-detail-summary-line">
+          <span class="pr-dot ${dotCls}"></span>
+          <span class="pipe-icon" id="ia-${idx}-icon">📋</span>
+          <span class="badge-stage ${stageClass}" id="ia-${idx}-badge">${escHtml(stageLabel)}</span>
+          <span class="tc-elapsed" id="ia-${idx}-elapsed" style="display:none">0s</span>
+          <span class="ia-detail-phase" id="ia-${idx}-phase" style="display:none"></span>
+          <span class="tc-spacer"></span>
+          <a id="ia-${idx}-continue" href="#" class="ia-history-action ia-continue-link" style="display:none"
+             onclick="event.preventDefault();continueIssueAnalysis(${idx})">继续</a>
+        </div>
+        <div id="ia-${idx}-summary" class="ia-detail-summary-text" style="display:none"></div>
+        <div id="ia-${idx}-flags" class="ia-detail-flags" style="display:${_iaFlagsHtml(t.metadata).show ? 'flex' : 'none'}">${_iaFlagsHtml(t.metadata).html}</div>
+        <div id="ia-${idx}-dl-wrap" class="ia-detail-report-actions" style="display:none">
+          <a id="ia-${idx}-report-link" class="btn btn-ghost" href="/api/issue-analysis/${escHtml(t.taskId || '')}/final-review${_iaTokenQ('?')}" target="_blank" rel="noopener noreferrer">独立预览报告 ↗</a>
+          <a class="btn btn-ghost" href="/api/issue-analysis/${escHtml(t.taskId || '')}/final-review${_iaTokenQ('?')}" download>下载报告</a>
+        </div>
+      </div>
+      <div class="task-card-body ia-detail-body-content" id="ia-${idx}-body">
+        <div id="ia-${idx}-error" class="error-msg" style="display:none"></div>
+        <div id="ia-${idx}-recovery-zone" style="display:none"></div>
+        <div id="ia-${idx}-timeline-zone" style="display:none"></div>
+        <div id="ia-${idx}-artifacts-zone" style="display:none"></div>
+        <div id="ia-${idx}-report-zone" style="display:none"></div>
+        <div id="ia-${idx}-patch-zone" style="display:none"></div>
+        <div id="ia-${idx}-feedback-zone" style="display:none"></div>
+      </div>`;
+  }
+  const list = $('ia-detail-body');
+  list.appendChild(card);
+  // 详情页直接展示全部内容，不使用列表下拉。
   const body = document.getElementById(`ia-${idx}-body`);
-  if (body) body.style.display = 'none';
+  if (body) { body.style.display = ''; body.classList.add('ia-detail-body-content'); }
 
   // 已完成的历史任务：显示固定时长
   const task = _iaTasks[idx];
@@ -386,7 +461,98 @@ function _createIaCard(idx, t, isHistory) {
   }
 }
 
-/* ── 内嵌渲染诊断报告（完成态自动加载，可折叠） ── */
+function _iaDetailUrl(taskId) {
+  return `/issue-analysis.html?task=${encodeURIComponent(taskId || '')}`;
+}
+
+function openIssueAnalysisDetail(idx) {
+  const task = _iaTasks[idx];
+  if (task?.taskId) window.location.assign(_iaDetailUrl(task.taskId));
+}
+
+function _initIaCardTimer(idx, isHistory) {
+  const task = _iaTasks[idx];
+  if (!task) return;
+  if (isHistory && task.finishedAt && task.startedAt) {
+    const durationSec = Math.floor(Math.max(0, new Date(task.finishedAt) - new Date(task.startedAt)) / 1000);
+    const elapsedEl = document.getElementById(`ia-${idx}-elapsed`);
+    if (elapsedEl) {
+      elapsedEl.textContent = durationSec < 60 ? `${durationSec}s` : `${Math.floor(durationSec / 60)}m ${durationSec % 60}s`;
+      elapsedEl.style.display = 'inline';
+    }
+  } else if (!isHistory) {
+    task.timer = setInterval(() => {
+      if (!_iaTasks[idx]) return;
+      const s = Math.floor((Date.now() - task.startTime) / 1000);
+      const el = document.getElementById(`ia-${idx}-elapsed`);
+      if (el) { el.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`; el.style.display = 'inline'; }
+    }, 1000);
+  }
+}
+
+/* ── 独立详情页：真实 URL 可刷新、分享与前进后退，不携带登录凭证 ── */
+async function initIssueAnalysisDetail() {
+  const taskId = new URLSearchParams(window.location.search).get('task') || '';
+  const error = $('ia-detail-error');
+  if (!taskId) {
+    error.textContent = '链接缺少任务 ID，请返回分析历史重新选择。';
+    error.style.display = 'block';
+    return;
+  }
+  let r;
+  try { r = await authApi('GET', `/api/issue-analysis/${encodeURIComponent(taskId)}/status`, null, 30000); }
+  catch (e) {
+    error.textContent = `任务加载失败：${e.message}`;
+    error.style.display = 'block';
+    $('ia-detail-loading').style.display = 'none';
+    return;
+  }
+  if (r.status !== 200 || !r.data?.task) {
+    error.textContent = r.status === 403 ? '只能查看自己提交的 Issue 分析任务。'
+      : r.status === 404 ? '任务不存在，或对应的历史记录已经删除。'
+      : r.data?.message || `任务加载失败（HTTP ${r.status}）`;
+    error.style.display = 'block';
+    $('ia-detail-loading').style.display = 'none';
+    return;
+  }
+  const t = r.data.task;
+  const ah = t.aceharnessStatus;
+  const idx = 1;
+  _iaTasks[idx] = {
+    ...t,
+    startTime: t.startedAt ? new Date(t.startedAt).getTime() : new Date(t.createdAt).getTime(),
+    pollTimer: null,
+    timer: null,
+  };
+  $('ia-detail-loading').style.display = 'none';
+  const title = _formatIaIssueShort(t.issueUrl) || t.dirName || taskId;
+  $('ia-detail-title').textContent = title;
+  document.title = `${title} — Issue 分析详情`;
+  const issueLink = $('ia-detail-issue');
+  issueLink.href = t.issueUrl || '#';
+  issueLink.textContent = t.issueUrl || 'Issue 地址未记录';
+  $('ia-detail-runid').textContent = t.runId || t.analysisSessionId || '未分配';
+  $('ia-detail-taskid').textContent = taskId;
+  $('ia-detail-created').textContent = t.createdAt ? new Date(t.createdAt).toLocaleString('zh-CN') : '未记录';
+  const workbench = $('ia-detail-workbench');
+  if (t.workbenchUrl) { workbench.href = t.workbenchUrl; workbench.style.display = 'inline-flex'; }
+  $('ia-detail-stop').onclick = () => stopIssueAnalysis(idx);
+  const copy = $('ia-detail-copy');
+  copy.onclick = async () => {
+    try { await navigator.clipboard.writeText(window.location.href); copy.textContent = '已复制链接'; }
+    catch { copy.textContent = '复制失败，请复制地址栏链接'; }
+  };
+  _createIaCard(idx, t, true);
+  _updateIaStage(idx, t.stage, { ...t, currentPhase: ah?.currentPhase, currentStep: ah?.currentStep });
+  if (_IA_DETAIL_MODE) {
+    void _renderIaReport(idx);
+    _ensureIaExtras(idx);
+  }
+  if (!['issueanalysis_complete', 'failed', 'cancelled'].includes(t.stage)) _startIaPolling(idx);
+  window.addEventListener('pagehide', () => _stopIaPolling(idx), { once: true });
+}
+
+/* ── 内嵌渲染诊断报告（仅详情页加载） ── */
 async function _renderIaReport(idx) {
   const zone = document.getElementById(`ia-${idx}-report-zone`);
   const task = _iaTasks[idx];
@@ -405,31 +571,16 @@ async function _renderIaReport(idx) {
       return;
     }
     const md = r.data.content || '';
-    // 报告较长：默认折叠显示头部摘要（前 3 段），点开全文
-    const shortIdx = Math.min(md.indexOf('\n## ', md.indexOf('\n## ') + 1) > -1 ? md.indexOf('\n## ', md.indexOf('\n## ') + 1) : 600, 900);
     zone.innerHTML = `
       <div class="ia-report-viewer">
         <div class="ia-report-head">
-          <span class="ov-name">📋 诊断报告（内嵌预览）</span>
+          <span class="ov-name">📋 诊断报告</span>
           <span class="tc-spacer"></span>
-          <button class="pr-act" style="padding:3px 12px" onclick="window._iaToggleReport(${idx})"><span class="ia-report-toggle-label"></span></button>
+          <span class="ia-report-toggle-label">完整内容</span>
         </div>
         <div class="md-body ia-report-full"></div>
       </div>`;
-    const fullEl = zone.querySelector('.ia-report-full');
-    fullEl.innerHTML = _renderMarkdownSafe(md);
-    // 默认折叠：限制高度，按钮提示展开
-    zone._expanded = false;
-    window._iaToggleReport = function (i) {
-      const z = document.getElementById(`ia-${i}-report-zone`);
-      if (!z) return;
-      z._expanded = !z._expanded;
-      const body = z.querySelector('.ia-report-full');
-      body.style.maxHeight = z._expanded ? 'none' : '300px';
-      z.querySelector('.ia-report-toggle-label').textContent = z._expanded ? '⤒ 收起' : '⤓ 展开全文';
-    };
-    fullEl.style.maxHeight = '300px';
-    zone.querySelector('.ia-report-toggle-label').textContent = '⤓ 展开全文';
+    zone.querySelector('.ia-report-full').innerHTML = _renderMarkdownSafe(md);
   } catch (e) {
     zone.innerHTML = `<div style="font-size:var(--font-size-xs);color:var(--dim);padding:6px 0">报告加载失败：${escHtml(e.message)}</div>`;
   }
@@ -700,42 +851,51 @@ async function _renderIaFeedback(idx) {
   };
 }
 
-/* ── 卡片折叠 ── */
+/* ── 详情页内容按面板加载，历史列表不再使用下拉 ── */
 function toggleIaCard(idx) {
-  const card = document.getElementById(`ia-card-${idx}`);
-  const body = document.getElementById(`ia-${idx}-body`);
-  if (!card || !body) return;
-  const isOpen = card.classList.toggle('open');
-  body.style.display = isOpen ? '' : 'none';
-  if (isOpen) _ensureIaExtras(idx);
+  if (!_IA_DETAIL_MODE) openIssueAnalysisDetail(idx);
 }
 
-/* ── 展开卡片时懒加载：诊断时间线 + 产物面板 ── */
-async function _ensureIaExtras(idx) {
+/* ── 独立详情页加载：诊断时间线 + 产物面板 ── */
+function _ensureIaExtras(idx) {
   const task = _iaTasks[idx];
-  if (!task?.taskId) return;
-  _renderIaTimeline(idx);
-  _renderIaArtifacts(idx);
+  if (!task?.taskId || !_IA_DETAIL_MODE) return;
+  void _renderIaTimeline(idx);
+  void _renderIaArtifacts(idx);
 }
 
-/* ── 诊断时间线（16 步，点击看步骤日志） ── */
+/* ── 诊断时间线（按实际步骤日志渲染，点击看步骤日志） ── */
 async function _renderIaTimeline(idx) {
   const zone = document.getElementById(`ia-${idx}-timeline-zone`);
   const task = _iaTasks[idx];
-  if (!zone || !task?.taskId || zone._loaded) return;
+  if (!zone || !task?.taskId || zone._loaded || zone._loading) return;
+  zone._loading = true;
+  zone.style.display = 'block';
+  zone.innerHTML = '<div class="ia-detail-inline-note">正在加载诊断步骤…</div>';
 
-  let steps = task.ahSteps;
+  let steps = task.ahSteps || task.aceharnessStatus?.stepLogs;
+  let queryError = task.lastQueryError || task.aceharnessError || '';
   if (!steps || !steps.length) {
-    // 历史任务/未轮询到：主动拉一次状态
-    try {
-      const r = await authApi('GET', `/api/issue-analysis/${task.taskId}/status`, null, 15000);
+    // 只有状态接口再次确认没有步骤时，才显示空态；读取失败明确提示。
+    // 初始化响应已带来超时原因时不重复请求慢接口。
+    if (!queryError) try {
+      const r = await authApi('GET', `/api/issue-analysis/${task.taskId}/status`, null, 30000);
       if (r.status === 200 && r.data?.task?.aceharnessStatus?.stepLogs) {
         steps = r.data.task.aceharnessStatus.stepLogs;
         task.ahSteps = steps;
+      } else {
+        queryError = r.data?.task?.aceharnessError || r.data?.message || `HTTP ${r.status}`;
       }
-    } catch { /* ignore */ }
+    } catch (error) {
+      queryError = error.message;
+    }
   }
-  if (!steps || !steps.length) return;
+  zone._loading = false;
+  if (document.getElementById(`ia-${idx}-timeline-zone`) !== zone) return;
+  if (!steps || !steps.length) {
+    zone.innerHTML = `<div class="ia-detail-inline-note">暂无可展示的步骤日志。${queryError ? `读取失败：${escHtml(queryError)}` : '该任务尚未产生步骤记录，可稍后刷新。'}</div>`;
+    return;
+  }
 
   zone._loaded = true;
   zone.style.display = 'block';
@@ -842,10 +1002,14 @@ async function _renderIaArtifacts(idx) {
 
   let data = null;
   try {
-    const r = await authApi('GET', `/api/issue-analysis/${task.taskId}/artifacts`, null, 15000);
+    const r = await authApi('GET', `/api/issue-analysis/${task.taskId}/artifacts`, null, 30000);
     if (r.status === 200 && r.data?.success) data = r.data;
   } catch { /* ignore */ }
-  if (!data) return;
+  if (!data) {
+    zone.style.display = 'block';
+    zone.innerHTML = '<div class="ia-art-error">诊断证据暂时无法读取，请稍后刷新重试。完整诊断报告与步骤日志不受影响。</div>';
+    return;
+  }
 
   const { images = [], logs = [], files = [] } = data;
   if (!images.length && !logs.length && !files.length) { zone.style.display = 'none'; return; }
@@ -1191,36 +1355,164 @@ function _iaInterruptInfo(text) {
   };
 }
 
+async function stopIssueAnalysis(idx) {
+  const task = _iaTasks[idx];
+  if (!task?.taskId || !getAuth()) return;
+  if (!confirm('停止这个分析？它占用的设备锁和排队会马上释放，其他分析可以接着用设备。')) return;
+  const btn = document.getElementById(_IA_DETAIL_MODE ? 'ia-detail-stop' : `ia-${idx}-stop`);
+  if (btn) { btn.style.pointerEvents = 'none'; btn.disabled = true; btn.textContent = '停止中…'; }
+  _stopIaPolling(idx);
+  try {
+    const r = await authApi('POST', `/api/issue-analysis/${encodeURIComponent(task.taskId)}/stop`, { action: 'stop' }, 100000);
+    if (r.status !== 200 || !r.data?.success) {
+      alert('停止失败：' + (r.data?.message || 'HTTP ' + r.status));
+      if (btn) { btn.style.pointerEvents = ''; btn.disabled = false; btn.textContent = _IA_DETAIL_MODE ? '停止分析' : '停止'; }
+      _startIaPolling(idx);
+      return;
+    }
+    task.error = '';
+    task.finishedAt = new Date().toISOString();
+    _updateIaStage(idx, 'cancelled', { ...task, error: '', finishedAt: task.finishedAt });
+  } catch (e) {
+    alert('停止失败：' + e.message);
+    if (btn) { btn.style.pointerEvents = ''; btn.disabled = false; btn.textContent = _IA_DETAIL_MODE ? '停止分析' : '停止'; }
+    _startIaPolling(idx);
+  }
+}
+
 async function continueIssueAnalysis(idx) {
   const task = _iaTasks[idx];
   if (!task?.taskId || !getAuth()) return;
-  const info = _iaInterruptInfo(task.error);
-  const where = info?.step || info?.phase || '中断的步骤';
-  const kept = info?.completed ? `已完成的 ${info.completed} 步会保留。` : '已完成的步骤会保留。';
-  if (!confirm(`从「${where}」接着跑。${kept}不会重新开始整个分析。`)) return;
+  const diagnosis = task.failureDiagnosis;
+  const where = diagnosis?.failedStep?.stepName || _iaInterruptInfo(task.error)?.step || '失败的步骤';
+  const kept = `已完成的 ${diagnosis?.preserved?.completedStepCount || 0} 步会保留。`;
+  const fixEvidence = diagnosis?.requiresPlatformFix
+    ? prompt('已登记平台缺陷。请填写修复内容和验证证据（例如测试命令及结果）；不会只凭“已修复”放行。', task.recoveryFixEvidence || '')
+    : null;
+  if (diagnosis?.requiresPlatformFix && fixEvidence === null) return;
+  const feedback = prompt(`将只重跑「${where}」。${kept}\n可补充该步骤的恢复要求；留空则使用自动生成的指令。`, task.recoveryFeedback || '');
+  if (feedback === null) return;
+  task.recoveryFeedback = feedback;
+  task.recoveryFixEvidence = fixEvidence || '';
   const btn = document.getElementById(`ia-${idx}-continue`);
-  if (btn) { btn.style.pointerEvents = 'none'; btn.textContent = '正在继续…'; }
+  if (btn) { btn.style.pointerEvents = 'none'; btn.textContent = '正在恢复…'; }
   try {
-    const r = await authApi('POST', `/api/issue-analysis/${encodeURIComponent(task.taskId)}/continue`, { action: 'continue' }, 30000);
+    const r = await authApi('POST', `/api/issue-analysis/${encodeURIComponent(task.taskId)}/continue`, {
+      action: 'continue', feedback, fixEvidence: fixEvidence || '',
+    }, 120000);
     if (r.status !== 200 || !r.data?.success) {
-      alert('继续失败：' + (r.data?.message || 'HTTP ' + r.status));
+      alert('恢复失败：' + (r.data?.message || 'HTTP ' + r.status));
       if (btn) { btn.style.pointerEvents = ''; btn.textContent = `▶ 从「${where}」继续`; }
+      if (r.data?.diagnosis) {
+        task.failureDiagnosis = r.data.diagnosis;
+        const zone = document.getElementById(`ia-${idx}-recovery-zone`);
+        if (zone) zone._loaded = false;
+        _renderIaFailureRecovery(idx);
+      }
       return;
     }
     task.error = '';
     task.finishedAt = null;
+    const zone = document.getElementById(`ia-${idx}-recovery-zone`);
+    if (zone) zone.style.display = 'none';
     _updateIaStage(idx, 'issueanalysis_analyzing', {
-      ...task,
-      error: '',
-      currentPhase: r.data.phase,
-      currentStep: r.data.step,
+      ...task, error: '', currentPhase: r.data.phase, currentStep: r.data.step,
     });
     _startIaPolling(idx);
   } catch (e) {
-    alert('继续失败：' + e.message);
+    alert('恢复失败：' + e.message);
     if (btn) { btn.style.pointerEvents = ''; btn.textContent = `▶ 从「${where}」继续`; }
   }
 }
+
+const _IA_FAILURE_LABELS = {
+  platform_defect: '平台缺陷（已入账，修复验证后恢复）',
+  transient_env: '环境中断（从原步骤重试）',
+  step_guidance_needed: '步骤执行/证据不完整（定向补充后恢复）',
+  issue_unresolved: 'Issue 验证未通过（禁止绕过）',
+};
+
+async function _renderIaFailureRecovery(idx) {
+  const zone = document.getElementById(`ia-${idx}-recovery-zone`);
+  const task = _iaTasks[idx];
+  if (!zone || !task?.taskId || zone._loaded) return;
+  zone._loaded = true;
+  zone.style.display = 'block';
+  if (task.failureDiagnosis) {
+    _renderIaFailureDiagnosis(idx, task.failureDiagnosis);
+    return;
+  }
+  // 首屏报告优先；重分诊仅在报告加载结束后发起，不能争抢首屏资源。
+  zone.innerHTML = '<div style="padding:10px;color:var(--dim);font-size:var(--font-size-xs)">原始失败日志和报告可先行查看。<button type="button" class="pr-act" style="margin-left:8px;padding:3px 9px">分析失败原因</button></div>';
+  zone.querySelector('button').onclick = () => {
+    if (zone._diagnosisLoading) return;
+    zone._diagnosisLoading = true;
+    void _loadIaFailureDiagnosis(idx).finally(() => { zone._diagnosisLoading = false; });
+  };
+}
+
+async function _loadIaFailureDiagnosis(idx) {
+  const zone = document.getElementById(`ia-${idx}-recovery-zone`);
+  const task = _iaTasks[idx];
+  if (!zone || !task) return;
+  zone.innerHTML = '<div style="padding:10px;color:var(--dim);font-size:var(--font-size-xs)">Supervisor 正在检查失败步骤、日志和产物…</div>';
+  try {
+    const r = await authApi('GET', `/api/issue-analysis/${encodeURIComponent(task.taskId)}/failure-diagnosis`, null, 90000);
+    const diagnosis = r.data?.diagnosis;
+    if (!diagnosis) {
+      zone.innerHTML = `<div class="error-msg">分诊暂不可用：${escHtml(r.data?.message || '请稍后重试')}。原始任务和日志未被修改。</div>`;
+      zone._loaded = false;
+      return;
+    }
+    task.failureDiagnosis = diagnosis;
+    const step = diagnosis.failedStep?.stepName || '未能定位';
+    _renderIaFailureDiagnosis(idx, diagnosis);
+  } catch (e) {
+    zone.innerHTML = `<div class="error-msg">分诊请求失败：${escHtml(e.message)}。不会自动从头重跑。</div>`;
+    zone._loaded = false;
+  }
+}
+
+function _renderIaFailureDiagnosis(idx, diagnosis) {
+  const zone = document.getElementById(`ia-${idx}-recovery-zone`);
+  if (!zone) return;
+  const task = _iaTasks[idx];
+  if (task) task.failureDiagnosis = diagnosis;
+  const step = diagnosis.failedStep?.stepName || '未能定位';
+    const defect = diagnosis.platformDefect;
+    zone.innerHTML = `
+      <div class="ia-report-viewer">
+        <div class="ia-report-head"><span class="ov-name">失败恢复协调器</span>
+          <span class="tc-spacer"></span><span style="font-size:var(--font-size-xs);color:var(--dim)">${diagnosis.examinedStepCount} 步执行证据</span></div>
+        <div style="padding:10px 12px;font-size:var(--font-size-xs);line-height:1.8">
+          <div><b style="color:${diagnosis.category === 'issue_unresolved' ? 'var(--err)' : 'var(--warn)'}">${escHtml(_IA_FAILURE_LABELS[diagnosis.category] || diagnosis.category)}</b></div>
+          <div>恢复/当前失败步骤：<code>${escHtml(step)}</code> · 已完成 <b>${diagnosis.preserved.completedStepCount}</b> 步将保留</div>
+          ${diagnosis.businessRootCause ? `<div style="color:var(--err)"><b>Issue 未解决的首要业务原因：</b>${escHtml(diagnosis.businessRootCause.summary)}（最早证据位于「${escHtml(diagnosis.businessRootCause.stepName)}」）</div>` : ''}
+          ${diagnosis.rootCause ? `<div style="color:var(--warn)"><b>平台执行故障源头：</b>${escHtml(diagnosis.rootCause.summary)}（发生于「${escHtml(diagnosis.rootCause.stepName)}」）</div>` : ''}
+          ${diagnosis.causeRelationship ? `<div style="color:var(--warn)"><b>因果链关系：</b>${escHtml(diagnosis.causeRelationship.summary)}${diagnosis.causeRelationship.businessPrecedesPlatform === true ? ' 复现缺口早于本次平台故障。' : ''}</div>` : ''}
+          ${diagnosis.originFailedStep ? `<div><b>首次平台连锁失败：</b>${escHtml(diagnosis.originFailedStep.stepName)} · ${escHtml(diagnosis.originFailedStep.error || '')}</div>` : ''}
+          <div><b>最终判定：</b>${escHtml(diagnosis.summary || diagnosis.evidence || '请人工查看失败步骤日志。')}</div>
+          <div style="color:var(--text-aux);white-space:pre-wrap">${escHtml(diagnosis.guidance?.actions?.join('\n') || '请人工查看失败步骤日志。')}</div>
+          ${defect ? `<div style="margin-top:6px;color:#f5b942">平台台账 ${escHtml(defect.defectId)} · ${escHtml(defect.code)} · 第 ${defect.occurrenceCount} 次记录</div>` : ''}
+          ${diagnosis.retry?.exhausted ? '<div style="color:var(--err)">已达到重试上限，请人工处理，不会无限重试。</div>' : ''}
+          <div style="margin-top:6px;color:var(--dim)">${escHtml(diagnosis.truthfulnessGuard)}</div>
+        </div>
+      </div>`;
+    _updateIaRecoveryButton(idx, diagnosis);
+}
+
+function _updateIaRecoveryButton(idx, diagnosis) {
+  const button = document.getElementById(`ia-${idx}-continue`);
+  if (!button || !diagnosis) return;
+  const where = diagnosis.failedStep?.stepName || '失败步骤';
+  button.textContent = diagnosis.category === 'issue_unresolved' ? '⚠ 需要人工复核'
+    : diagnosis.retry?.exhausted ? '⚠ 已达重试上限'
+      : diagnosis.requiresPlatformFix ? `▶ 修复验证后从「${where}」继续` : `▶ 从「${where}」继续`;
+  button.title = diagnosis.canResume ? '保留已完成步骤，只恢复失败步骤' : '需要先处理故障，不能绕过真实验证失败';
+  button.style.display = 'inline-flex';
+  button.style.pointerEvents = diagnosis.canResume ? '' : 'none';
+}
+
 
 function _stopIaPolling(idx) {
   const task = _iaTasks[idx];
@@ -1243,6 +1535,7 @@ function _updateIaStage(idx, stage, data) {
     if (rid) task.runId = rid;
     if (data?.priorityLevel) task.priorityLevel = data.priorityLevel;
     if (data?.summary) task.summary = data.summary;
+    if (data?.metadata) task.metadata = { ...task.metadata, ...data.metadata };
     if (data?.startedAt) task.startedAt = data.startedAt;
     if (data?.finishedAt) task.finishedAt = data.finishedAt;
     if (data && Object.prototype.hasOwnProperty.call(data, 'error')) task.error = data.error || '';
@@ -1313,8 +1606,7 @@ function _updateIaStage(idx, stage, data) {
   // 摘要
   const summaryEl = document.getElementById(`ia-${idx}-summary`);
   if (summaryEl && task?.summary) {
-    const truncated = task.summary.length > 120 ? task.summary.slice(0, 120) + '…' : task.summary;
-    summaryEl.textContent = truncated;
+    summaryEl.textContent = _IA_DETAIL_MODE ? task.summary : (task.summary.length > 120 ? task.summary.slice(0, 120) + '…' : task.summary);
     summaryEl.style.display = 'block';
   }
 
@@ -1326,10 +1618,9 @@ function _updateIaStage(idx, stage, data) {
     flagsEl.style.display = flags.show ? 'flex' : 'none';
   }
 
-  // 完成/失败后显示下载按钮 + 内嵌渲染诊断报告（无需跳页）
-  // failed 也尝试拉报告：诊断结论为"无法诊断"时同样产出有效报告（如 Issue 内容不可见）
+  // 完成/失败后在详情页显示报告、补丁和反馈；列表保持轻量摘要。
   const dlWrap = document.getElementById(`ia-${idx}-dl-wrap`);
-  if (dlWrap && (stage === 'issueanalysis_complete' || stage === 'failed')) {
+  if (_IA_DETAIL_MODE && dlWrap && (stage === 'issueanalysis_complete' || stage === 'failed')) {
     dlWrap.style.display = 'flex';
     _renderIaReport(idx);
     _renderIaPatch(idx);
@@ -1348,9 +1639,30 @@ function _updateIaStage(idx, stage, data) {
 
   // 失败时显示错误；服务重启打断的任务给出从原步骤继续的按钮
   const errorEl = document.getElementById(`ia-${idx}-error`);
+  const stopEl = document.getElementById(`ia-${idx}-stop`);
+  const detailStop = document.getElementById('ia-detail-stop');
+  if (detailStop) {
+    const terminal = ['issueanalysis_complete', 'failed', 'cancelled'].includes(stage);
+    detailStop.style.display = terminal ? 'none' : '';
+    if (!terminal && !detailStop.disabled) detailStop.textContent = '停止分析';
+  }
   const continueEl = document.getElementById(`ia-${idx}-continue`);
+  if (stopEl) {
+    const terminal = ['issueanalysis_complete', 'failed', 'cancelled'].includes(stage);
+    stopEl.style.display = terminal ? 'none' : 'inline-flex';
+    if (!terminal && stopEl.textContent !== '⏳ 停止中…') stopEl.textContent = '⏹ 停止';
+  }
   const interrupt = stage === 'failed' ? _iaInterruptInfo(data?.error || data?.aceharnessStatus?.statusReason || task?.error) : null;
-  if (continueEl) {
+  if (stage === 'failed') {
+    if (task) task.failureDiagnosis = data?.failureDiagnosis || task?.failureDiagnosis || null;
+    _renderIaFailureRecovery(idx);
+    if (data?.failureDiagnosis) _updateIaRecoveryButton(idx, data.failureDiagnosis);
+  } else if (continueEl) {
+    continueEl.style.display = 'none';
+    const recoveryZone = document.getElementById(`ia-${idx}-recovery-zone`);
+    if (recoveryZone) { recoveryZone.style.display = 'none'; recoveryZone._loaded = false; }
+  }
+  if (continueEl && !data?.failureDiagnosis) {
     if (interrupt) {
       const where = interrupt.step || interrupt.phase || '中断的步骤';
       const kept = interrupt.completed ? `已完成 ${interrupt.completed} 步会保留` : '已完成的步骤会保留';

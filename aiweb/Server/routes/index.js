@@ -14,6 +14,7 @@ import { Router } from 'express';
 import { createSystemRouter } from './system.js';
 import { createIssueAnalysisRouter } from './issueanalysis.js';
 import { createPrReviewRouter } from './prreview.js';
+import { createPrSubmitRouter } from './prsubmit.js';
 import { createStatsRouter } from './stats.js';
 
 /**
@@ -26,6 +27,7 @@ export function createRouter(orchestrator) {
     router.use(createSystemRouter(orchestrator));
     router.use(createIssueAnalysisRouter(orchestrator));
     router.use(createPrReviewRouter(orchestrator));
+    router.use(createPrSubmitRouter());
     router.use(createStatsRouter());
 
     return router;

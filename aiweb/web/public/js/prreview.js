@@ -120,6 +120,7 @@ onAuthExpired = function () {
 
 /* ── 视图切换 ── */
 function _syncPrAuthViews(loggedIn) {
+  if (!document.getElementById('p-prreview')) return;
   $('pr-login-box').style.display = loggedIn ? 'none' : '';
   $('pr-user-bar').style.display = loggedIn ? 'flex' : 'none';
   $('pr-stats-bar').style.display = loggedIn ? '' : 'none';
@@ -149,24 +150,30 @@ function togglePrHelp() {
 }
 
 /* ── 初始化：检查共享登录态 ── */
+let _prInitialized = false;
+
 async function initPrReviewHistory() {
   if (getAuth()?.token) {
     _syncPrAuthViews(true);
     initPrOverview();
-    await _loadPrRuns(true);
-    _startPrAutoRefresh();
+    void _loadPrRuns(true);
+    _prInitialized = true;
+    if (_prPanelVisible()) _startPrAutoRefresh();
   }
 }
 
-/* ── 面板可见性：切走时停轮询省资源，切回时恢复并立即刷新 ── */
+function _prPanelVisible() {
+  const panel = $('p-prreview');
+  return Boolean(panel && getComputedStyle(panel).display !== 'none');
+}
+
+/* ── 面板可见性：切走时停轮询省资源，切回时恢复并复用已加载的数据 ── */
 window.addEventListener('panelswitch', (e) => {
   if (e.detail?.panelId === 'p-prreview') {
-    if (getAuth()?.token && !_prRefreshTimer) {
-      _startPrAutoRefresh();
-      manualRefreshPr();   // 切回立即刷新，不等 10s 轮询
-    }
-  } else if (_prRefreshTimer) {
-    _stopPrAutoRefresh();
+    if (getAuth()?.token && _prInitialized) _startPrAutoRefresh();
+  } else {
+    _prReveal = null;
+    if (_prRefreshTimer) _stopPrAutoRefresh();
   }
 });
 document.addEventListener('visibilitychange', () => {
@@ -175,7 +182,7 @@ document.addEventListener('visibilitychange', () => {
     if (_prRefreshTimer) { _stopPrAutoRefresh(); _prPausedByHidden = true; }
   } else if (_prPausedByHidden) {
     _prPausedByHidden = false;
-    if (getAuth()?.token) {
+    if (getAuth()?.token && _prPanelVisible()) {
       _startPrAutoRefresh();
       manualRefreshPr();
     }
@@ -190,10 +197,6 @@ let _prOvIdentitySource = '';
 let _prOvIdentities = [];
 let _prOvIsAdmin = false;
 let _prOvCache = [];       // PR 列表缓存
-let _prOvLoading = false;
-let _prOvReloadPending = false;
-let _prOvPendingFresh = false;
-let _prOvFresh = false;    // 手动刷新时绕过服务端缓存
 let _prOvScope = '';       // ''=组织所有 PR；'self'=当前用户自己的 PR
 let _prOvStateFilter = 'all';
 let _prOvRepoFilter = 'all';
@@ -203,8 +206,73 @@ let _prOvPerPage = 20;
 let _prOvHasMore = false;
 let _prOvSearchMode = 'organization';
 let _prOvRenderFlags = { degraded: false, stale: false };
+let _prOvEpoch = 0;
+let _prOvPaintedKey = '';
+const _prOvSnapshots = new Map();
+const _prOvInflight = new Map();
+const PR_OV_FILTER_LABEL = { all: '全部', open: '开放中', merged: '已合入', closed: '已关闭' };
 
-/* 状态筛选使用 GitCode 服务端条件，保持分页结果正确。 */
+function _prOvViewKey(over = {}) {
+  return JSON.stringify({
+    state: over.state ?? _prOvStateFilter,
+    repo: over.repo ?? _prOvRepoFilter,
+    search: over.search ?? _prOvSearch,
+    scope: over.scope ?? _prOvScope,
+    page: over.page ?? _prOvPage,
+  });
+}
+
+function _payloadFromPrResponse(data) {
+  return {
+    prs: data.prs || [],
+    repos: data.repos || [],
+    author: data.author || '',
+    identitySource: data.identitySource || '',
+    identities: data.identities || [],
+    page: Number(data.page) || 1,
+    perPage: Number(data.perPage) || _prOvPerPage,
+    hasMore: Boolean(data.hasMore),
+    searchMode: data.searchMode || 'organization',
+    degraded: !!data.degraded,
+    stale: !!data.stale,
+  };
+}
+
+function _rememberPrOvSnapshot(key, payload) {
+  _prOvSnapshots.set(key, { at: Date.now(), payload });
+  if (_prOvSnapshots.size <= 24) return;
+  const oldest = [..._prOvSnapshots.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+  if (oldest) _prOvSnapshots.delete(oldest[0]);
+}
+
+function _applyPrOvPayload(payload, stale) {
+  _prOvCache = payload.prs || [];
+  if (payload.repos?.length) _prOvRepos = payload.repos;
+  _prOvAuthor = payload.author || '';
+  _prOvIdentitySource = payload.identitySource || '';
+  _prOvIdentities = payload.identities || [];
+  _prOvIsAdmin = getAuth()?.user?.role === 'admin';
+  _prOvPage = Number(payload.page) || _prOvPage;
+  _prOvPerPage = Number(payload.perPage) || _prOvPerPage;
+  _prOvHasMore = Boolean(payload.hasMore);
+  _prOvSearchMode = payload.searchMode || 'organization';
+  _syncAdminScopeBtn();
+  const repoEl = $('pr-ov-repo');
+  const repoList = [...new Set([..._prOvRepos, ..._prOvCache.map(p => p.repoFull)].filter(Boolean))];
+  if (repoEl) repoEl.textContent = `CPF-Flutter · ${repoList.length} 个代码仓`;
+  _updateOvIdentity();
+  _renderPrOverview(!!payload.degraded, !!stale || !!payload.stale);
+  _updatePrOvPagination();
+}
+
+function _showPrOvFilterLoading() {
+  const label = PR_OV_FILTER_LABEL[_prOvStateFilter] || '当前筛选';
+  $('pr-ov-list').innerHTML = `<div class="pr-ov-loading">正在加载${label}的 PR…</div>`;
+  const pag = $('pr-ov-pagination');
+  if (pag) pag.style.display = 'none';
+}
+
+/* 状态筛选仍向 GitCode 要正确的分页结果。点下去先画出这个状态已有的一页，没有就马上清掉上一档列表。 */
 function setPrOvStateFilter(state) {
   if (_prOvStateFilter === state) return;
   _prOvStateFilter = state;
@@ -212,7 +280,20 @@ function setPrOvStateFilter(state) {
   document.querySelectorAll('#pr-ov-filters .pr-chip').forEach(c => {
     c.classList.toggle('active', c.dataset.ovstate === state);
   });
+  _paintPrOvSnapshotOrLoading();
   loadGitcodePrs();
+}
+
+function _paintPrOvSnapshotOrLoading() {
+  const key = _prOvViewKey();
+  const snap = _prOvSnapshots.get(key);
+  if (snap) {
+    _prOvPaintedKey = key;
+    _applyPrOvPayload(snap.payload, Date.now() - snap.at > 60000);
+  } else {
+    _prOvPaintedKey = '';
+    _showPrOvFilterLoading();
+  }
 }
 
 /* 仓库筛选切换到该仓库的分页 API。 */
@@ -223,6 +304,28 @@ function setPrOvRepoFilter(repo) {
   const select = $('pr-ov-repo-select');
   if (select) select.value = repo;
   loadGitcodePrs();
+}
+
+/* 只缩小仓库下拉，不改已经选中的仓库，也不重新请求列表。 */
+let _prOvRepoQuery = '';
+let _prOvRepoChoices = [];
+
+function setPrOvRepoQuery(q) {
+  _prOvRepoQuery = String(q || '');
+  _fillPrOvRepoOptions();
+}
+
+function _onPrOvRepoQueryKey(event) {
+  if (event.key === 'Escape') {
+    event.target.value = '';
+    setPrOvRepoQuery('');
+    return;
+  }
+  if (event.key !== 'Enter') return;
+  const select = $('pr-ov-repo-select');
+  if (!select) return;
+  const choices = [...select.options].filter(option => option.value && option.value !== 'all' && !option.disabled);
+  if (choices.length === 1) setPrOvRepoFilter(choices[0].value);
 }
 
 /* 组织 API 搜索标题/描述；选定仓库时在当前页内搜索。 */
@@ -401,48 +504,71 @@ async function clearGitcodeToken() {
   }
 }
 
+function _prOvQuery(opts) {
+  const query = new URLSearchParams({
+    page: String(opts.page),
+    perPage: String(opts.perPage),
+    state: opts.state,
+  });
+  if (opts.fresh) query.set('fresh', '1');
+  if (opts.scope === 'self') query.set('scope', 'self');
+  if (opts.repo && opts.repo !== 'all') query.set('repo', opts.repo);
+  if (opts.search) query.set('search', opts.search);
+  return query.toString();
+}
+
+function _fetchGitcodePrPage(opts) {
+  const url = '/api/pr-review/gitcode-prs?' + _prOvQuery(opts);
+  if (!opts.fresh && _prOvInflight.has(url)) return _prOvInflight.get(url);
+  const task = (async () => {
+    let lastErr = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await _prApi('GET', url, null, 15000);
+      } catch (e) {
+        lastErr = e;
+        if (attempt === 0 && /fetch|abort|network/i.test((e.name || '') + e.message)) {
+          await new Promise(res => setTimeout(res, 1500));
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw lastErr;
+  })();
+  if (!opts.fresh) {
+    _prOvInflight.set(url, task);
+    void task.finally(() => { if (_prOvInflight.get(url) === task) _prOvInflight.delete(url); });
+  }
+  return task;
+}
+
+/* 首屏只读取当前筛选。其他状态由用户点击时加载，避免同时打满 GitCode 和运行历史。 */
+
 async function loadGitcodePrs(fresh = false, scope) {
   if (!getAuth()) return;
   if (_personalPrScope()) _prOvScope = 'self';
   else if (scope !== undefined) _prOvScope = scope;
-  if (_prOvLoading) {
-    _prOvReloadPending = true;
-    _prOvPendingFresh = _prOvPendingFresh || fresh;
-    return;
-  }
-  _prOvLoading = true;
-  _prOvFresh = fresh;
-
+  const epoch = ++_prOvEpoch;
+  const opts = {
+    fresh: !!fresh,
+    state: _prOvStateFilter,
+    repo: _prOvRepoFilter,
+    search: _prOvSearch,
+    scope: _prOvScope,
+    page: _prOvPage,
+    perPage: _prOvPerPage,
+  };
+  const key = _prOvViewKey(opts);
   const list = $('pr-ov-list');
-  // 首次加载显示提示；轮询/刷新时静默（避免闪烁），失败时才更新提示
-  if (!list.children.length || !list.querySelector('.pr-ov-row')) {
-    list.innerHTML = `<div class="pr-ov-loading">正在加载 ${_personalPrScope() ? '本人的' : 'CPF-Flutter 组织'} PR…</div>`;
-  }
+  const showing = _prOvPaintedKey === key && !!list.querySelector('.pr-ov-row');
+  if (!showing && !list.querySelector('.pr-ov-loading')) _showPrOvFilterLoading();
   try {
-    // 组织总览默认跨作者；管理员可切换到自己的绑定身份。服务端按页读取，30 秒轮询复用短缓存。
-    // 网络层错误（Failed to fetch，多为公网隧道波动）自动重试一次
-    let r = null, lastErr = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const query = new URLSearchParams({ page: String(_prOvPage), perPage: String(_prOvPerPage), state: _prOvStateFilter });
-        if (_prOvFresh) query.set('fresh', '1');
-        if (_prOvScope === 'self') query.set('scope', 'self');
-        if (_prOvRepoFilter !== 'all') query.set('repo', _prOvRepoFilter);
-        if (_prOvSearch) query.set('search', _prOvSearch);
-        r = await _prApi('GET', '/api/pr-review/gitcode-prs?' + query.toString(), null, 90000);
-        lastErr = null;
-        break;
-      } catch (e) {
-        lastErr = e;
-        if (attempt === 0 && /fetch|abort|network/i.test(e.name + e.message)) {
-          list.innerHTML = '<div class="pr-ov-loading">网络波动，重试中…</div>';
-          await new Promise(res => setTimeout(res, 1500));
-          continue;
-        }
-        break;
-      }
+    const r = await _fetchGitcodePrPage(opts);
+    if (epoch !== _prOvEpoch) {
+      if (r.status === 200 && r.data?.success) _rememberPrOvSnapshot(key, _payloadFromPrResponse(r.data));
+      return;
     }
-    if (lastErr) throw lastErr;
     if (r.status === 422) {
       _prOvAuthor = '';
       _prOvIdentitySource = 'self';
@@ -461,35 +587,14 @@ async function loadGitcodePrs(fresh = false, scope) {
       list.innerHTML = `<div class="pr-ov-loading" style="color:var(--err)">加载失败：${escHtml(r.data?.message || 'HTTP ' + r.status)}</div>`;
       return;
     }
-    _prOvCache = r.data.prs || [];
-    _prOvRepos = r.data.repos || [];
-    _prOvAuthor = r.data.author || '';
-    _prOvIdentitySource = r.data.identitySource || '';
-    _prOvIdentities = r.data.identities || [];
-    _prOvIsAdmin = getAuth()?.user?.role === 'admin';
-    _prOvPage = Number(r.data.page) || _prOvPage;
-    _prOvPerPage = Number(r.data.perPage) || _prOvPerPage;
-    _prOvHasMore = Boolean(r.data.hasMore);
-    _prOvSearchMode = r.data.searchMode || 'organization';
-    _syncAdminScopeBtn();
-    // 仓库目录可能因权限或 API 暂时不可用而不完整，至少使用当前页的真实仓库补全筛选项。
-    const repoEl = $('pr-ov-repo');
-    const repoList = [...new Set([..._prOvRepos, ..._prOvCache.map(p => p.repoFull)].filter(Boolean))];
-    repoEl.textContent = `CPF-Flutter · ${repoList.length} 个代码仓`;
-    _updateOvIdentity();
-    _renderPrOverview(!!r.data.degraded, false);
-    _updatePrOvPagination();
+    const payload = _payloadFromPrResponse(r.data);
+    _rememberPrOvSnapshot(key, payload);
+    _prOvPaintedKey = key;
+    _applyPrOvPayload(payload, !!payload.stale);
   } catch (e) {
+    if (epoch !== _prOvEpoch) return;
     $('pr-ov-pagination').style.display = 'none';
     list.innerHTML = `<div class="pr-ov-loading" style="color:var(--err)">加载失败：${escHtml(e.message)}</div>`;
-  } finally {
-    _prOvLoading = false;
-    if (_prOvReloadPending) {
-      const pendingFresh = _prOvPendingFresh;
-      _prOvReloadPending = false;
-      _prOvPendingFresh = false;
-      void loadGitcodePrs(pendingFresh);
-    }
   }
 }
 
@@ -627,7 +732,11 @@ function _prOvRowHtml(p, showRepoBadge = true) {
     </div>`;
 }
 
-/* 仓库下拉筛选：仓库数量较多时避免生成数百个 chips。 */
+function _prOvRepoShort(full) {
+  return (String(full).split('/')[1] || String(full)).replace(/^flutter_/, '');
+}
+
+/* 仓库下拉筛选：仓库很多时用搜索框缩小选项，避免在数百项里翻找。 */
 function _renderRepoFilterSelect() {
   const el = $('pr-ov-repo-filters');
   if (!el) return false;
@@ -640,18 +749,47 @@ function _renderRepoFilterSelect() {
   for (const p of _prOvCache) {
     if (p.repoFull && !seen.has(p.repoFull)) { seen.add(p.repoFull); repos.push(p.repoFull); }
   }
-  if (repos.length < 2) { el.style.display = 'none'; el.innerHTML = ''; return false; }
-  const shortName = (full) => (String(full).split('/')[1] || String(full)).replace(/^flutter_/, '');
+  if (repos.length < 2) {
+    _prOvRepoChoices = [];
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return false;
+  }
   if (_prOvRepoFilter !== 'all' && !repos.includes(_prOvRepoFilter)) _prOvRepoFilter = 'all';
-
+  _prOvRepoChoices = repos;
   el.style.display = '';
-  el.innerHTML = `<label style="display:flex;align-items:center;gap:7px;color:var(--dim);font-size:var(--font-size-xs)">
-    仓库筛选 <select id="pr-ov-repo-select" class="pr-ov-input" style="max-width:min(360px,70vw);height:30px;padding:3px 8px" onchange="setPrOvRepoFilter(this.value)">
-      <option value="all"${_prOvRepoFilter === 'all' ? ' selected' : ''}>全部组织仓库</option>
-      ${repos.map(full => `<option value="${escHtml(full)}"${_prOvRepoFilter === full ? ' selected' : ''}>${escHtml(shortName(full))}</option>`).join('')}
-    </select>
-  </label>`;
+  if (!el.querySelector('#pr-ov-repo-search')) {
+    el.innerHTML = `<div style="display:flex;align-items:center;gap:7px;color:var(--dim);font-size:var(--font-size-xs);flex-wrap:wrap">
+      <span>仓库筛选</span>
+      <input id="pr-ov-repo-search" class="pr-ov-input" style="width:min(180px,40vw);height:30px;padding:3px 8px" type="text"
+             value="${escHtml(_prOvRepoQuery)}" placeholder="搜索仓库名" aria-label="搜索仓库名" spellcheck="false" autocomplete="off"
+             oninput="setPrOvRepoQuery(this.value)" onkeydown="_onPrOvRepoQueryKey(event)"
+             title="按仓库全名或短名缩小下拉列表。回车选中唯一结果，Esc 清空"/>
+      <span id="pr-ov-repo-match" style="min-width:3.2em"></span>
+      <select id="pr-ov-repo-select" class="pr-ov-input" style="max-width:min(360px,70vw);height:30px;padding:3px 8px" aria-label="仓库" onchange="setPrOvRepoFilter(this.value)"></select>
+    </div>`;
+  }
+  _fillPrOvRepoOptions();
   return true;
+}
+
+function _fillPrOvRepoOptions() {
+  const select = $('pr-ov-repo-select');
+  const count = $('pr-ov-repo-match');
+  if (!select) return;
+  const query = _prOvRepoQuery.trim().toLowerCase();
+  const matched = query
+    ? _prOvRepoChoices.filter(full => full.toLowerCase().includes(query) || _prOvRepoShort(full).toLowerCase().includes(query))
+    : _prOvRepoChoices.slice();
+  const pinned = _prOvRepoFilter !== 'all' && !matched.includes(_prOvRepoFilter) ? [_prOvRepoFilter] : [];
+  const options = [
+    `<option value="all"${_prOvRepoFilter === 'all' ? ' selected' : ''}>全部组织仓库</option>`,
+    ...pinned.map(full => `<option value="${escHtml(full)}" selected>${escHtml(_prOvRepoShort(full))}（当前）</option>`),
+    ...matched.map(full => `<option value="${escHtml(full)}" title="${escHtml(full)}"${_prOvRepoFilter === full ? ' selected' : ''}>${escHtml(_prOvRepoShort(full))}</option>`),
+  ];
+  if (query && !matched.length) options.push('<option value="" disabled>没有匹配的仓库</option>');
+  select.innerHTML = options.join('');
+  if (count) count.textContent = query ? `${matched.length}/${_prOvRepoChoices.length}` : String(_prOvRepoChoices.length);
 }
 
 function _renderPrOverview(degraded = _prOvRenderFlags.degraded, stale = _prOvRenderFlags.stale) {
@@ -904,32 +1042,106 @@ function _updatePrLivePill() {
 }
 
 /* 手动刷新：立即拉取列表 + PR 总览（绕过缓存）+ 展开中的详情（带防重入） */
-let _prManualRefreshing = false;
-async function manualRefreshPr() {
-  if (!getAuth()) return;
-  if (_prManualRefreshing) return;
-  _prManualRefreshing = true;
+let _prManualRefreshPromise = null;
+function manualRefreshPr() {
+  if (!getAuth()) return Promise.resolve();
+  if (_prManualRefreshPromise) return _prManualRefreshPromise;
   const btn = document.querySelector('.pr-refresh-btn');
-  if (btn) { btn.classList.add('spinning'); }
-  try {
-    await Promise.all([
-      _loadPrRuns(true),
-      loadGitcodePrs(true),
-    ]);
-    for (const runId of [..._prOpenSet]) {
-      _loadPrRunDetail(runId);
+  if (btn) btn.classList.add('spinning');
+  _prManualRefreshPromise = (async () => {
+    try {
+      await Promise.all([
+        _loadPrRuns(true),
+        loadGitcodePrs(true),
+      ]);
+      for (const runId of [..._prOpenSet]) {
+        _loadPrRunDetail(runId);
+      }
+    } finally {
+      _prManualRefreshPromise = null;
+      setTimeout(() => btn && btn.classList.remove('spinning'), 500);
     }
-  } finally {
-    _prManualRefreshing = false;
-    // 至少转半圈再停，给操作反馈
-    setTimeout(() => btn && btn.classList.remove('spinning'), 500);
-  }
+  })();
+  return _prManualRefreshPromise;
+}
+
+/* PR 提交页跳过来时，清掉会挡住新任务的筛选，刷新后滚到对应 PR。 */
+let _prReveal = null;
+
+function revealSubmittedPr(target = {}) {
+  _prReveal = {
+    number: String(target.number || ''),
+    repo: String(target.repo || ''),
+    runId: String(target.runId || ''),
+  };
+  _prFilter = 'all';
+  _prRunRepoFilter = 'all';
+  document.querySelectorAll('#pr-filters .pr-chip').forEach(c => {
+    c.classList.toggle('active', c.dataset.filter === 'all');
+  });
+  const repoSelect = $('pr-run-repo-filter');
+  if (repoSelect) repoSelect.value = 'all';
+  _renderPrRunList(Object.values(_prRunCache));
+
+  const viewBefore = _prOvViewKey();
+  if (_prOvStateFilter === 'merged' || _prOvStateFilter === 'closed') _prOvStateFilter = 'open';
+  _prOvRepoFilter = 'all';
+  _prOvPage = 1;
+  clearTimeout(_prOvSearchTimer);
+  _prOvSearch = '';
+  const searchInput = $('pr-ov-search');
+  if (searchInput) searchInput.value = '';
+  if (_prOvViewKey() !== viewBefore) _paintPrOvSnapshotOrLoading();
+  document.querySelectorAll('#pr-ov-filters .pr-chip').forEach(c => {
+    c.classList.toggle('active', c.dataset.ovstate === _prOvStateFilter);
+  });
+  const repoOv = $('pr-ov-repo-select');
+  if (repoOv) repoOv.value = 'all';
+  if (typeof switchToPanel === 'function') switchToPanel('p-prreview');
+  void _refreshAndReveal();
+}
+
+async function _refreshAndReveal() {
+  try { await manualRefreshPr(); } catch { /* 刷新失败时仍尝试定位已有卡片 */ }
+  _highlightRevealedPr();
+}
+
+function _prRevealRepoShort() {
+  return (_prReveal?.repo || '').split('/').filter(Boolean).pop()?.toLowerCase() || '';
+}
+
+/* 有 runId 只认这一条；只有编号时只认还在跑的任务，不把同一 PR 的历史任务也标出来。 */
+function _prRevealMatchesRun(run) {
+  const target = _prReveal;
+  if (!target || !run) return false;
+  if (target.runId) return run.runId === target.runId;
+  if (!target.number || String(run.prNumber || '') !== target.number || PR_TERMINAL.has(run.status)) return false;
+  const repoShort = _prRevealRepoShort();
+  return !repoShort || !run.repo || run.repo.toLowerCase() === repoShort;
+}
+
+function _highlightRevealedPr() {
+  const target = _prReveal;
+  if (!target?.number && !target?.runId) return;
+  document.querySelectorAll('.pr-just-started').forEach(el => el.classList.remove('pr-just-started'));
+  const repoShort = _prRevealRepoShort();
+  const card = Object.values(_prRunCache).filter(_prRevealMatchesRun)
+    .map(run => document.getElementById(`pr-card-${run.runId}`))
+    .find(Boolean);
+  const row = [...document.querySelectorAll('.pr-ov-row')].find((el) => {
+    const [repo, number] = String(el.dataset.prKey || '').toLowerCase().split('#');
+    return number === target.number && (!repoShort || repo.split('/').pop() === repoShort);
+  });
+  const node = card || row;
+  if (!node) return;
+  node.classList.add('pr-just-started');
+  node.scrollIntoView({ block: 'center' });
 }
 
 /* 筛选 */
 function setPrFilter(filter) {
   _prFilter = filter;
-  document.querySelectorAll('.pr-chip').forEach(c => {
+  document.querySelectorAll('#pr-filters .pr-chip').forEach(c => {
     c.classList.toggle('active', c.dataset.filter === filter);
   });
   _renderPrRunList(Object.values(_prRunCache));
@@ -997,7 +1209,7 @@ function _updateRunCardInPlace(card, run, meta) {
   // 状态类（不动 DOM 结构，只换 class；仓库色条 class 随 run.repo 保留）
   const repoCls = run.repo === 'flutter_engine' ? ' repo-engine'
     : run.repo === 'flutter_flutter' ? ' repo-flutter' : '';
-  const wantCls = `pr-card ${stateCls}${repoCls}${isApproval ? ' need-approval' : ''}${card.classList.contains('open') ? ' open' : ''}`;
+  const wantCls = `pr-card ${stateCls}${repoCls}${isApproval ? ' need-approval' : ''}${card.classList.contains('open') ? ' open' : ''}${_prRevealMatchesRun(run) ? ' pr-just-started' : ''}`;
   if (card.className !== wantCls) card.className = wantCls;
 
   // 状态点
@@ -1135,7 +1347,7 @@ function _renderPrRunList(runs) {
       empty.innerHTML = `
         <div class="pr-empty-icon">🔀</div>
         <div class="pr-empty-title">暂无 PR 监控任务</div>
-        <div class="pr-empty-desc">在 AceHarness 工作台对目标 PR 评论 start build，<br/>或直接启动 gitcode-pr-review 工作流后，任务将自动出现在这里</div>`;
+        <div class="pr-empty-desc">在「PR 提交」里勾选提交后开启监控，或在上方列表点「开启监控」。<br/>任务启动后会出现在这里。</div>`;
     }
     list.innerHTML = '';
     list.appendChild(empty);
@@ -1297,8 +1509,10 @@ function _buildPrRunCard(run, idx = 0) {
   const isOpen = _prOpenSet.has(run.runId);
 
   const card = document.createElement('div');
-  card.className = `pr-card ${_prCardStateCls(run.status)}${repoCls}${isApproval ? ' need-approval' : ''}${isOpen ? ' open' : ''}`;
+  card.className = `pr-card ${_prCardStateCls(run.status)}${repoCls}${isApproval ? ' need-approval' : ''}${isOpen ? ' open' : ''}${_prRevealMatchesRun(run) ? ' pr-just-started' : ''}`;
   card.id = `pr-card-${run.runId}`;
+  card.dataset.prNumber = prNum ? String(prNum) : '';
+  card.dataset.repo = run.repo || '';
   card.style.animationDelay = `${Math.min(idx, 12) * 45}ms`;
   card.innerHTML = `
     <div class="pr-card-head" onclick="togglePrRunDetail('${escHtml(run.runId)}')">
@@ -1789,6 +2003,9 @@ function _renderReviewFix(runId, d) {
     html += `<div class="pr-rf-sec">🛡️ 门禁问题与修复对照（${gatePairs.length} 条）</div>${gatePairs.map(scopedCard).join('')}`;
   }
   if (d.gateSummary?.reportUrl) html += `<a href="${escHtml(d.gateSummary.reportUrl)}" target="_blank" rel="noopener" style="color:var(--accent);font-size:11px">打开门禁报告 ↗</a>`;
+  if (d.commitPatch) {
+    html += `<div class="pr-rf-sec">📝 提交说明的修改</div><div style="font-size:11px;color:var(--dim)">这是 commit 标题或正文的建议，和文件 diff 分开显示。</div><div class="pr-rf-diff">${_rfDiffHtml(d.commitPatch)}</div>`;
+  }
   if (d.patch) html += `<div class="pr-rf-sec">${patchHead}</div><div style="font-size:11px;color:var(--dim)">${patchNote}</div>`;
 
   if (siblingComments.length) {
@@ -1811,10 +2028,10 @@ function _renderReviewFix(runId, d) {
         <div class="pr-rf-sec" style="margin-top:12px">${patchHead}</div>
         ${patchNote ? `<div style="font-size:var(--font-size-xs);color:var(--dim);padding:2px 0 4px">${patchNote}</div>` : ''}
         <div class="pr-rf-diff">${_rfDiffHtml(d.patch)}</div>` : `
-        <div class="pr-rf-sec" style="margin-top:12px">🔧 提交的修改${recoveredList ? '（提交清单从 GitCode 恢复）' : ''}</div>
+        ${d.commitPatch ? '' : `<div class="pr-rf-sec" style="margin-top:12px">🔧 提交的修改${recoveredList ? '（提交清单从 GitCode 恢复）' : ''}</div>
         ${recoveredList ? recoveredList : (aiComments.some(c => c.stale)
           ? `<div class="pr-rf-result info" style="margin:4px 0">AI 意见发布后 PR 有新 push；当前代码是否修复需打开 PR 确认</div>`
-          : `<div style="font-size:var(--font-size-xs);color:var(--dim);padding:6px 0">本任务没有修改提交</div>`)}`}
+          : `<div style="font-size:var(--font-size-xs);color:var(--dim);padding:6px 0">本任务没有修改提交</div>`)}`}`}
     `;
   }
 
@@ -2079,7 +2296,9 @@ function _rfDecisionAreaHtml(runId, d) {
       ${d.decision?.decision === 'approved' ? `<div class="pr-rf-result warn" style="margin-bottom:8px">✅ 已记录认可，但这一步没有启动提交；请点下方「认可并提交」完成应用。</div>` : ''}
       ${drift ? `<div class="pr-rf-result warn" style="margin-bottom:8px">⚠️ PR 在建议生成后又有新提交，建议可能不适用——建议用「按我的想法改」重新生成</div>` : ''}
       <div class="pr-rf-actions">
-        <button class="pr-rf-btn approve" ${drift ? 'disabled style="opacity:.45;cursor:not-allowed" title="PR 有新提交，建议可能不适用"' : ''} onclick="window._rfSubmitDecision('${escHtml(runId)}','apply')">✅ ${d.decision?.decision === 'approved' ? '认可并提交' : '应用建议修复（推送）'}</button>
+        ${(d.patch || d.commitPatch)
+          ? `<button class="pr-rf-btn approve" ${drift ? 'disabled style="opacity:.45;cursor:not-allowed" title="PR 有新提交，建议可能不适用"' : ''} onclick="window._rfSubmitDecision('${escHtml(runId)}','apply')">✅ ${d.decision?.decision === 'approved' ? '认可并提交' : '应用建议修复（推送）'}</button>`
+          : `<div class="pr-rf-result info" style="margin-bottom:8px">这次建议没有可应用的修改。</div>`}
         <button class="pr-rf-btn revert" onclick="window._rfSubmitDecision('${escHtml(runId)}','dismiss')">❌ 驳回全部意见</button>
       </div>
       <div class="pr-rf-feedback-row">
@@ -2269,8 +2488,13 @@ window._rfSubmitDecision = async function (runId, decision) {
   if (decision === 'revert' && !confirm('确定要恢复原版吗？\n\n将在你的 fork 上推送一个 revert 提交，撤销本次 AI 修复的全部改动。')) {
     return;
   }
-  if (decision === 'apply' && !confirm('确定要提交这份修复吗？\n\n工作流会把上面展示的 patch 应用到 fork 并尝试推送。GitCode 凭据需要有仓库写权限；任务完成前不会视为推送成功。')) {
-    return;
+  if (decision === 'apply') {
+    const shown = document.getElementById(`pr-reviewfix-${runId}`)?._data;
+    const commitOnly = Boolean(shown?.commitPatch) && !shown?.patch;
+    const message = commitOnly
+      ? '确定要应用这条提交说明吗？\n\n这条建议只改 commit 标题。工作流会改写已经推送的那一条提交，并用 --force-with-lease 推到你的 fork。远程如果已经不是这条提交，推送会停下来。'
+      : '确定要提交这份修复吗？\n\n工作流会把上面展示的 patch 应用到 fork 并尝试推送。GitCode 凭据需要有仓库写权限；任务完成前不会视为推送成功。';
+    if (!confirm(message)) return;
   }
   if (decision === 'dismiss' && !confirm('确定要驳回全部检视意见吗？\n\n驳回后 AI 不再按这些意见改代码；会在 PR 上留一条处理标记评论，本 PR 的监控结束。')) {
     return;
@@ -2624,3 +2848,4 @@ function _hidePrErr() {
   const el = $('pr-error');
   if (el) el.style.display = 'none';
 }
+

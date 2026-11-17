@@ -775,6 +775,7 @@ describe('post-pr-comment.mjs', () => {
     const script = resolve(__dirname, '../skills/gitcode-pr-review/scripts/post-pr-comment.mjs');
     const dir = await mkdtemp(resolve(tmpdir(), 'pr-comment-'));
     try {
+      const pushedAt = '2026-09-04T02:00:00.000Z';
       const { stdout } = await execFileAsync(
         process.execPath,
         [
@@ -786,6 +787,8 @@ describe('post-pr-comment.mjs', () => {
           '--body',
           'start build',
           '--wait-push-ack',
+          '--since',
+          pushedAt,
           '--wait-timeout',
           '15',
           '--out',
@@ -803,8 +806,81 @@ describe('post-pr-comment.mjs', () => {
       const result = JSON.parse(stdout);
       expect(commentPolls).toBeGreaterThanOrEqual(2);
       expect((posted as any)?.atPoll).toBeGreaterThanOrEqual(2);
-      expect(result.wait_ack).toBe('acked');
-      expect(result.push_ack_at).toBeTruthy();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--wait-push-ack 首次查询已出现确认时也会识别，不把它当新基线', async () => {
+    commentPolls = 0;
+    posted = null;
+    const pushedAt = new Date(Date.now() - 1000).toISOString();
+    pullComments = [
+      {
+        id: 5151,
+        user: { login: 'openharmony_ci' },
+        body: '监测到PR 代码有更新，重置PR验证状态。',
+        created_at: new Date(Date.parse(pushedAt) + 1).toISOString(),
+      },
+    ];
+    const script = resolve(__dirname, '../skills/gitcode-pr-review/scripts/post-pr-comment.mjs');
+    const dir = await mkdtemp(resolve(tmpdir(), 'pr-comment-'));
+    try {
+      const { stdout } = await execFileAsync(
+        process.execPath,
+        [
+          script,
+          '--pr-url', 'https://gitcode.com/acme/app/merge_requests/18',
+          '--author', 'huhaodong',
+          '--body', 'start build',
+          '--wait-push-ack',
+          '--since', pushedAt,
+          '--out', dir,
+        ],
+        {
+          cwd: resolve(__dirname, '..'),
+          env: {
+            ...process.env,
+            GITCODE_API_ROOT: baseUrl,
+            GITCODE_TOKEN_huhaodong: 'token-h',
+          },
+        },
+      );
+      expect(JSON.parse(stdout).wait_ack).toBe('acked');
+      expect(commentPolls).toBeLessThanOrEqual(2);
+      expect((posted as any)?.atPoll).toBeLessThanOrEqual(2);
+      expect(posted?.body).toEqual({ body: 'start build' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(['', 'not-a-date'])('--wait-push-ack 缺少有效 --since（%s）时停止且不发评论', async (since) => {
+    commentPolls = 0;
+    posted = null;
+    pullComments = [];
+    const script = resolve(__dirname, '../skills/gitcode-pr-review/scripts/post-pr-comment.mjs');
+    const dir = await mkdtemp(resolve(tmpdir(), 'pr-comment-'));
+    try {
+      const args = [
+        script,
+        '--pr-url', 'https://gitcode.com/acme/app/merge_requests/18',
+        '--author', 'huhaodong',
+        '--body', 'start build',
+        '--wait-push-ack',
+        '--out', dir,
+      ];
+      if (since) args.push('--since', since);
+      await expect(execFileAsync(process.execPath, args, {
+        cwd: resolve(__dirname, '..'),
+        env: {
+          ...process.env,
+          GITCODE_API_ROOT: baseUrl,
+          GITCODE_TOKEN_huhaodong: 'token-h',
+        },
+      })).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('必须提供有效的 --since') });
+      expect(commentPolls).toBe(0);
+      expect(posted).toBeNull();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
